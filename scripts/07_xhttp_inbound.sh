@@ -41,7 +41,7 @@ wm_xui_api_post() {
 
 wm_build_xhttp_inbound_payload() {
   python3 - <<PY
-import json, uuid
+import json
 port = int('${XHTTP_LOCAL_PORT}')
 path = '${XHTTP_PATH}'
 client_id = '${FIRST_CLIENT_UUID}'
@@ -95,12 +95,13 @@ PY
 wm_create_xhttp_inbound() {
   wm_info "Creating VLESS + XHTTP inbound via 3X-UI API"
 
-  # Generate first UUID before building inbound payload. Additional users are handled by subscription layer in MVP.
   FIRST_CLIENT_UUID="$(cat /proc/sys/kernel/random/uuid)"
 
   if ! wm_xui_login; then
     wm_warn "Could not login to 3X-UI API. Keeping fallback subscription only."
     wm_warn "Expected final inbound: listen 127.0.0.1:${XHTTP_LOCAL_PORT}, transport xhttp, path ${XHTTP_PATH}, inbound security none."
+    echo "XUI_INBOUND_MODE=\"api_login_failed_fallback_subscription\"" >> "$WM_STATE_DIR/config.env"
+    echo "FIRST_CLIENT_UUID=\"${FIRST_CLIENT_UUID}\"" >> "$WM_STATE_DIR/config.env"
     return 0
   fi
 
@@ -130,6 +131,6 @@ wm_create_clients() {
     uuids+=("$(cat /proc/sys/kernel/random/uuid)")
   done
   CLIENT_UUIDS="$(IFS=,; echo "${uuids[*]}")"
-  echo "CLIENT_UUIDS=\"${CLIENT_UUIDS}\"" >> "$WM_STATE_DIR/config.env"
-  wm_success "Canonical clients generated"
+  wm_config_json_set_clients_from_csv "$CLIENT_UUIDS"
+  wm_success "Canonical clients stored in config.json"
 }
