@@ -1,0 +1,71 @@
+#!/usr/bin/env bash
+set -Eeuo pipefail
+
+WM_STATE_DIR="/etc/wavemesh-node"
+WM_REPORT_TXT="/root/wavemesh-node-report.txt"
+WM_REPORT_JSON="/root/wavemesh-node-report.json"
+WM_SUB_DIR="/var/www/wavemesh-sub"
+
+fail(){ echo "✗ $*" >&2; exit 1; }
+info(){ echo "ℹ $*"; }
+ok(){ echo "✓ $*"; }
+
+load_config(){
+  [[ -f "$WM_STATE_DIR/config.env" ]] || fail "Missing $WM_STATE_DIR/config.env"
+  # shellcheck disable=SC1091
+  source "$WM_STATE_DIR/config.env"
+}
+
+validate_subscription(){
+  load_config
+  local content
+  content="$(cat "$WM_SUB_DIR/sub.txt" 2>/dev/null || true)"
+  [[ -n "$content" ]] || fail "Subscription file is empty"
+  [[ "$content" == *"vless://"* ]] || fail "No vless links found"
+  grep -q "@${DOMAIN}:443" <<< "$content" || fail "Missing ${DOMAIN}:443"
+  grep -q "type=xhttp" <<< "$content" || fail "Missing type=xhttp"
+  grep -q "security=tls" <<< "$content" || fail "Missing security=tls"
+  grep -q "sni=${DOMAIN}" <<< "$content" || fail "Missing sni=${DOMAIN}"
+  grep -q "host=${DOMAIN}" <<< "$content" || fail "Missing host=${DOMAIN}"
+  for bad in 127.0.0.1 localhost "$PUBLIC_IP" "$XHTTP_LOCAL_PORT" "$PANEL_PORT"; do
+    [[ -z "$bad" ]] && continue
+    if grep -q "$bad" <<< "$content"; then
+      fail "Subscription leaks forbidden value: $bad"
+    fi
+  done
+  ok "Subscription OK: https://${DOMAIN}${SUB_PATH}"
+}
+
+case "${1:-}" in
+  show-report)
+    [[ -f "$WM_REPORT_TXT" ]] && cat "$WM_REPORT_TXT" || fail "Report not found"
+    ;;
+  diagnostics)
+    load_config
+    systemctl is-active --quiet nginx && ok "nginx active" || fail "nginx inactive"
+    [[ -f "/etc/letsencrypt/live/${DOMAIN}/fullchain.pem" ]] && ok "SSL certificate exists" || fail "SSL missing"
+    validate_subscription
+    ;;
+  validate-subscription)
+    validate_subscription
+    ;;
+  repair)
+    case "${2:-}" in
+      --nginx) nginx -t && systemctl reload nginx && ok "nginx reloaded" ;;
+      --ssl) load_config; certbot renew --dry-run ;;
+      --subscriptions) validate_subscription ;;
+      *) fail "Usage: wavemesh repair --nginx|--ssl|--subscriptions" ;;
+    esac
+    ;;
+  *)
+    cat <<'EOF'
+Usage:
+  wavemesh show-report
+  wavemesh diagnostics
+  wavemesh validate-subscription
+  wavemesh repair --nginx
+  wavemesh repair --ssl
+  wavemesh repair --subscriptions
+EOF
+    ;;
+esac
