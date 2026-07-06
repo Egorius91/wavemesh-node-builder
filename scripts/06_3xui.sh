@@ -43,41 +43,29 @@ wm_get_latest_xui_release_json() {
 }
 
 wm_select_xui_asset_url() {
-  local arch="$1"
-  python3 - "$arch" <<'PY'
-import json, sys
-arch = sys.argv[1]
-data = json.load(sys.stdin)
-assets = data.get("assets", [])
-patterns = [
-    f"linux-{arch}",
-    f"linux_{arch}",
-    f"linux.{arch}",
-    f"x-ui-{arch}",
-    arch,
-]
-for asset in assets:
-    name = asset.get("name", "").lower()
-    if not any(name.endswith(ext) or ext in name for ext in (".tar.gz", ".tgz", ".zip")):
-        continue
-    if "linux" in name and any(p in name for p in patterns):
-        print(asset.get("browser_download_url", ""))
-        sys.exit(0)
-for asset in assets:
-    name = asset.get("name", "").lower()
-    if "linux" in name and arch in name:
-        print(asset.get("browser_download_url", ""))
-        sys.exit(0)
-sys.exit(1)
-PY
-}
+  local release_json="$1"
+  local arch="$2"
+  local asset_url=""
 
-wm_get_xui_release_tag_from_json() {
-  python3 - <<'PY'
-import json, sys
-data=json.load(sys.stdin)
-print(data.get("tag_name", "unknown"))
-PY
+  asset_url="$(printf '%s' "$release_json" | jq -r --arg arch "$arch" '
+    .assets[]?
+    | select((.name | ascii_downcase) as $n
+      | ($n | contains("linux"))
+      and ($n | contains($arch))
+      and (($n | endswith(".tar.gz")) or ($n | endswith(".tgz")) or ($n | endswith(".zip"))))
+    | .browser_download_url
+  ' | head -n1)"
+
+  if [[ -z "$asset_url" || "$asset_url" == "null" ]]; then
+    asset_url="$(printf '%s' "$release_json" | jq -r --arg arch "$arch" '
+      .assets[]?
+      | select((.name | ascii_downcase) as $n | ($n | contains($arch)))
+      | .browser_download_url
+    ' | head -n1)"
+  fi
+
+  [[ -n "$asset_url" && "$asset_url" != "null" ]] || return 1
+  printf '%s' "$asset_url"
 }
 
 wm_download_latest_xui_release() {
@@ -85,8 +73,18 @@ wm_download_latest_xui_release() {
   arch="$(wm_detect_xui_arch)"
   wm_info "Resolving latest stable 3X-UI release for linux-${arch}"
   release_json="$(wm_get_latest_xui_release_json)" || wm_fail "Could not query GitHub releases for ${XUI_REPO}"
-  tag="$(printf '%s' "$release_json" | wm_get_xui_release_tag_from_json)"
-  asset_url="$(printf '%s' "$release_json" | wm_select_xui_asset_url "$arch")" || wm_fail "Could not find linux-${arch} asset in ${XUI_REPO} ${tag}"
+
+  if ! printf '%s' "$release_json" | jq -e '.tag_name and .assets' >/dev/null 2>&1; then
+    wm_warn "GitHub release response was not valid JSON for ${XUI_REPO}"
+    wm_fail "Could not parse GitHub release metadata"
+  fi
+
+  tag="$(printf '%s' "$release_json" | jq -r '.tag_name // "unknown"')"
+  asset_url="$(wm_select_xui_asset_url "$release_json" "$arch")" || {
+    wm_warn "Available release assets:"
+    printf '%s' "$release_json" | jq -r '.assets[]?.name' | sed 's/^/  - /' || true
+    wm_fail "Could not find linux-${arch} asset in ${XUI_REPO} ${tag}"
+  }
 
   wm_info "Selected 3X-UI release ${tag}: ${asset_url}"
   workdir="/tmp/wavemesh-xui-${tag}"
@@ -106,11 +104,15 @@ wm_download_latest_xui_release() {
 wm_install_xui_files_from_release() {
   local extract_dir="$1"
   local tag="$2"
-  local src_dir src_bin service_file
+  local src_dir service_file
 
-  src_dir="$(find "$extract_dir" -maxdepth 3 -type f -name x-ui -perm /111 -printf '%h\n' 2>/dev/null | head -n1)"
-  [[ -n "$src_dir" ]] || src_dir="$(find "$extract_dir" -maxdepth 3 -type f -name x-ui -printf '%h\n' 2>/dev/null | head -n1)"
-  [[ -n "$src_dir" ]] || wm_fail "Could not locate x-ui binary in release archive"
+  src_dir="$(find "$extract_dir" -maxdepth 4 -type f -name x-ui -perm /111 -printf '%h\n' 2>/dev/null | head -n1)"
+  [[ -n "$src_dir" ]] || src_dir="$(find "$extract_dir" -maxdepth 4 -type f -name x-ui -printf '%h\n' 2>/dev/null | head -n1)"
+  [[ -n "$src_dir" ]] || {
+    wm_warn "Archive content:"
+    find "$extract_dir" -maxdepth 3 -print | sed 's/^/  /' | head -n 80 || true
+    wm_fail "Could not locate x-ui binary in release archive"
+  }
 
   wm_info "Installing 3X-UI files from $src_dir"
   rm -rf "$XUI_HOME"
@@ -119,10 +121,11 @@ wm_install_xui_files_from_release() {
   chmod +x "$XUI_RUNTIME_BIN" 2>/dev/null || true
   chmod +x "$XUI_HOME"/bin/* 2>/dev/null || true
 
-  service_file="$(find "$extract_dir" -maxdepth 4 -type f \( -name 'x-ui.service' -o -name 'x-ui.service.debian' \) | head -n1)"
+  service_file="$(find "$extract_dir" -maxdepth 5 -type f \( -name 'x-ui.service' -o -name 'x-ui.service.debian' \) | head -n1)"
   if [[ -n "$service_file" ]]; then
     cp "$service_file" /etc/systemd/system/x-ui.service
     sed -i "s#ExecStart=.*#ExecStart=${XUI_RUNTIME_BIN}#" /etc/systemd/system/x-ui.service || true
+    sed -i "s#WorkingDirectory=.*#WorkingDirectory=${XUI_HOME}#" /etc/systemd/system/x-ui.service || true
   else
     cat > /etc/systemd/system/x-ui.service <<EOF
 [Unit]
@@ -163,8 +166,6 @@ wm_seed_xui_initial_config() {
   wm_info "Preparing 3X-UI initial configuration"
   mkdir -p /etc/x-ui "$XUI_HOME/bin"
 
-  # Different 3X-UI releases initialize their database on first run. We start once,
-  # then apply settings through available CLI commands where supported.
   systemctl daemon-reload
   systemctl enable --now "$XUI_SERVICE" >/dev/null 2>&1 || true
   sleep 3
