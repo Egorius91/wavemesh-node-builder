@@ -1,6 +1,8 @@
 #!/usr/bin/env bash
 
 WM_STATE_DIR="/etc/wavemesh-node"
+WM_CONFIG_JSON="$WM_STATE_DIR/config.json"
+WM_RUNTIME_JSON="$WM_STATE_DIR/runtime.json"
 WM_REPORT_TXT="/root/wavemesh-node-report.txt"
 WM_REPORT_JSON="/root/wavemesh-node-report.json"
 WM_SITE_DIR="/var/www/wavemesh-site"
@@ -61,6 +63,10 @@ wm_random_port() {
   wm_fail "Could not find free port in range ${min}-${max}"
 }
 
+wm_json_escape() {
+  python3 -c 'import json,sys; print(json.dumps(sys.stdin.read().rstrip("\n")))'
+}
+
 wm_parse_args() {
   while [[ $# -gt 0 ]]; do
     case "$1" in
@@ -99,7 +105,7 @@ wm_ensure_root() {
 }
 
 wm_prepare_state_dir() {
-  mkdir -p "$WM_STATE_DIR" "$WM_SITE_DIR" "$WM_SUB_DIR" "$WM_CERTBOT_DIR"
+  mkdir -p "$WM_STATE_DIR" "$WM_SITE_DIR" "$WM_SUB_DIR" "$WM_CERTBOT_DIR" "$WM_STATE_DIR/backups"
   chmod 700 "$WM_STATE_DIR"
 }
 
@@ -124,32 +130,95 @@ wm_random_company_name() {
   echo "${a[$RANDOM % ${#a[@]}]} ${b[$RANDOM % ${#b[@]}]}"
 }
 
-wm_write_config_env() {
-  cat > "$WM_STATE_DIR/config.env" <<EOF
-DOMAIN="$DOMAIN"
-EMAIL="$EMAIL"
-BRAND="$BRAND"
-PUBLIC_IP="$PUBLIC_IP"
-PUBLIC_PORT="$PUBLIC_PORT"
-PANEL_PORT="$PANEL_PORT"
-PANEL_PATH="$PANEL_PATH"
-XHTTP_LOCAL_PORT="$XHTTP_LOCAL_PORT"
-XHTTP_PATH="$XHTTP_PATH"
-SUB_PATH="$SUB_PATH"
-SUB_LOCAL_PORT="$SUB_LOCAL_PORT"
-CLIENT_COUNT="$CLIENT_COUNT"
-FINGERPRINT="$FINGERPRINT"
-NODE_NAME="$NODE_NAME"
-WEB_IDENTITY_NAME="$WEB_IDENTITY_NAME"
-PANEL_USERNAME="$PANEL_USERNAME"
-PANEL_PASSWORD="$PANEL_PASSWORD"
-PANEL_TOKEN="$PANEL_TOKEN"
-EOF
+wm_write_config_json() {
+  local installed_at hostname timezone
+  installed_at="$(date -u +%Y-%m-%dT%H:%M:%SZ)"
+  hostname="$(hostname)"
+  timezone="$(timedatectl show -p Timezone --value 2>/dev/null || echo UTC)"
+  python3 - <<PY
+import json
+cfg = {
+  "version": 1,
+  "builder": {"name": "WaveMesh Node Builder", "version": "0.1.0", "installed_at": "$installed_at"},
+  "server": {"hostname": "$hostname", "public_ip": "$PUBLIC_IP", "domain": "$DOMAIN", "timezone": "$timezone"},
+  "network": {
+    "http_port": 80,
+    "public_port": 443,
+    "xhttp": {"listen": "127.0.0.1", "port": int("$XHTTP_LOCAL_PORT"), "path": "$XHTTP_PATH"},
+    "subscription": {"path": "$SUB_PATH", "mode": "generated", "local_port": int("$SUB_LOCAL_PORT")}
+  },
+  "panel": {"type": "3x-ui", "listen_port": int("$PANEL_PORT"), "path": "$PANEL_PATH", "username": "$PANEL_USERNAME", "password": "$PANEL_PASSWORD", "token": "$PANEL_TOKEN"},
+  "tls": {"provider": "letsencrypt", "email": "$EMAIL", "certificate_path": "/etc/letsencrypt/live/$DOMAIN/fullchain.pem", "key_path": "/etc/letsencrypt/live/$DOMAIN/privkey.pem"},
+  "web_identity": {"company_name": "$WEB_IDENTITY_NAME", "theme": "technology", "site_path": "$WM_SITE_DIR"},
+  "clients": [],
+  "diagnostics": {"last_check": None, "status": "pending"}
+}
+with open("$WM_CONFIG_JSON", "w", encoding="utf-8") as f:
+    json.dump(cfg, f, indent=2, ensure_ascii=False)
+    f.write("\n")
+PY
+  chmod 600 "$WM_CONFIG_JSON"
+}
+
+wm_export_config_env_from_json() {
+  [[ -f "$WM_CONFIG_JSON" ]] || wm_fail "Missing $WM_CONFIG_JSON"
+  python3 - <<PY > "$WM_STATE_DIR/config.env"
+import json
+cfg=json.load(open("$WM_CONFIG_JSON", encoding="utf-8"))
+clients=cfg.get("clients", [])
+vals={
+"DOMAIN": cfg["server"]["domain"],
+"EMAIL": cfg["tls"].get("email", ""),
+"BRAND": "$BRAND",
+"PUBLIC_IP": cfg["server"].get("public_ip", ""),
+"PUBLIC_PORT": str(cfg["network"].get("public_port", 443)),
+"PANEL_PORT": str(cfg["panel"]["listen_port"]),
+"PANEL_PATH": cfg["panel"]["path"],
+"XHTTP_LOCAL_PORT": str(cfg["network"]["xhttp"]["port"]),
+"XHTTP_PATH": cfg["network"]["xhttp"]["path"],
+"SUB_PATH": cfg["network"]["subscription"]["path"],
+"SUB_LOCAL_PORT": str(cfg["network"]["subscription"].get("local_port", "")),
+"CLIENT_COUNT": str(max(len(clients), int("$CLIENT_COUNT"))),
+"FINGERPRINT": "$FINGERPRINT",
+"NODE_NAME": "$NODE_NAME",
+"WEB_IDENTITY_NAME": cfg["web_identity"]["company_name"],
+"PANEL_USERNAME": cfg["panel"]["username"],
+"PANEL_PASSWORD": cfg["panel"]["password"],
+"PANEL_TOKEN": cfg["panel"].get("token", ""),
+"CLIENT_UUIDS": ",".join(c.get("uuid", "") for c in clients if c.get("uuid")),
+}
+for k,v in vals.items():
+    print(f'{k}="{str(v).replace(chr(34), chr(92)+chr(34))}"')
+PY
   chmod 600 "$WM_STATE_DIR/config.env"
 }
 
+wm_write_config_env() {
+  wm_write_config_json
+  wm_export_config_env_from_json
+}
+
+wm_config_json_set_clients_from_csv() {
+  local csv="$1"
+  python3 - <<PY
+import json
+path="$WM_CONFIG_JSON"
+cfg=json.load(open(path, encoding="utf-8"))
+uuids=[u for u in "$csv".split(',') if u]
+cfg["clients"]=[{"name": f"Client-{i+1}", "uuid": u, "enabled": True} for i,u in enumerate(uuids)]
+with open(path, "w", encoding="utf-8") as f:
+    json.dump(cfg, f, indent=2, ensure_ascii=False)
+    f.write("\n")
+PY
+  chmod 600 "$WM_CONFIG_JSON"
+  wm_export_config_env_from_json
+}
+
 wm_load_config() {
-  [[ -f "$WM_STATE_DIR/config.env" ]] || wm_fail "Missing $WM_STATE_DIR/config.env"
+  if [[ -f "$WM_CONFIG_JSON" ]]; then
+    wm_export_config_env_from_json
+  fi
+  [[ -f "$WM_STATE_DIR/config.env" ]] || wm_fail "Missing config: $WM_CONFIG_JSON or $WM_STATE_DIR/config.env"
   # shellcheck disable=SC1091
   source "$WM_STATE_DIR/config.env"
 }
