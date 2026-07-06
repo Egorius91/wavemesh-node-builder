@@ -1,0 +1,100 @@
+#!/usr/bin/env bash
+
+wm_configure_nginx_http() {
+  wm_info "Configuring temporary nginx HTTP site"
+  mkdir -p "$WM_CERTBOT_DIR"
+  cat > /etc/nginx/sites-available/wavemesh-node.conf <<EOF
+server {
+    listen 80;
+    server_name ${DOMAIN};
+
+    location /.well-known/acme-challenge/ {
+        root ${WM_CERTBOT_DIR};
+    }
+
+    location / {
+        root ${WM_SITE_DIR};
+        index index.html;
+        try_files \$uri \$uri/ /index.html;
+    }
+}
+EOF
+  ln -sf /etc/nginx/sites-available/wavemesh-node.conf /etc/nginx/sites-enabled/wavemesh-node.conf
+  rm -f /etc/nginx/sites-enabled/default
+  nginx -t
+  systemctl enable --now nginx
+  systemctl reload nginx
+  wm_success "Temporary HTTP site ready"
+}
+
+wm_obtain_ssl() {
+  wm_info "Obtaining Let's Encrypt certificate for ${DOMAIN}"
+  local email_args=()
+  if [[ -n "${EMAIL}" ]]; then
+    email_args=(--email "$EMAIL")
+  else
+    email_args=(--register-unsafely-without-email)
+  fi
+  if certbot certonly --webroot -w "$WM_CERTBOT_DIR" -d "$DOMAIN" --agree-tos --non-interactive "${email_args[@]}"; then
+    wm_success "SSL certificate obtained"
+  else
+    wm_check_provider_ports_hint
+    wm_fail "SSL certificate request failed"
+  fi
+}
+
+wm_configure_nginx_https() {
+  wm_info "Configuring nginx HTTPS reverse proxy"
+  cat > /etc/nginx/sites-available/wavemesh-node.conf <<EOF
+server {
+    listen 80;
+    server_name ${DOMAIN};
+
+    location /.well-known/acme-challenge/ {
+        root ${WM_CERTBOT_DIR};
+    }
+
+    location / {
+        return 301 https://\$host\$request_uri;
+    }
+}
+
+server {
+    listen 443 ssl http2;
+    server_name ${DOMAIN};
+
+    ssl_certificate /etc/letsencrypt/live/${DOMAIN}/fullchain.pem;
+    ssl_certificate_key /etc/letsencrypt/live/${DOMAIN}/privkey.pem;
+
+    root ${WM_SITE_DIR};
+    index index.html;
+
+    location / {
+        try_files \$uri \$uri/ /index.html;
+    }
+
+    location ${XHTTP_PATH} {
+        proxy_pass http://127.0.0.1:${XHTTP_LOCAL_PORT};
+        proxy_http_version 1.1;
+        proxy_set_header Host \$host;
+        proxy_set_header X-Real-IP \$remote_addr;
+        proxy_set_header X-Forwarded-For \$proxy_add_x_forwarded_for;
+        proxy_set_header X-Forwarded-Proto https;
+        proxy_set_header X-Forwarded-Host \$host;
+        proxy_set_header X-Forwarded-Port 443;
+        proxy_redirect off;
+        proxy_buffering off;
+        proxy_request_buffering off;
+    }
+
+    location ${SUB_PATH} {
+        alias ${WM_SUB_DIR}/sub.txt;
+        default_type text/plain;
+        add_header Cache-Control "no-store" always;
+    }
+}
+EOF
+  nginx -t
+  systemctl reload nginx
+  wm_success "nginx HTTPS config ready"
+}
