@@ -76,12 +76,13 @@ wm_xui_api_get() {
 }
 
 wm_build_xhttp_inbound_payload() {
-  FIRST_CLIENT_UUID="$FIRST_CLIENT_UUID" XHTTP_LOCAL_PORT="$XHTTP_LOCAL_PORT" XHTTP_PATH="$XHTTP_PATH" NODE_NAME="$NODE_NAME" python3 - <<'PY'
+  DOMAIN="$DOMAIN" FINGERPRINT="$FINGERPRINT" FIRST_CLIENT_UUID="$FIRST_CLIENT_UUID" XHTTP_LOCAL_PORT="$XHTTP_LOCAL_PORT" XHTTP_PATH="$XHTTP_PATH" NODE_NAME="$NODE_NAME" python3 - <<'PY'
 import json
 import os
 
 port = int(os.environ['XHTTP_LOCAL_PORT'])
 path = os.environ['XHTTP_PATH']
+domain = os.environ['DOMAIN']
 client_id = os.environ['FIRST_CLIENT_UUID']
 email = os.environ['NODE_NAME'] + '-1'
 payload = {
@@ -114,9 +115,17 @@ payload = {
     'security': 'none',
     'xhttpSettings': {
       'path': path,
-      'host': '',
+      'host': domain,
       'mode': 'auto'
-    }
+    },
+    'externalProxy': [{
+      'dest': domain,
+      'port': 443,
+      'remark': os.environ['NODE_NAME'],
+      'forceTls': 'tls',
+      'sni': domain,
+      'fingerprint': os.environ['FINGERPRINT']
+    }]
   },
   'sniffing': {
     'enabled': True,

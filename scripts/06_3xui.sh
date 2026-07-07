@@ -189,20 +189,27 @@ wm_harden_xui_sqlite_settings() {
   local db
   db="$(wm_find_xui_db || true)"
   [[ -n "$db" ]] || return 0
-  python3 - "$db" <<'PY'
+  DOMAIN="$DOMAIN" SUB_PATH="$SUB_PATH" python3 - "$db" <<'PY'
+import os
 import sqlite3
 import sys
 
 db = sys.argv[1]
+domain = os.environ["DOMAIN"]
+sub_path = os.environ["SUB_PATH"]
 conn = sqlite3.connect(db)
 try:
     values = {
         "webCertFile": "",
         "webKeyFile": "",
-        "subEnable": "false",
+        "subEnable": "true",
         "subJsonEnable": "false",
         "subClashEnable": "false",
         "subListen": "127.0.0.1",
+        "subPort": "2096",
+        "subPath": sub_path,
+        "subDomain": domain,
+        "subURI": f"https://{domain}{sub_path}",
     }
     for key, value in values.items():
         cur = conn.execute("UPDATE settings SET value=? WHERE key=?", (value, key))
@@ -260,13 +267,15 @@ wm_assert_xui_bound_to_loopback() {
   fi
 }
 
-wm_assert_xui_builtin_sub_disabled() {
+wm_assert_xui_builtin_sub_loopback() {
   local listen
   listen="$(ss -ltnp 2>/dev/null | grep ':2096 ' || true)"
-  if [[ -n "$listen" ]]; then
-    wm_fail "3X-UI built-in subscription server is still listening on 2096. Listen output: $listen"
+  [[ -n "$listen" ]] || wm_fail "3X-UI built-in subscription server is not listening on 2096"
+  if grep -q '127.0.0.1:2096' <<< "$listen"; then
+    wm_success "3X-UI built-in subscription server is bound to 127.0.0.1:2096"
+  else
+    wm_fail "3X-UI built-in subscription server is not loopback-only. Listen output: $listen"
   fi
-  wm_success "3X-UI built-in subscription server is disabled"
 }
 
 wm_update_config_json_xui_installation() {
@@ -285,7 +294,7 @@ cfg.setdefault("installation", {})["xui"] = {
   "database_path": "$db",
   "panel_bind": "127.0.0.1",
   "ssl_mode": "external-nginx",
-  "builtin_subscription": "disabled",
+  "builtin_subscription": "enabled-loopback",
   "service": "$XUI_SERVICE",
   "status": "$status"
 }
@@ -318,7 +327,7 @@ wm_install_3xui() {
   wm_wait_for_xui_service || wm_fail "3X-UI service did not become active"
   sleep 1
   wm_assert_xui_bound_to_loopback
-  wm_assert_xui_builtin_sub_disabled
+  wm_assert_xui_builtin_sub_loopback
   wm_wait_for_xui_http || wm_fail "3X-UI panel did not become reachable locally"
 }
 

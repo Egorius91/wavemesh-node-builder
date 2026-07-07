@@ -114,6 +114,17 @@ server {
         default_type text/plain;
         add_header Cache-Control "no-store" always;
     }
+
+    location ${SUB_PATH} {
+        proxy_pass http://127.0.0.1:2096;
+        proxy_http_version 1.1;
+        proxy_set_header Host \$host;
+        proxy_set_header X-Forwarded-Proto https;
+        proxy_set_header X-Forwarded-Host \$host;
+        proxy_set_header X-Forwarded-Port 443;
+        proxy_redirect off;
+        proxy_buffering off;
+    }
 }
 EOF
   nginx -t
