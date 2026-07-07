@@ -172,12 +172,14 @@ wm_seed_xui_initial_config() {
   sleep 3
 
   if [[ -x "$XUI_RUNTIME_BIN" ]]; then
-    "$XUI_RUNTIME_BIN" setting -username "$PANEL_USERNAME" >/dev/null 2>&1 || true
-    "$XUI_RUNTIME_BIN" setting -password "$PANEL_PASSWORD" >/dev/null 2>&1 || true
-    "$XUI_RUNTIME_BIN" setting -port "$PANEL_PORT" >/dev/null 2>&1 || true
-    "$XUI_RUNTIME_BIN" setting -webBasePath "$PANEL_PATH" >/dev/null 2>&1 || true
-    "$XUI_RUNTIME_BIN" setting -listenIP "127.0.0.1" >/dev/null 2>&1 || true
+    "$XUI_RUNTIME_BIN" setting \
+      -username "$PANEL_USERNAME" \
+      -password "$PANEL_PASSWORD" \
+      -port "$PANEL_PORT" \
+      -webBasePath "$PANEL_PATH" \
+      -listenIP "127.0.0.1" >/dev/null 2>&1 || wm_fail "Could not apply 3X-UI panel settings"
     wm_clear_xui_internal_tls || true
+    wm_assert_xui_settings_applied
   fi
 
   systemctl restart "$XUI_SERVICE" >/dev/null 2>&1 || true
@@ -199,6 +201,14 @@ try:
 finally:
     conn.close()
 PY
+}
+
+wm_assert_xui_settings_applied() {
+  local settings
+  settings="$("$XUI_RUNTIME_BIN" setting -show true 2>/dev/null || "$XUI_RUNTIME_BIN" setting -show 2>/dev/null || true)"
+  grep -q "port: ${PANEL_PORT}" <<< "$settings" || wm_fail "3X-UI panel port setting was not applied"
+  grep -q "webBasePath: ${PANEL_PATH}" <<< "$settings" || wm_fail "3X-UI webBasePath setting was not applied"
+  grep -q "listenIP: 127.0.0.1" <<< "$settings" || wm_fail "3X-UI listenIP setting was not applied"
 }
 
 wm_wait_for_xui_service() {
