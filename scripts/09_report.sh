@@ -62,3 +62,20 @@ EOF
   chmod 600 "$WM_STATE_DIR/report.json"
   wm_success "Reports written"
 }
+
+wm_print_telegram_bot_connection_info() {
+  wm_load_config
+  local panel_public_url="https://${DOMAIN}${PANEL_PATH}"
+
+  cat <<EOF
+
+Telegram bot connection
+=======================
+
+Panel URL:      ${panel_public_url}
+Panel login:    ${PANEL_USERNAME}
+Panel password: ${PANEL_PASSWORD}
+
+Use these values when adding this node to the Telegram bot.
+EOF
+}

@@ -44,6 +44,7 @@ main() {
   wm_validate_subscription_output
   wm_run_diagnostics
   wm_write_reports
+  wm_print_telegram_bot_connection_info
   wm_install_cli
 
   wm_success "WaveMesh node builder completed. Report: /root/wavemesh-node-report.txt"
