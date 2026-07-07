@@ -4,7 +4,7 @@ Bash-based installer/wizard for quickly deploying a WaveMesh node on a clean Ubu
 
 MVP goals:
 
-- create a Web Identity corporate website;
+- create a unique multi-page Web Identity cover website;
 - configure nginx and Let's Encrypt SSL;
 - install 3X-UI;
 - create VLESS + XHTTP topology through nginx;
@@ -87,6 +87,30 @@ The script attempts non-interactive setup with generated panel credentials and p
 /var/www/wavemesh-sub
 ```
 
+## Web Identity cover site
+
+The installer generates a small realistic multi-page website in `/var/www/wavemesh-site`.
+It is seeded from the domain and generated brand, so fresh nodes do not all look alike.
+
+Generated pages and assets:
+
+```text
+index.html
+about.html
+services.html
+contact.html
+assets/style.css
+assets/site.js
+assets/img/hero.svg
+assets/img/detail.svg
+favicon.svg
+robots.txt
+sitemap.xml
+```
+
+The generator uses document-relative asset paths, does not depend on external fonts/CDNs,
+and never touches `/var/www/certbot` or the installed TLS certificate.
+
 ## CLI
 
 After installation:
@@ -109,7 +133,7 @@ Implemented:
 - random paths and ports;
 - firewall baseline;
 - BBR enablement;
-- Web Identity generation;
+- multi-page Web Identity cover-site generation;
 - nginx/SSL templates;
 - configurable 3X-UI installation layer;
 - 3X-UI database discovery and backup;
