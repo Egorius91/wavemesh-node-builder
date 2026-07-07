@@ -45,6 +45,8 @@ wm_obtain_ssl() {
 
 wm_configure_nginx_https() {
   wm_info "Configuring nginx HTTPS reverse proxy"
+  local sub_path_no_slash
+  sub_path_no_slash="${SUB_PATH%/}"
   cat > /etc/nginx/sites-available/wavemesh-node.conf <<EOF
 server {
     listen 80;
@@ -87,8 +89,13 @@ server {
         proxy_request_buffering off;
     }
 
-    location ${SUB_PATH} {
-        alias ${WM_SUB_DIR}/sub.txt;
+    location = ${sub_path_no_slash} {
+        return 301 https://\$host${SUB_PATH};
+    }
+
+    location = ${SUB_PATH} {
+        root ${WM_SUB_DIR};
+        try_files /sub.txt =404;
         default_type text/plain;
         add_header Cache-Control "no-store" always;
     }

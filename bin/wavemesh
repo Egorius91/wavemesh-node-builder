@@ -18,7 +18,8 @@ load_config(){
 
 validate_subscription(){
   load_config
-  local content
+  local content public_content source_url
+  source_url="https://${DOMAIN}${SUB_PATH}"
   content="$(cat "$WM_SUB_DIR/sub.txt" 2>/dev/null || true)"
   [[ -n "$content" ]] || fail "Subscription file is empty"
   [[ "$content" == *"vless://"* ]] || fail "No vless links found"
@@ -33,7 +34,10 @@ validate_subscription(){
       fail "Subscription leaks forbidden value: $bad"
     fi
   done
-  ok "Subscription OK: https://${DOMAIN}${SUB_PATH}"
+  public_content="$(curl -fsSk --max-time 10 "$source_url" 2>/dev/null || true)"
+  [[ -n "$public_content" ]] || fail "Public subscription URL is not reachable: $source_url"
+  [[ "$public_content" == "$content" ]] || fail "Public subscription content does not match generated file"
+  ok "Subscription OK: $source_url"
 }
 
 case "${1:-}" in

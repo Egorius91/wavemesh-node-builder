@@ -54,5 +54,10 @@ wm_validate_subscription_output() {
   grep -q "host=${DOMAIN}" <<< "$decoded" || wm_fail "Subscription does not include host=${DOMAIN}"
   grep -q "encryption=none" <<< "$decoded" || wm_fail "Subscription does not include encryption=none"
 
+  local public_content
+  public_content="$(curl -fsSk --max-time 10 "$source_url" 2>/dev/null || true)"
+  [[ -n "$public_content" ]] || wm_fail "Public subscription URL is not reachable: ${source_url}"
+  [[ "$public_content" == "$content" ]] || wm_fail "Public subscription content does not match generated file"
+
   wm_success "Subscription is valid: ${source_url}"
 }
