@@ -111,6 +111,21 @@ sitemap.xml
 The generator uses document-relative asset paths, does not depend on external fonts/CDNs,
 and never touches `/var/www/certbot` or the installed TLS certificate.
 
+For real topical photos, pass a Pexels API key at install time:
+
+```bash
+sudo bash install.sh --domain example.com --email admin@example.com --pexels-key YOUR_PEXELS_KEY
+```
+
+You can also use an environment variable:
+
+```bash
+sudo PEXELS_API_KEY=YOUR_PEXELS_KEY bash install.sh --domain example.com --email admin@example.com
+```
+
+The key is used only during site generation and is not written to `config.env` or reports.
+If the API is unavailable, the generator falls back to local SVG images.
+
 ## CLI
 
 After installation:

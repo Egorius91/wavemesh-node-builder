@@ -28,6 +28,7 @@ PANEL_USERNAME=""
 PANEL_PASSWORD=""
 PANEL_TOKEN=""
 CLIENT_UUIDS=""
+PEXELS_API_KEY="${PEXELS_API_KEY:-}"
 
 wm_banner() {
   cat <<'EOF'
@@ -74,9 +75,10 @@ wm_parse_args() {
       --email) EMAIL="${2:-}"; shift 2 ;;
       --brand) BRAND="${2:-WaveMesh}"; shift 2 ;;
       --clients) CLIENT_COUNT="${2:-1}"; shift 2 ;;
+      --pexels-key) PEXELS_API_KEY="${2:-}"; shift 2 ;;
       -h|--help)
         cat <<EOF
-Usage: sudo bash install.sh --domain example.com --email admin@example.com [--clients 1]
+Usage: sudo bash install.sh --domain example.com --email admin@example.com [--clients 1] [--pexels-key KEY]
 EOF
         exit 0
         ;;

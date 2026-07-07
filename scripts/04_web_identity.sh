@@ -4,7 +4,7 @@ wm_generate_web_identity() {
   wm_info "Generating Web Identity cover site"
   mkdir -p "$WM_SITE_DIR"
 
-  DOMAIN="$DOMAIN" WEB_IDENTITY_NAME="$WEB_IDENTITY_NAME" WM_SITE_DIR="$WM_SITE_DIR" WM_CONFIG_JSON="$WM_CONFIG_JSON" python3 - <<'PY'
+  DOMAIN="$DOMAIN" WEB_IDENTITY_NAME="$WEB_IDENTITY_NAME" WM_SITE_DIR="$WM_SITE_DIR" WM_CONFIG_JSON="$WM_CONFIG_JSON" PEXELS_API_KEY="${PEXELS_API_KEY:-}" python3 - <<'PY'
 import hashlib
 import html
 import json
@@ -12,6 +12,8 @@ import os
 import random
 import re
 import shutil
+import urllib.parse
+import urllib.request
 from pathlib import Path
 from urllib.parse import quote
 
@@ -19,6 +21,7 @@ domain = os.environ["DOMAIN"]
 brand = os.environ["WEB_IDENTITY_NAME"]
 site_dir = Path(os.environ["WM_SITE_DIR"])
 config_path = Path(os.environ["WM_CONFIG_JSON"])
+pexels_key = os.environ.get("PEXELS_API_KEY", "").strip()
 seed_text = f"{domain}|{brand}"
 seed = int(hashlib.sha256(seed_text.encode()).hexdigest()[:12], 16)
 rng = random.Random(seed)
@@ -225,6 +228,40 @@ def footer():
 def page(filename, title, description, body):
     (site_dir / filename).write_text(head(title, description, filename) + body + footer(), encoding="utf-8")
 
+def fetch_pexels_image(query, out_path, page=1):
+    if not pexels_key:
+        return False
+    params = urllib.parse.urlencode({
+        "query": query,
+        "per_page": 4,
+        "orientation": "landscape",
+        "page": page,
+    })
+    request = urllib.request.Request(
+        f"https://api.pexels.com/v1/search?{params}",
+        headers={"Authorization": pexels_key, "User-Agent": "WaveMesh Node Builder"},
+    )
+    try:
+        with urllib.request.urlopen(request, timeout=20) as response:
+            payload = json.loads(response.read().decode("utf-8"))
+        photos = payload.get("photos") or []
+        if not photos:
+            return False
+        photo = photos[(seed + page) % len(photos)]
+        src = photo.get("src") or {}
+        url = src.get("large2x") or src.get("large") or src.get("original")
+        if not url:
+            return False
+        img_request = urllib.request.Request(url, headers={"User-Agent": "WaveMesh Node Builder"})
+        with urllib.request.urlopen(img_request, timeout=30) as img_response:
+            data = img_response.read()
+        if len(data) < 1024:
+            return False
+        out_path.write_bytes(data)
+        return True
+    except Exception:
+        return False
+
 service_cards = "\n".join(
     f'''      <article class="service-card">
         <span>{i:02d}</span>
@@ -235,6 +272,8 @@ service_cards = "\n".join(
 )
 
 keywords = niche["keywords"]
+hero_ext = "jpg" if fetch_pexels_image(keywords[0], img_dir / "hero.jpg", 1) else "svg"
+detail_ext = "jpg" if fetch_pexels_image(keywords[1], img_dir / "detail.jpg", 2) else "svg"
 testimonial_names = rng.sample(["Marta", "Lukas", "Nadia", "Jonas", "Elena", "Victor", "Sofia", "Noah"], 3)
 testimonials = [
     f"{brand} gave us a clearer weekly rhythm and materials we could actually keep using.",
@@ -254,7 +293,7 @@ home_body = f'''  <main>
         </div>
       </div>
       <div class="hero-media">
-        <img src="assets/img/hero.svg" alt="{esc(keywords[0])}">
+        <img src="assets/img/hero.{hero_ext}" alt="{esc(keywords[0])}">
       </div>
     </section>
     <section class="section intro">
@@ -268,7 +307,7 @@ home_body = f'''  <main>
 {service_cards}
     </section>
     <section class="split-feature">
-      <img src="assets/img/detail.svg" alt="{esc(keywords[1])}">
+      <img src="assets/img/detail.{detail_ext}" alt="{esc(keywords[1])}">
       <div>
         <p class="eyebrow">Recent note</p>
         <h2>A practical update cycle, not a permanent project.</h2>
@@ -455,8 +494,10 @@ def svg(path, title, bg, fg, label):
 </svg>'''
     (img_dir / path).write_text(content, encoding="utf-8")
 
-svg("hero.svg", f"{brand} workspace", niche["accent"], niche["warm"], keywords[0].title())
-svg("detail.svg", f"{brand} detail", niche["dark"], niche["accent"], keywords[1].title())
+if hero_ext == "svg":
+    svg("hero.svg", f"{brand} workspace", niche["accent"], niche["warm"], keywords[0].title())
+if detail_ext == "svg":
+    svg("detail.svg", f"{brand} detail", niche["dark"], niche["accent"], keywords[1].title())
 
 favicon = f'''<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 64 64">
   <rect width="64" height="64" rx="14" fill="{niche["accent"]}"/>
@@ -480,6 +521,7 @@ if config_path.exists():
         "site_path": str(site_dir),
         "pages": [href for href, _ in pages],
         "marker": brand,
+        "image_source": "pexels" if hero_ext == "jpg" or detail_ext == "jpg" else "local-svg",
     })
     config_path.write_text(json.dumps(cfg, indent=2, ensure_ascii=False) + "\n", encoding="utf-8")
 PY
@@ -496,8 +538,6 @@ wm_validate_web_identity_site() {
     "$WM_SITE_DIR/contact.html"
     "$WM_SITE_DIR/assets/style.css"
     "$WM_SITE_DIR/assets/site.js"
-    "$WM_SITE_DIR/assets/img/hero.svg"
-    "$WM_SITE_DIR/assets/img/detail.svg"
     "$WM_SITE_DIR/favicon.svg"
     "$WM_SITE_DIR/robots.txt"
     "$WM_SITE_DIR/sitemap.xml"
@@ -506,6 +546,8 @@ wm_validate_web_identity_site() {
   for file in "${required[@]}"; do
     [[ -f "$file" ]] || wm_fail "Web Identity generation missing file: $file"
   done
+  [[ -f "$WM_SITE_DIR/assets/img/hero.jpg" || -f "$WM_SITE_DIR/assets/img/hero.svg" ]] || wm_fail "Web Identity generation missing hero image"
+  [[ -f "$WM_SITE_DIR/assets/img/detail.jpg" || -f "$WM_SITE_DIR/assets/img/detail.svg" ]] || wm_fail "Web Identity generation missing detail image"
   if grep -R -E '(src|href)="(/assets|https://[^"]+\.(css|js|jpg|jpeg|png|webp|svg))' "$WM_SITE_DIR"/*.html >/dev/null 2>&1; then
     wm_fail "Web Identity contains non-portable asset references"
   fi
