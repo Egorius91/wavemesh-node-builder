@@ -178,14 +178,14 @@ wm_seed_xui_initial_config() {
       -port "$PANEL_PORT" \
       -webBasePath "$PANEL_PATH" \
       -listenIP "127.0.0.1" >/dev/null 2>&1 || wm_fail "Could not apply 3X-UI panel settings"
-    wm_clear_xui_internal_tls || true
+    wm_harden_xui_sqlite_settings || true
     wm_assert_xui_settings_applied
   fi
 
   systemctl restart "$XUI_SERVICE" >/dev/null 2>&1 || true
 }
 
-wm_clear_xui_internal_tls() {
+wm_harden_xui_sqlite_settings() {
   local db
   db="$(wm_find_xui_db || true)"
   [[ -n "$db" ]] || return 0
@@ -196,7 +196,18 @@ import sys
 db = sys.argv[1]
 conn = sqlite3.connect(db)
 try:
-    conn.execute("UPDATE settings SET value='' WHERE key IN ('webCertFile','webKeyFile')")
+    values = {
+        "webCertFile": "",
+        "webKeyFile": "",
+        "subEnable": "false",
+        "subJsonEnable": "false",
+        "subClashEnable": "false",
+        "subListen": "127.0.0.1",
+    }
+    for key, value in values.items():
+        cur = conn.execute("UPDATE settings SET value=? WHERE key=?", (value, key))
+        if cur.rowcount == 0:
+            conn.execute("INSERT INTO settings (key, value) VALUES (?, ?)", (key, value))
     conn.commit()
 finally:
     conn.close()
@@ -249,6 +260,15 @@ wm_assert_xui_bound_to_loopback() {
   fi
 }
 
+wm_assert_xui_builtin_sub_disabled() {
+  local listen
+  listen="$(ss -ltnp 2>/dev/null | grep ':2096 ' || true)"
+  if [[ -n "$listen" ]]; then
+    wm_fail "3X-UI built-in subscription server is still listening on 2096. Listen output: $listen"
+  fi
+  wm_success "3X-UI built-in subscription server is disabled"
+}
+
 wm_update_config_json_xui_installation() {
   local db="$1"
   local status="$2"
@@ -265,10 +285,12 @@ cfg.setdefault("installation", {})["xui"] = {
   "database_path": "$db",
   "panel_bind": "127.0.0.1",
   "ssl_mode": "external-nginx",
+  "builtin_subscription": "disabled",
   "service": "$XUI_SERVICE",
   "status": "$status"
 }
 cfg["panel"]["internal_url"] = "http://127.0.0.1:$PANEL_PORT$PANEL_PATH"
+cfg["panel"]["public_url"] = "https://$DOMAIN$PANEL_PATH"
 with open(path, "w", encoding="utf-8") as f:
     json.dump(cfg, f, indent=2, ensure_ascii=False)
     f.write("\n")
@@ -294,7 +316,9 @@ wm_install_3xui() {
 
   wm_seed_xui_initial_config
   wm_wait_for_xui_service || wm_fail "3X-UI service did not become active"
+  sleep 1
   wm_assert_xui_bound_to_loopback
+  wm_assert_xui_builtin_sub_disabled
   wm_wait_for_xui_http || wm_fail "3X-UI panel did not become reachable locally"
 }
 

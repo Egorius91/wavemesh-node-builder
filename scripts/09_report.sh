@@ -3,8 +3,9 @@
 wm_write_reports() {
   wm_info "Writing reports"
   wm_load_config
+  local panel_public_url="https://${DOMAIN}${PANEL_PATH}"
   local subscription_url="https://${DOMAIN}${SUB_PATH}"
-  local panel_url="https://${DOMAIN}:${PANEL_PORT}${PANEL_PATH}"
+  local panel_internal_url="http://127.0.0.1:${PANEL_PORT}${PANEL_PATH}"
 
   cat > "$WM_REPORT_TXT" <<EOF
 WaveMesh Node Report
@@ -16,7 +17,8 @@ Public HTTPS port:   443
 Node name:           ${NODE_NAME}
 Web Identity:        ${WEB_IDENTITY_NAME}
 
-Panel URL:           ${panel_url}
+Panel public URL:    ${panel_public_url}
+Panel internal URL:  ${panel_internal_url}
 Panel username:      ${PANEL_USERNAME}
 Panel password:      ${PANEL_PASSWORD}
 Panel token:         ${PANEL_TOKEN}
@@ -41,7 +43,8 @@ EOF
   "public_port": 443,
   "node_name": "${NODE_NAME}",
   "web_identity_name": "${WEB_IDENTITY_NAME}",
-  "panel_url": "${panel_url}",
+  "panel_public_url": "${panel_public_url}",
+  "panel_internal_url": "${panel_internal_url}",
   "panel_username": "${PANEL_USERNAME}",
   "panel_password": "${PANEL_PASSWORD}",
   "panel_token": "${PANEL_TOKEN}",

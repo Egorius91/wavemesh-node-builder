@@ -45,7 +45,8 @@ wm_obtain_ssl() {
 
 wm_configure_nginx_https() {
   wm_info "Configuring nginx HTTPS reverse proxy"
-  local sub_path_no_slash
+  local panel_path_no_slash sub_path_no_slash
+  panel_path_no_slash="${PANEL_PATH%/}"
   sub_path_no_slash="${SUB_PATH%/}"
   cat > /etc/nginx/sites-available/wavemesh-node.conf <<EOF
 server {
@@ -71,6 +72,22 @@ server {
     root ${WM_SITE_DIR};
     index index.html;
 
+    location = ${panel_path_no_slash} {
+        return 301 https://\$host${PANEL_PATH};
+    }
+
+    location ${PANEL_PATH} {
+        proxy_pass http://127.0.0.1:${PANEL_PORT};
+        proxy_http_version 1.1;
+        proxy_set_header Host \$host;
+        proxy_set_header X-Forwarded-Proto https;
+        proxy_set_header X-Forwarded-Host \$host;
+        proxy_set_header X-Forwarded-Port 443;
+        proxy_set_header Upgrade \$http_upgrade;
+        proxy_set_header Connection "upgrade";
+        proxy_redirect off;
+    }
+
     location / {
         try_files \$uri \$uri/ /index.html;
     }
@@ -79,8 +96,6 @@ server {
         proxy_pass http://127.0.0.1:${XHTTP_LOCAL_PORT};
         proxy_http_version 1.1;
         proxy_set_header Host \$host;
-        proxy_set_header X-Real-IP \$remote_addr;
-        proxy_set_header X-Forwarded-For \$proxy_add_x_forwarded_for;
         proxy_set_header X-Forwarded-Proto https;
         proxy_set_header X-Forwarded-Host \$host;
         proxy_set_header X-Forwarded-Port 443;

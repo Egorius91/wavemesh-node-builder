@@ -14,8 +14,9 @@ wm_setup_firewall() {
   ufw allow 80/tcp >/dev/null || true
   ufw allow 443/tcp >/dev/null || true
   [[ -n "${PANEL_PORT:-}" ]] && ufw deny "${PANEL_PORT}/tcp" >/dev/null || true
+  ufw deny 2096/tcp >/dev/null || true
   ufw --force enable >/dev/null || true
-  wm_success "Firewall configured: SSH ${ssh_port}, 80/tcp, 443/tcp allowed; panel port denied externally"
+  wm_success "Firewall configured: SSH ${ssh_port}, 80/tcp, 443/tcp allowed; panel and 3X-UI built-in subscription ports denied externally"
 }
 
 wm_check_provider_ports_hint() {
