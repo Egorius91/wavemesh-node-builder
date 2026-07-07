@@ -116,7 +116,7 @@ payload = {
     'xhttpSettings': {
       'path': path,
       'host': domain,
-      'mode': 'auto'
+      'mode': 'stream-one'
     },
     'externalProxy': [{
       'dest': domain,
@@ -210,6 +210,7 @@ xui["inbound"] = {
   "listen": "127.0.0.1",
   "port": int("$XHTTP_LOCAL_PORT"),
   "path": "$XHTTP_PATH",
+  "mode": "stream-one",
   "security": "none"
 }
 with open(path, "w", encoding="utf-8") as f:

@@ -17,7 +17,7 @@ wm_generate_fallback_subscription() {
   IFS=',' read -ra UUIDS <<< "$CLIENT_UUIDS"
   local i=1
   for uuid in "${UUIDS[@]}"; do
-    echo "vless://${uuid}@${DOMAIN}:443?type=xhttp&security=tls&path=${encoded_path}&host=${DOMAIN}&sni=${DOMAIN}&fp=${FINGERPRINT}&encryption=none#${NODE_NAME}-${i}" >> "$WM_SUB_DIR/sub.txt"
+    echo "vless://${uuid}@${DOMAIN}:443?type=xhttp&security=tls&path=${encoded_path}&host=${DOMAIN}&sni=${DOMAIN}&fp=${FINGERPRINT}&mode=stream-one&encryption=none#${NODE_NAME}-${i}" >> "$WM_SUB_DIR/sub.txt"
     i=$((i+1))
   done
   base64 -w0 "$WM_SUB_DIR/sub.txt" > "$WM_SUB_DIR/sub.b64" || true
@@ -49,6 +49,7 @@ wm_validate_subscription_output() {
 
   grep -q "@${DOMAIN}:443" <<< "$decoded" || wm_fail "Subscription does not use ${DOMAIN}:443"
   grep -q "type=xhttp" <<< "$decoded" || wm_fail "Subscription does not include type=xhttp"
+  grep -q "mode=stream-one" <<< "$decoded" || wm_fail "Subscription does not include mode=stream-one"
   grep -q "security=tls" <<< "$decoded" || wm_fail "Subscription does not include security=tls"
   grep -q "sni=${DOMAIN}" <<< "$decoded" || wm_fail "Subscription does not include sni=${DOMAIN}"
   grep -q "host=${DOMAIN}" <<< "$decoded" || wm_fail "Subscription does not include host=${DOMAIN}"

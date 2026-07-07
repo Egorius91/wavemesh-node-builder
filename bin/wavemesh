@@ -25,6 +25,7 @@ validate_subscription(){
   [[ "$content" == *"vless://"* ]] || fail "No vless links found"
   grep -q "@${DOMAIN}:443" <<< "$content" || fail "Missing ${DOMAIN}:443"
   grep -q "type=xhttp" <<< "$content" || fail "Missing type=xhttp"
+  grep -q "mode=stream-one" <<< "$content" || fail "Missing mode=stream-one"
   grep -q "security=tls" <<< "$content" || fail "Missing security=tls"
   grep -q "sni=${DOMAIN}" <<< "$content" || fail "Missing sni=${DOMAIN}"
   grep -q "host=${DOMAIN}" <<< "$content" || fail "Missing host=${DOMAIN}"
