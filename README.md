@@ -52,11 +52,29 @@ domain.com:443 + security=tls + type=xhttp + correct xhttp path
 sudo bash install.sh --domain example.com --email admin@example.com
 ```
 
-Interactive wizard is also supported:
+Interactive wizard is also supported and asks for the minimum install inputs:
+
+- domain name;
+- Let's Encrypt email, optional;
+- Pexels API key, optional;
+- cover-site theme, 10 choices or auto.
 
 ```bash
 sudo bash install.sh
 ```
+
+Non-interactive theme selection:
+
+```bash
+sudo bash install.sh \
+  --domain example.com \
+  --email admin@example.com \
+  --site-theme coffee \
+  --pexels-key YOUR_PEXELS_KEY
+```
+
+Available themes: `auto`, `logistics`, `architecture`, `coffee`, `energy`, `legalops`,
+`studio`, `wellness`, `education`, `finance`, `gardening`.
 
 ## 3X-UI installation layer
 

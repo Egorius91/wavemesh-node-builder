@@ -4,7 +4,7 @@ wm_generate_web_identity() {
   wm_info "Generating Web Identity cover site"
   mkdir -p "$WM_SITE_DIR"
 
-  DOMAIN="$DOMAIN" WEB_IDENTITY_NAME="$WEB_IDENTITY_NAME" WM_SITE_DIR="$WM_SITE_DIR" WM_CONFIG_JSON="$WM_CONFIG_JSON" PEXELS_API_KEY="${PEXELS_API_KEY:-}" python3 - <<'PY'
+  DOMAIN="$DOMAIN" WEB_IDENTITY_NAME="$WEB_IDENTITY_NAME" WM_SITE_DIR="$WM_SITE_DIR" WM_CONFIG_JSON="$WM_CONFIG_JSON" PEXELS_API_KEY="${PEXELS_API_KEY:-}" SITE_THEME="${SITE_THEME:-auto}" python3 - <<'PY'
 import hashlib
 import html
 import json
@@ -22,6 +22,7 @@ brand = os.environ["WEB_IDENTITY_NAME"]
 site_dir = Path(os.environ["WM_SITE_DIR"])
 config_path = Path(os.environ["WM_CONFIG_JSON"])
 pexels_key = os.environ.get("PEXELS_API_KEY", "").strip()
+requested_theme = os.environ.get("SITE_THEME", "auto").strip().lower() or "auto"
 seed_text = f"{domain}|{brand}"
 seed = int(hashlib.sha256(seed_text.encode()).hexdigest()[:12], 16)
 rng = random.Random(seed)
@@ -129,9 +130,80 @@ niches = [
         "about": "The studio keeps projects compact and useful: enough system to look consistent, without turning every update into a production.",
         "keywords": ["brand boards", "design desk", "campaign planning"],
     },
+    {
+        "key": "wellness",
+        "tagline": "Calm routines for everyday health practices",
+        "description": "A neighborhood wellness practice offering appointment planning, care notes and simple programs for busy clients.",
+        "hero": "Care that feels organized, personal and easy to return to.",
+        "accent": "#5f7f72",
+        "warm": "#d6a77a",
+        "dark": "#1f2b29",
+        "light": "#f1f6f2",
+        "services": [
+            ("Wellness plans", "Simple weekly plans with notes clients can keep and follow."),
+            ("Practice coordination", "Appointment routines, intake forms and calm front-desk support."),
+            ("Group sessions", "Small workshops around posture, recovery and sustainable habits."),
+        ],
+        "about": "The practice favors clear communication, modest programs and thoughtful follow-up over dramatic promises.",
+        "keywords": ["wellness studio", "calm treatment room", "health consultation"],
+    },
+    {
+        "key": "education",
+        "tagline": "Learning programs with clear next steps",
+        "description": "A small education lab designing workshops, tutoring plans and learning materials for practical skill growth.",
+        "hero": "Useful learning paths for teams, students and independent professionals.",
+        "accent": "#3f6ea7",
+        "warm": "#e1b85f",
+        "dark": "#17243a",
+        "light": "#eef4fb",
+        "services": [
+            ("Workshop design", "Short courses with readable materials, exercises and review notes."),
+            ("Tutoring plans", "Goal-based sessions for learners who need structure and accountability."),
+            ("Resource libraries", "Organized guides and reference pages for repeated use."),
+        ],
+        "about": "The lab builds learning around real tasks, short feedback loops and materials people can reuse later.",
+        "keywords": ["learning workshop", "study desk", "training session"],
+    },
+    {
+        "key": "finance",
+        "tagline": "Plain-language financial operations support",
+        "description": "A compact office helping small companies organize budgets, monthly reports and internal finance routines.",
+        "hero": "Cleaner financial records without turning every question into a meeting.",
+        "accent": "#365f55",
+        "warm": "#cda35f",
+        "dark": "#182521",
+        "light": "#f3f1e8",
+        "services": [
+            ("Monthly reporting", "Readable summaries of cash flow, spending categories and open questions."),
+            ("Budget routines", "Simple planning sheets and review rhythms for small teams."),
+            ("Vendor records", "Cleaner tracking for invoices, renewals and recurring services."),
+        ],
+        "about": "The office is built for founders and operators who need dependable records and practical explanations.",
+        "keywords": ["finance desk", "budget review", "office reports"],
+    },
+    {
+        "key": "gardening",
+        "tagline": "Seasonal planting plans for lived-in spaces",
+        "description": "A planting and garden-care studio for terraces, courtyards and small commercial outdoor areas.",
+        "hero": "Outdoor spaces planned for the season, the site and the people using them.",
+        "accent": "#557a46",
+        "warm": "#d8b26e",
+        "dark": "#202b1c",
+        "light": "#f1f5ea",
+        "services": [
+            ("Planting plans", "Seasonal plant lists and layouts for compact outdoor spaces."),
+            ("Care calendars", "Simple watering, pruning and replacement notes for owners and staff."),
+            ("Site refreshes", "Focused updates for entrances, terraces and shared courtyards."),
+        ],
+        "about": "The studio chooses practical planting, clear care notes and designs that can survive real schedules.",
+        "keywords": ["garden studio", "planting table", "courtyard plants"],
+    },
 ]
 
-niche = niches[seed % len(niches)]
+themes = {item["key"]: item for item in niches}
+niche = themes.get(requested_theme) if requested_theme != "auto" else None
+if niche is None:
+    niche = niches[seed % len(niches)]
 year = os.popen("date +%Y").read().strip() or "2026"
 slug = re.sub(r"[^a-z0-9]+", "-", brand.lower()).strip("-") or "site"
 email = f"hello@{domain}"
@@ -178,7 +250,7 @@ def logo_letters():
     return (brand[:2] or "WM").upper()
 
 def head(title, description, page):
-    og_img = "assets/img/hero.svg"
+    og_img = f"assets/img/hero.{globals().get('hero_ext', 'svg')}"
     return f'''<!doctype html>
 <html lang="en">
 <head>

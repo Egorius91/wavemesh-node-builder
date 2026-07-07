@@ -29,6 +29,7 @@ PANEL_PASSWORD=""
 PANEL_TOKEN=""
 CLIENT_UUIDS=""
 PEXELS_API_KEY="${PEXELS_API_KEY:-}"
+SITE_THEME="${SITE_THEME:-auto}"
 
 wm_banner() {
   cat <<'EOF'
@@ -76,9 +77,10 @@ wm_parse_args() {
       --brand) BRAND="${2:-WaveMesh}"; shift 2 ;;
       --clients) CLIENT_COUNT="${2:-1}"; shift 2 ;;
       --pexels-key) PEXELS_API_KEY="${2:-}"; shift 2 ;;
+      --site-theme) SITE_THEME="${2:-auto}"; shift 2 ;;
       -h|--help)
         cat <<EOF
-Usage: sudo bash install.sh --domain example.com --email admin@example.com [--clients 1] [--pexels-key KEY]
+Usage: sudo bash install.sh --domain example.com --email admin@example.com [--clients 1] [--pexels-key KEY] [--site-theme auto|logistics|architecture|coffee|energy|legalops|studio|wellness|education|finance|gardening]
 EOF
         exit 0
         ;;
@@ -96,6 +98,49 @@ wm_collect_inputs() {
   if [[ -z "$EMAIL" ]]; then
     read -rp "Email for Let's Encrypt (optional): " EMAIL || true
   fi
+
+  if [[ -z "${PEXELS_API_KEY:-}" ]]; then
+    read -rsp "Pexels API key for real site photos (optional, press Enter to skip): " PEXELS_API_KEY || true
+    echo
+  fi
+
+  if [[ -z "${SITE_THEME:-}" || "$SITE_THEME" == "auto" ]]; then
+    cat <<'EOF'
+Choose cover-site theme:
+  0) Auto / surprise me
+  1) Logistics operations
+  2) Architecture studio
+  3) Coffee roastery
+  4) Energy advisory
+  5) Legal operations
+  6) Design studio
+  7) Wellness clinic
+  8) Education lab
+  9) Finance office
+ 10) Gardening studio
+EOF
+    local theme_choice
+    read -rp "Theme [0-10, default 0]: " theme_choice || true
+    case "${theme_choice:-0}" in
+      0|"") SITE_THEME="auto" ;;
+      1) SITE_THEME="logistics" ;;
+      2) SITE_THEME="architecture" ;;
+      3) SITE_THEME="coffee" ;;
+      4) SITE_THEME="energy" ;;
+      5) SITE_THEME="legalops" ;;
+      6) SITE_THEME="studio" ;;
+      7) SITE_THEME="wellness" ;;
+      8) SITE_THEME="education" ;;
+      9) SITE_THEME="finance" ;;
+      10) SITE_THEME="gardening" ;;
+      *) wm_fail "Invalid site theme choice: ${theme_choice}" ;;
+    esac
+  fi
+
+  case "$SITE_THEME" in
+    auto|logistics|architecture|coffee|energy|legalops|studio|wellness|education|finance|gardening) ;;
+    *) wm_fail "Invalid --site-theme: $SITE_THEME" ;;
+  esac
 
   if ! [[ "$CLIENT_COUNT" =~ ^[0-9]+$ ]] || (( CLIENT_COUNT < 1 || CLIENT_COUNT > 100 )); then
     wm_fail "--clients must be 1..100"
@@ -151,7 +196,7 @@ cfg = {
   },
   "panel": {"type": "3x-ui", "listen_port": int("$PANEL_PORT"), "path": "$PANEL_PATH", "username": "$PANEL_USERNAME", "password": "$PANEL_PASSWORD", "token": "$PANEL_TOKEN"},
   "tls": {"provider": "letsencrypt", "email": "$EMAIL", "certificate_path": "/etc/letsencrypt/live/$DOMAIN/fullchain.pem", "key_path": "/etc/letsencrypt/live/$DOMAIN/privkey.pem"},
-  "web_identity": {"company_name": "$WEB_IDENTITY_NAME", "theme": "technology", "site_path": "$WM_SITE_DIR"},
+  "web_identity": {"company_name": "$WEB_IDENTITY_NAME", "theme": "$SITE_THEME", "site_path": "$WM_SITE_DIR"},
   "clients": [],
   "diagnostics": {"last_check": None, "status": "pending"}
 }
@@ -184,6 +229,7 @@ vals={
 "FINGERPRINT": "$FINGERPRINT",
 "NODE_NAME": "$NODE_NAME",
 "WEB_IDENTITY_NAME": cfg["web_identity"]["company_name"],
+"SITE_THEME": cfg.get("web_identity", {}).get("theme", "auto"),
 "PANEL_USERNAME": cfg["panel"]["username"],
 "PANEL_PASSWORD": cfg["panel"]["password"],
 "PANEL_TOKEN": cfg["panel"].get("token", ""),
