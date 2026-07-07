@@ -50,9 +50,10 @@ wm_select_xui_asset_url() {
   asset_url="$(printf '%s' "$release_json" | jq -r --arg arch "$arch" '
     .assets[]?
     | select((.name | ascii_downcase) as $n
-      | ($n | contains("linux"))
-      and ($n | contains($arch))
-      and (($n | endswith(".tar.gz")) or ($n | endswith(".tgz")) or ($n | endswith(".zip"))))
+      | ($n == ("x-ui-linux-" + $arch + ".tar.gz"))
+        or (($n | contains("linux"))
+          and ($n | contains($arch))
+          and (($n | endswith(".tar.gz")) or ($n | endswith(".tgz")) or ($n | endswith(".zip")))))
     | .browser_download_url
   ' | head -n1)"
 
@@ -71,22 +72,22 @@ wm_select_xui_asset_url() {
 wm_download_latest_xui_release() {
   local arch release_json asset_url tag workdir archive
   arch="$(wm_detect_xui_arch)"
-  wm_info "Resolving latest stable 3X-UI release for linux-${arch}"
+  wm_info "Resolving latest stable 3X-UI release for linux-${arch}" >&2
   release_json="$(wm_get_latest_xui_release_json)" || wm_fail "Could not query GitHub releases for ${XUI_REPO}"
 
   if ! printf '%s' "$release_json" | jq -e '.tag_name and .assets' >/dev/null 2>&1; then
-    wm_warn "GitHub release response was not valid JSON for ${XUI_REPO}"
+    wm_warn "GitHub release response was not valid JSON for ${XUI_REPO}" >&2
     wm_fail "Could not parse GitHub release metadata"
   fi
 
   tag="$(printf '%s' "$release_json" | jq -r '.tag_name // "unknown"')"
   asset_url="$(wm_select_xui_asset_url "$release_json" "$arch")" || {
-    wm_warn "Available release assets:"
-    printf '%s' "$release_json" | jq -r '.assets[]?.name' | sed 's/^/  - /' || true
+    wm_warn "Available release assets for ${XUI_REPO} ${tag}:" >&2
+    printf '%s' "$release_json" | jq -r '.assets[]? | "  - " + .name + " -> " + .browser_download_url' >&2 || true
     wm_fail "Could not find linux-${arch} asset in ${XUI_REPO} ${tag}"
   }
 
-  wm_info "Selected 3X-UI release ${tag}: ${asset_url}"
+  wm_info "Selected 3X-UI release ${tag}: ${asset_url}" >&2
   workdir="/tmp/wavemesh-xui-${tag}"
   archive="${workdir}/x-ui-release"
   rm -rf "$workdir"
@@ -176,11 +177,28 @@ wm_seed_xui_initial_config() {
     "$XUI_RUNTIME_BIN" setting -port "$PANEL_PORT" >/dev/null 2>&1 || true
     "$XUI_RUNTIME_BIN" setting -webBasePath "$PANEL_PATH" >/dev/null 2>&1 || true
     "$XUI_RUNTIME_BIN" setting -listenIP "127.0.0.1" >/dev/null 2>&1 || true
-    "$XUI_RUNTIME_BIN" setting -webCertFile "" >/dev/null 2>&1 || true
-    "$XUI_RUNTIME_BIN" setting -webKeyFile "" >/dev/null 2>&1 || true
+    wm_clear_xui_internal_tls || true
   fi
 
   systemctl restart "$XUI_SERVICE" >/dev/null 2>&1 || true
+}
+
+wm_clear_xui_internal_tls() {
+  local db
+  db="$(wm_find_xui_db || true)"
+  [[ -n "$db" ]] || return 0
+  python3 - "$db" <<'PY'
+import sqlite3
+import sys
+
+db = sys.argv[1]
+conn = sqlite3.connect(db)
+try:
+    conn.execute("UPDATE settings SET value='' WHERE key IN ('webCertFile','webKeyFile')")
+    conn.commit()
+finally:
+    conn.close()
+PY
 }
 
 wm_wait_for_xui_service() {
@@ -196,17 +214,27 @@ wm_wait_for_xui_service() {
   return 1
 }
 
+wm_wait_for_xui_http() {
+  local url
+  url="http://127.0.0.1:${PANEL_PORT}${PANEL_PATH}"
+  for _ in $(seq 1 30); do
+    if curl -fsS --max-time 2 "$url" >/dev/null 2>&1; then
+      wm_success "3X-UI panel HTTP is reachable on 127.0.0.1:${PANEL_PORT}${PANEL_PATH}"
+      return 0
+    fi
+    sleep 1
+  done
+  return 1
+}
+
 wm_assert_xui_bound_to_loopback() {
   local listen
   listen="$(ss -ltnp 2>/dev/null | grep ":${PANEL_PORT} " || true)"
-  if [[ -z "$listen" ]]; then
-    wm_warn "Could not confirm panel listen socket on port ${PANEL_PORT}"
-    return 0
-  fi
+  [[ -n "$listen" ]] || wm_fail "3X-UI panel is not listening on port ${PANEL_PORT}"
   if grep -q "127.0.0.1:${PANEL_PORT}" <<< "$listen"; then
     wm_success "3X-UI panel is bound to 127.0.0.1:${PANEL_PORT}"
   else
-    wm_warn "3X-UI panel may not be loopback-only. Listen output: $listen"
+    wm_fail "3X-UI panel is not loopback-only. Listen output: $listen"
   fi
 }
 
@@ -246,14 +274,17 @@ wm_install_3xui() {
   else
     local result extract_dir tag
     result="$(wm_download_latest_xui_release)"
+    [[ "$result" == *"|"* ]] || wm_fail "Internal error while resolving 3X-UI release asset"
     extract_dir="${result%%|*}"
     tag="${result##*|}"
+    [[ -d "$extract_dir" ]] || wm_fail "3X-UI release archive was not extracted correctly: $extract_dir"
     wm_install_xui_files_from_release "$extract_dir" "$tag"
-    wm_seed_xui_initial_config
-    wm_wait_for_xui_service || wm_fail "3X-UI service did not become active after release installation"
   fi
 
+  wm_seed_xui_initial_config
+  wm_wait_for_xui_service || wm_fail "3X-UI service did not become active"
   wm_assert_xui_bound_to_loopback
+  wm_wait_for_xui_http || wm_fail "3X-UI panel did not become reachable locally"
 }
 
 wm_configure_3xui_panel() {

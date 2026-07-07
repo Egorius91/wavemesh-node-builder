@@ -36,10 +36,10 @@ main() {
   wm_obtain_ssl
   wm_configure_nginx_https
 
+  wm_create_clients
   wm_install_3xui
   wm_configure_3xui_panel
   wm_create_xhttp_inbound
-  wm_create_clients
   wm_generate_fallback_subscription
   wm_validate_subscription_output
   wm_run_diagnostics

@@ -1,6 +1,7 @@
 #!/usr/bin/env bash
 
 XUI_COOKIE_JAR="/tmp/wavemesh-xui-cookies.txt"
+XUI_CSRF_TOKEN=""
 
 wm_xui_base_url() {
   printf 'http://127.0.0.1:%s%s' "$PANEL_PORT" "$PANEL_PATH"
@@ -13,16 +14,38 @@ wm_xui_api_url() {
   printf '%s%s' "${base%/}" "$path"
 }
 
+wm_xui_json_success() {
+  python3 -c 'import json,sys; data=json.load(sys.stdin); sys.exit(0 if data.get("success") is True else 1)' 2>/dev/null
+}
+
+wm_xui_get_csrf() {
+  local url response token
+  url="$(wm_xui_api_url /csrf-token)"
+  response="$(curl -fsS -c "$XUI_COOKIE_JAR" -b "$XUI_COOKIE_JAR" --max-time 10 "$url" 2>/dev/null || true)"
+  token="$(printf '%s' "$response" | python3 -c 'import json,sys; print(json.load(sys.stdin).get("obj",""))' 2>/dev/null || true)"
+  [[ -n "$token" ]] || return 1
+  XUI_CSRF_TOKEN="$token"
+}
+
 wm_xui_login() {
   wm_info "Logging in to 3X-UI API"
   local url
   url="$(wm_xui_api_url /login)"
   rm -f "$XUI_COOKIE_JAR"
 
-  local response
-  response="$(curl -fsS -c "$XUI_COOKIE_JAR" -H 'Content-Type: application/json' -X POST "$url" -d "{\"username\":\"${PANEL_USERNAME}\",\"password\":\"${PANEL_PASSWORD}\"}" 2>/dev/null || true)"
+  wm_xui_get_csrf || {
+    wm_warn "Could not obtain 3X-UI CSRF token"
+    return 1
+  }
 
-  if [[ -s "$XUI_COOKIE_JAR" ]] && grep -qiE 'success|true|obj' <<< "$response"; then
+  local response
+  response="$(curl -fsS -c "$XUI_COOKIE_JAR" -b "$XUI_COOKIE_JAR" \
+    -H 'Content-Type: application/json' \
+    -H "X-CSRF-Token: ${XUI_CSRF_TOKEN}" \
+    -X POST "$url" \
+    -d "{\"username\":\"${PANEL_USERNAME}\",\"password\":\"${PANEL_PASSWORD}\"}" 2>/dev/null || true)"
+
+  if [[ -s "$XUI_COOKIE_JAR" ]] && printf '%s' "$response" | wm_xui_json_success; then
     wm_success "3X-UI API login OK"
     return 0
   fi
@@ -36,27 +59,42 @@ wm_xui_api_post() {
   local payload="$2"
   local url
   url="$(wm_xui_api_url "$path")"
-  curl -fsS -b "$XUI_COOKIE_JAR" -c "$XUI_COOKIE_JAR" -H 'Content-Type: application/json' -X POST "$url" -d "$payload"
+  curl -fsS -b "$XUI_COOKIE_JAR" -c "$XUI_COOKIE_JAR" \
+    -H 'Content-Type: application/json' \
+    -H "X-CSRF-Token: ${XUI_CSRF_TOKEN}" \
+    -H 'X-Requested-With: XMLHttpRequest' \
+    -X POST "$url" -d "$payload"
+}
+
+wm_xui_api_get() {
+  local path="$1"
+  local url
+  url="$(wm_xui_api_url "$path")"
+  curl -fsS -b "$XUI_COOKIE_JAR" -c "$XUI_COOKIE_JAR" \
+    -H 'X-Requested-With: XMLHttpRequest' \
+    "$url"
 }
 
 wm_build_xhttp_inbound_payload() {
-  python3 - <<PY
+  FIRST_CLIENT_UUID="$FIRST_CLIENT_UUID" XHTTP_LOCAL_PORT="$XHTTP_LOCAL_PORT" XHTTP_PATH="$XHTTP_PATH" NODE_NAME="$NODE_NAME" python3 - <<'PY'
 import json
-port = int('${XHTTP_LOCAL_PORT}')
-path = '${XHTTP_PATH}'
-client_id = '${FIRST_CLIENT_UUID}'
-email = '${NODE_NAME}-1'
+import os
+
+port = int(os.environ['XHTTP_LOCAL_PORT'])
+path = os.environ['XHTTP_PATH']
+client_id = os.environ['FIRST_CLIENT_UUID']
+email = os.environ['NODE_NAME'] + '-1'
 payload = {
   'up': 0,
   'down': 0,
   'total': 0,
-  'remark': '${NODE_NAME}-xhttp',
+  'remark': os.environ['NODE_NAME'] + '-xhttp',
   'enable': True,
   'expiryTime': 0,
   'listen': '127.0.0.1',
   'port': port,
   'protocol': 'vless',
-  'settings': json.dumps({
+  'settings': {
     'clients': [{
       'id': client_id,
       'flow': '',
@@ -70,8 +108,8 @@ payload = {
     }],
     'decryption': 'none',
     'fallbacks': []
-  }, separators=(',', ':')),
-  'streamSettings': json.dumps({
+  },
+  'streamSettings': {
     'network': 'xhttp',
     'security': 'none',
     'xhttpSettings': {
@@ -79,46 +117,124 @@ payload = {
       'host': '',
       'mode': 'auto'
     }
-  }, separators=(',', ':')),
-  'sniffing': json.dumps({
+  },
+  'sniffing': {
     'enabled': True,
     'destOverride': ['http', 'tls', 'quic', 'fakedns'],
     'metadataOnly': False,
     'routeOnly': False
-  }, separators=(',', ':')),
-  'allocate': json.dumps({'strategy': 'always'}, separators=(',', ':'))
+  },
+  'allocate': {'strategy': 'always'}
 }
 print(json.dumps(payload, separators=(',', ':')))
 PY
 }
 
+wm_find_xhttp_inbound_id() {
+  local response_file
+  response_file="$(mktemp)"
+  wm_xui_api_get /panel/api/inbounds/list > "$response_file" 2>/dev/null || true
+  FIRST_CLIENT_UUID="$FIRST_CLIENT_UUID" XHTTP_LOCAL_PORT="$XHTTP_LOCAL_PORT" XHTTP_PATH="$XHTTP_PATH" python3 - "$response_file" <<'PY'
+import json
+import os
+import sys
+
+try:
+    with open(sys.argv[1], encoding="utf-8") as f:
+        data = json.load(f)
+except Exception:
+    sys.exit(1)
+
+items = data.get("obj") if isinstance(data, dict) else None
+if not isinstance(items, list):
+    sys.exit(1)
+
+want_port = int(os.environ["XHTTP_LOCAL_PORT"])
+want_path = os.environ["XHTTP_PATH"]
+want_uuid = os.environ["FIRST_CLIENT_UUID"]
+
+def as_obj(value):
+    if isinstance(value, str):
+        try:
+            return json.loads(value)
+        except Exception:
+            return {}
+    return value if isinstance(value, dict) else {}
+
+for inbound in items:
+    settings = as_obj(inbound.get("settings"))
+    stream = as_obj(inbound.get("streamSettings"))
+    xhttp = as_obj(stream.get("xhttpSettings"))
+    clients = settings.get("clients") if isinstance(settings.get("clients"), list) else []
+    has_client = any(c.get("id") == want_uuid for c in clients if isinstance(c, dict))
+    if (
+        inbound.get("protocol") == "vless"
+        and int(inbound.get("port", -1)) == want_port
+        and inbound.get("listen") == "127.0.0.1"
+        and stream.get("network") == "xhttp"
+        and stream.get("security") == "none"
+        and xhttp.get("path") == want_path
+        and has_client
+    ):
+        print(inbound.get("id") or inbound.get("Id") or "")
+        sys.exit(0)
+
+sys.exit(1)
+PY
+  local rc=$?
+  rm -f "$response_file"
+  return "$rc"
+}
+
+wm_update_config_json_xui_inbound() {
+  local inbound_id="$1"
+  python3 - <<PY
+import json
+path = "$WM_CONFIG_JSON"
+cfg = json.load(open(path, encoding="utf-8"))
+xui = cfg.setdefault("installation", {}).setdefault("xui", {})
+xui["inbound"] = {
+  "mode": "api",
+  "id": int("$inbound_id"),
+  "protocol": "vless",
+  "transport": "xhttp",
+  "listen": "127.0.0.1",
+  "port": int("$XHTTP_LOCAL_PORT"),
+  "path": "$XHTTP_PATH",
+  "security": "none"
+}
+with open(path, "w", encoding="utf-8") as f:
+    json.dump(cfg, f, indent=2, ensure_ascii=False)
+    f.write("\n")
+PY
+  chmod 600 "$WM_CONFIG_JSON"
+  wm_export_config_env_from_json
+}
+
 wm_create_xhttp_inbound() {
   wm_info "Creating VLESS + XHTTP inbound via 3X-UI API"
-
-  FIRST_CLIENT_UUID="$(cat /proc/sys/kernel/random/uuid)"
+  wm_load_config
+  FIRST_CLIENT_UUID="${CLIENT_UUIDS%%,*}"
+  [[ -n "$FIRST_CLIENT_UUID" ]] || wm_fail "No canonical client UUID found in config.json"
 
   if ! wm_xui_login; then
-    wm_warn "Could not login to 3X-UI API. Keeping fallback subscription only."
-    wm_warn "Expected final inbound: listen 127.0.0.1:${XHTTP_LOCAL_PORT}, transport xhttp, path ${XHTTP_PATH}, inbound security none."
-    echo "XUI_INBOUND_MODE=\"api_login_failed_fallback_subscription\"" >> "$WM_STATE_DIR/config.env"
-    echo "FIRST_CLIENT_UUID=\"${FIRST_CLIENT_UUID}\"" >> "$WM_STATE_DIR/config.env"
-    return 0
+    wm_fail "Could not login to 3X-UI API; stopping before subscription generation"
   fi
 
-  local payload response
+  local payload response inbound_id
   payload="$(wm_build_xhttp_inbound_payload)"
   response="$(wm_xui_api_post /panel/api/inbounds/add "$payload" 2>/dev/null || true)"
 
-  if grep -qiE 'success|true' <<< "$response"; then
-    echo "XUI_INBOUND_MODE=\"api\"" >> "$WM_STATE_DIR/config.env"
-    echo "FIRST_CLIENT_UUID=\"${FIRST_CLIENT_UUID}\"" >> "$WM_STATE_DIR/config.env"
-    wm_success "3X-UI inbound created through API"
-  else
-    echo "XUI_INBOUND_MODE=\"api_failed_fallback_subscription\"" >> "$WM_STATE_DIR/config.env"
-    echo "FIRST_CLIENT_UUID=\"${FIRST_CLIENT_UUID}\"" >> "$WM_STATE_DIR/config.env"
-    wm_warn "3X-UI API inbound creation was not confirmed. Response: ${response:-empty}"
-    wm_warn "Fallback subscription will still be generated from canonical WaveMesh config."
+  if ! printf '%s' "$response" | wm_xui_json_success; then
+    wm_warn "3X-UI API inbound creation was not confirmed"
+    wm_fail "Could not create VLESS + XHTTP inbound through 3X-UI API"
   fi
+
+  inbound_id="$(wm_find_xhttp_inbound_id || true)"
+  [[ -n "$inbound_id" ]] || wm_fail "Created inbound was not visible in 3X-UI API list"
+
+  wm_update_config_json_xui_inbound "$inbound_id"
+  wm_success "3X-UI inbound created and verified through API"
 }
 
 wm_create_clients() {
