@@ -16,6 +16,10 @@ direct_object = {"success": True, "obj": template}
 assert module.extract_template(direct_string) == template
 assert module.extract_template(wrapped_object) == template
 assert module.extract_template(direct_object) == template
+route = {"matched": True, "outboundTag": "wm-exit-de-fra-1", "groupTags": []}
+assert module.extract_route_outbound({"obj": route}) == "wm-exit-de-fra-1"
+assert module.extract_route_outbound({"obj": json.dumps(route)}) == "wm-exit-de-fra-1"
+assert module.extract_route_outbound({"obj": {"matched": False, "outboundTag": ""}}) == ""
 
 for invalid in ({"obj": None}, {"obj": "[]"}, {"obj": {"xraySetting": "[]"}}):
     try:

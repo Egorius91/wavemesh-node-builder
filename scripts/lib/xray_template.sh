@@ -40,10 +40,12 @@ wm_xray_apply_template() {
 }
 
 wm_xray_route_test() {
-  local inbound_tag="$1" expected_outbound="$2" payload response actual
+  local inbound_tag="$1" expected_outbound="$2" payload response_file actual
   payload="domain=example.com&port=443&network=tcp&$(wm_form_field inboundTag "$inbound_tag")"
-  response="$(wm_xui_request_success POST /panel/api/xray/routeTest form "$payload")" || return 1
-  actual="$(printf '%s' "$response" | python3 -c 'import json,sys; obj=json.load(sys.stdin).get("obj"); print(obj if isinstance(obj,str) else (obj or {}).get("outboundTag", ""))' 2>/dev/null || true)"
+  response_file="$(mktemp)"
+  if ! wm_xui_request_success POST /panel/api/xray/routeTest form "$payload" > "$response_file"; then rm -f "$response_file"; return 1; fi
+  actual="$(python3 -c 'import importlib.util,json,sys; spec=importlib.util.spec_from_file_location("xr",sys.argv[1]); m=importlib.util.module_from_spec(spec); spec.loader.exec_module(m); print(m.extract_route_outbound(json.load(open(sys.argv[2],encoding="utf-8"))))' "$WM_XRAY_RESPONSE_TOOL" "$response_file" 2>/dev/null || true)"
+  rm -f "$response_file"
   [[ "$actual" == "$expected_outbound" ]] || { wm_warn "routeTest selected ${actual:-no outbound}, expected ${expected_outbound}"; return 1; }
 }
 
@@ -59,8 +61,13 @@ wm_xray_apply_managed_route() {
   cp "$original" "$WM_STATE_DIR/backups/xray.$(date -u +%Y%m%dT%H%M%SZ).json"
   python3 "$WM_XRAY_TEMPLATE_TOOL" merge --template "$original" --outbound "$outbound_file" --inbound-tag "$inbound_tag" --outbound-tag "$outbound_tag" --rule-tag "$rule_tag" --output "$candidate" || return 1
   wm_xray_test_outbound "$outbound_file" "$candidate" || return 1
-  if ! wm_xray_apply_template "$candidate" || ! wm_xray_route_test "$inbound_tag" "$outbound_tag"; then
-    wm_warn "Xray candidate failed post-check; restoring previous template"
+  if ! wm_xray_apply_template "$candidate"; then
+    wm_warn "Xray candidate apply failed; restoring previous template"
+    wm_xray_apply_template "$original" || wm_warn "Automatic Xray rollback failed; restore $original manually"
+    return 1
+  fi
+  if ! wm_xray_route_test "$inbound_tag" "$outbound_tag"; then
+    wm_warn "Xray routeTest failed; restoring previous template"
     wm_xray_apply_template "$original" || wm_warn "Automatic Xray rollback failed; restore $original manually"
     return 1
   fi
