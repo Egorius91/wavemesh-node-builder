@@ -299,3 +299,5 @@ Next phase: multi-route subscriptions and public profile validation.
 - added regression tests for direct-string, wrapped-object, and direct-object responses.
 - normalized `routeTest.obj` when returned as either an object or a JSON string;
 - split Xray apply and route-test failure diagnostics while preserving rollback.
+- routed warnings to stderr so API errors are not swallowed by response-file redirection;
+- added a secret-free `matched/outboundTag` summary for route-test mismatches.

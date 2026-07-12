@@ -47,7 +47,7 @@ EOF
 
 wm_info() { echo "ℹ  $*"; }
 wm_success() { echo "✓  $*"; }
-wm_warn() { echo "⚠  $*"; }
+wm_warn() { echo "⚠  $*" >&2; }
 wm_fail() { echo "✗  $*" >&2; exit 1; }
 
 wm_random_alnum() {
