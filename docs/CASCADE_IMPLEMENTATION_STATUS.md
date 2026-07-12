@@ -334,6 +334,11 @@ Known limitations:
 - Clash and sing-box output are outside the MVP scope;
 - health does not automatically remove profiles after transient failures.
 
+### Phase 7 nginx compatibility fix
+
+- replaced file `alias` under an exact trailing-slash location with the established `root` plus `try_files` pattern;
+- retained exact matching and no-store response headers.
+
 Next phase: route lifecycle commands, health, and runtime state.
 
 ### Phase 6 compatibility fix - Xray response shape
