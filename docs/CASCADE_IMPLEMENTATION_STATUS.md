@@ -292,6 +292,50 @@ Known limitations:
 
 Next phase: multi-route subscriptions and public profile validation.
 
+## Phase 7 - Multi-route subscriptions
+
+Status: implemented locally; public Entry URL verification remains pending.
+
+Completed:
+
+- generated one private subscription URL per client with a cryptographically random subscription id;
+- upgraded predictable legacy `sub-client-*` ids during the first rebuild;
+- generated one profile per enabled client/route/exit combination;
+- sorted profiles by route order, display name, and route id;
+- used only Entry domain, port 443, Entry route path, and per-route user UUID in public links;
+- rejected Exit domains/IPs, relay UUID/path, Entry IP, panel port, and local ports in subscription output;
+- rendered exact nginx locations for every client subscription;
+- preserved the legacy node subscription path as the first-client compatibility output;
+- added candidate file generation, backup, public download comparison, and rollback;
+- integrated subscription generation into future `cascade add-exit` transactions;
+- added `wavemesh subscription rebuild` for existing imported routes.
+
+Changed files:
+
+- `scripts/lib/subscription_renderer.py`
+- `scripts/lib/subscription_renderer.sh`
+- `scripts/lib/nginx_renderer.py`
+- `scripts/commands/subscription.sh`
+- `scripts/commands/cascade.sh`
+- `scripts/lib/cascade.py`
+- `bin/wavemesh`
+- `tests/unit/test_subscription_renderer.py`
+
+Test commands:
+
+```bash
+python3 tests/unit/test_subscription_renderer.py
+bash -n scripts/lib/subscription_renderer.sh scripts/commands/subscription.sh
+```
+
+Known limitations:
+
+- public URL comparison requires the live Entry domain;
+- Clash and sing-box output are outside the MVP scope;
+- health does not automatically remove profiles after transient failures.
+
+Next phase: route lifecycle commands, health, and runtime state.
+
 ### Phase 6 compatibility fix - Xray response shape
 
 - accepted both known 3X-UI response forms: `obj` as the Xray JSON string and `obj.xraySetting` as a string/object;

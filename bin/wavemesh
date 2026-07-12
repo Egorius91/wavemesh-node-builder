@@ -51,9 +51,18 @@ case "${1:-}" in
     source "$WM_LIB_DIR/lib/inbound_adapter.sh"
     source "$WM_LIB_DIR/lib/xray_template.sh"
     source "$WM_LIB_DIR/lib/nginx_renderer.sh"
+    source "$WM_LIB_DIR/lib/subscription_renderer.sh"
     WM_CASCADE_TOOL="$WM_LIB_DIR/lib/cascade.py"
     source "$WM_LIB_DIR/commands/cascade.sh"
     wm_cascade_command "$@"
+    ;;
+  subscription)
+    shift
+    source "$WM_LIB_DIR/00_common.sh"
+    source "$WM_LIB_DIR/lib/nginx_renderer.sh"
+    source "$WM_LIB_DIR/lib/subscription_renderer.sh"
+    source "$WM_LIB_DIR/commands/subscription.sh"
+    wm_subscription_command "$@"
     ;;
   exit)
     shift
@@ -98,6 +107,8 @@ Usage:
   wavemesh exit peer remove --entry-id ID
   wavemesh cascade add-exit --manifest FILE [--display-name TEXT] [--sort-order N] [--dry-run]
   wavemesh cascade list
+  wavemesh subscription rebuild
+  wavemesh subscription validate
   wavemesh repair --nginx
   wavemesh repair --ssl
   wavemesh repair --subscriptions

@@ -3,6 +3,7 @@ import argparse, ipaddress, json, re
 from pathlib import Path
 
 PATH_RE=re.compile(r"^/(?!.*(?:\.\.|%2[fF]|\s)).{10,126}/$")
+SUB_ID_RE=re.compile(r"^[A-Za-z0-9_-]{16,80}$")
 def validate_path(value):
     if not PATH_RE.fullmatch(value): raise ValueError(f"invalid managed path: {value}")
 def render_location(path,port,allowed_ips):
@@ -13,6 +14,12 @@ def render_location(path,port,allowed_ips):
     return "\n".join(lines)
 def render(config):
     seen={config.get("panel",{}).get("path"),config.get("network",{}).get("subscription",{}).get("path"),config.get("network",{}).get("xhttp",{}).get("path")}; blocks=[]
+    for client in sorted(config.get("clients",[]),key=lambda x:x.get("id","")):
+        sub_id=client.get("subscription_id","")
+        if not client.get("enabled",True) or not SUB_ID_RE.fullmatch(sub_id): continue
+        path=f"/sub/{sub_id}/"
+        if path in seen: raise ValueError(f"managed path collision: {path}")
+        seen.add(path); blocks.append("\n".join([f"location = {path} {{",f"    alias /var/www/wavemesh-sub/users/{sub_id}.txt;","    default_type text/plain;",'    add_header Cache-Control "no-store" always;',"}"]))
     for peer in sorted(config.get("relay_peers",[]),key=lambda x:x["id"]):
         if not peer.get("enabled",True): continue
         inbound=peer["inbound"]; path=inbound["public_path"]

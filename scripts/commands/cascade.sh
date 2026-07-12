@@ -5,7 +5,7 @@ declare -F wm_lock_mutation >/dev/null || wm_lock_mutation() { mkdir -p /run/loc
 declare -F wm_transaction_dir >/dev/null || wm_transaction_dir() { local dir="$WM_STATE_DIR/transactions/$(date -u +%Y%m%dT%H%M%SZ)-$(wm_random_alnum 6)"; mkdir -p "$dir"; chmod 700 "$WM_STATE_DIR/transactions" "$dir"; printf '%s' "$dir"; }
 
 wm_cascade_add_exit() {
-  local manifest="" display_name="" sort_order=100 allow_private=0 dry_run=0 state transaction port path candidate clients outbound desired inbound_id exit_id route_id inbound_tag outbound_tag rule_tag xray_before
+  local manifest="" display_name="" sort_order=100 allow_private=0 dry_run=0 state transaction port path candidate clients outbound desired inbound_id exit_id route_id inbound_tag outbound_tag rule_tag xray_before prepared_subs sub_metadata sub_backup subscription_candidate
   while [[ $# -gt 0 ]]; do case "$1" in
     --manifest) manifest="${2:-}"; shift 2;; --display-name) display_name="${2:-}"; shift 2;; --sort-order) sort_order="${2:-}"; shift 2;; --allow-private-target) allow_private=1; shift;; --dry-run) dry_run=1; shift;; *) wm_fail "Unknown cascade add-exit option: $1";; esac; done
   [[ -f "$manifest" ]] || wm_fail "Join manifest not found: $manifest"
@@ -29,7 +29,11 @@ wm_cascade_add_exit() {
   inbound_id="$(wm_inbound_reconcile "$desired")" || wm_fail "Could not create and verify route inbound"
   python3 "$WM_CASCADE_TOOL" finalize --candidate "$candidate" --route-id "$route_id" --inbound-id "$inbound_id" || { wm_inbound_delete "$inbound_id" || true; wm_fail "Could not finalize Entry desired state"; }
   if ! wm_xray_apply_managed_route "$outbound" "$inbound_tag" "$outbound_tag" "$rule_tag"; then wm_inbound_delete "$inbound_id" || true; wm_fail "Could not apply and verify Exit outbound routing"; fi
-  if ! wm_nginx_apply_desired "$candidate" "$transaction"; then wm_xray_apply_template "$xray_before" || true; wm_inbound_delete "$inbound_id" || true; wm_fail "nginx rejected route; Xray and inbound were rolled back"; fi
+  prepared_subs="$transaction/subscriptions"; sub_metadata="$transaction/subscriptions.json"; sub_backup="$transaction/subscriptions.before"; subscription_candidate="$transaction/config.subscription.json"; mkdir -p "$prepared_subs" "$sub_backup"
+  if ! wm_subscription_prepare "$candidate" "$subscription_candidate" "$prepared_subs" "$sub_metadata"; then wm_xray_apply_template "$xray_before" || true; wm_inbound_delete "$inbound_id" || true; wm_fail "Could not render route subscriptions"; fi
+  candidate="$subscription_candidate"; wm_subscription_install_files "$prepared_subs" "$sub_backup"
+  if ! wm_nginx_apply_desired "$candidate" "$transaction"; then wm_subscription_restore_files "$sub_backup"; wm_xray_apply_template "$xray_before" || true; wm_inbound_delete "$inbound_id" || true; wm_fail "nginx rejected route; Xray, inbound, and subscriptions were rolled back"; fi
+  if ! wm_subscription_validate_public "$sub_metadata"; then wm_nginx_restore_transaction "$transaction" || true; wm_subscription_restore_files "$sub_backup"; wm_xray_apply_template "$xray_before" || true; wm_inbound_delete "$inbound_id" || true; wm_fail "Public subscriptions failed validation; transaction rolled back"; fi
   install -m 0600 "$candidate" "$WM_CONFIG_JSON"; wm_export_config_env_from_json; printf '{"status":"committed"}\n' > "$transaction/result.json"; chmod 600 "$transaction"/*.json
   wm_success "Exit imported and route verified: ${exit_id}"; wm_info "Keep or securely delete the join manifest after confirming service"
 }
