@@ -1,0 +1,13 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://wavemesh.local/schemas/exit-join-v1.schema.json",
+  "type": "object", "additionalProperties": false,
+  "required": ["schema_version", "kind", "generated_at", "exit", "entry_constraints", "checksum_sha256"],
+  "properties": {
+    "schema_version": {"const": 1}, "kind": {"const": "wavemesh-exit-join"}, "generated_at": {"type": "string", "format": "date-time"}, "expires_at": {"type": ["string", "null"], "format": "date-time"},
+    "exit": {"type": "object", "required": ["id", "display_name", "country", "city", "domain", "port", "transport", "xhttp_mode", "security", "sni", "host", "fingerprint", "relay_path", "relay_uuid"], "properties": {"id": {"$ref": "#/$defs/id"}, "display_name": {"type": "string", "minLength": 1}, "country": {"pattern": "^[A-Z]{2}$"}, "city": {"type": "string"}, "domain": {"type": "string", "minLength": 1}, "expected_public_ips": {"type": "array", "items": {"type": "string"}}, "port": {"type": "integer", "minimum": 1, "maximum": 65535}, "transport": {"const": "xhttp"}, "xhttp_mode": {"const": "stream-one"}, "security": {"const": "tls"}, "sni": {"type": "string", "minLength": 1}, "host": {"type": "string", "minLength": 1}, "fingerprint": {"type": "string", "minLength": 1}, "relay_path": {"$ref": "#/$defs/path"}, "relay_uuid": {"type": "string", "format": "uuid"}}},
+    "entry_constraints": {"type": "object", "required": ["entry_id", "allowed_entry_ips"], "properties": {"entry_id": {"$ref": "#/$defs/id"}, "allowed_entry_ips": {"type": "array", "items": {"type": "string"}}}},
+    "checksum_sha256": {"type": "string", "pattern": "^[a-fA-F0-9]{64}$"}
+  },
+  "$defs": {"id": {"type": "string", "pattern": "^[a-z0-9][a-z0-9-]{1,47}$"}, "path": {"type": "string", "minLength": 12, "maxLength": 128, "pattern": "^/(?!.*(?:\\.\\.|%2[fF]|\\s)).*/$"}}
+}

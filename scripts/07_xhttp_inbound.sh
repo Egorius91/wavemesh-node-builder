@@ -203,14 +203,14 @@ path = "$WM_CONFIG_JSON"
 cfg = json.load(open(path, encoding="utf-8"))
 xui = cfg.setdefault("installation", {}).setdefault("xui", {})
 xui["inbound"] = {
-  "mode": "api",
+  "creation_mode": "api",
   "id": int("$inbound_id"),
   "protocol": "vless",
   "transport": "xhttp",
   "listen": "127.0.0.1",
   "port": int("$XHTTP_LOCAL_PORT"),
   "path": "$XHTTP_PATH",
-  "mode": "stream-one",
+  "xhttp_mode": "stream-one",
   "security": "none"
 }
 with open(path, "w", encoding="utf-8") as f:
