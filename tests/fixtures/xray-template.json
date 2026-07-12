@@ -1,0 +1,1 @@
+{"log":{"loglevel":"warning"},"outbounds":[{"tag":"user-proxy","protocol":"freedom","settings":{}},{"tag":"direct","protocol":"freedom","settings":{}}],"routing":{"domainStrategy":"AsIs","rules":[{"type":"field","domain":["example.org"],"outboundTag":"user-proxy","ruleTag":"user-rule"},{"type":"field","outboundTag":"direct","ruleTag":"catch-all"}]}}

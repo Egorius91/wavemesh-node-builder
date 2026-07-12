@@ -127,3 +127,42 @@ Known limitations:
 - Xray template mutation belongs to Phase 3.
 
 Next phase: transactional Xray template adapter.
+
+## Phase 3 - Transactional Xray template adapter
+
+Status: implemented locally; live 3X-UI/Xray verification remains pending.
+
+Completed:
+
+- added deterministic merge and removal of WaveMesh-managed outbounds and routing rules;
+- preserved all unmanaged user outbounds, rules, and top-level template fields;
+- inserted managed route rules before the first catch-all rule;
+- rejected duplicate outbound and rule tags;
+- added idempotent replacement for an existing managed route;
+- added API helpers for template read/update, `testOutbound`, and `routeTest`;
+- added transaction directories and timestamped template backups;
+- added automatic restoration of the original template when apply or post-check fails;
+- kept TLS certificate validation enabled in the VLESS outbound fixture.
+
+Changed files:
+
+- `scripts/lib/xray_template.py`
+- `scripts/lib/xray_template.sh`
+- `tests/fixtures/xray-template.json`
+- `tests/fixtures/xray-outbound-de.json`
+- `tests/unit/test_xray_template.py`
+
+Test commands:
+
+```bash
+python3 tests/unit/test_xray_template.py
+bash -n scripts/lib/xray_template.sh
+```
+
+Known limitations:
+
+- no cascade command invokes the adapter until the Exit and Entry flows are implemented;
+- interruption recovery and transaction locking are hardened in Phase 9;
+- live `testOutbound`/`routeTest` response shapes must be confirmed on the selected release.
+
+Next phase: parameterized inbound adapter with read-back and idempotency.
