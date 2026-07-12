@@ -201,3 +201,49 @@ Known limitations:
 - actual inbound tags must be verified against the live API read-back on the test VPS.
 
 Next phase: Exit role, relay peers, allowlist, and join manifests.
+
+## Phase 5 - Exit role and join manifests
+
+Status: implemented locally; clean Exit VPS verification remains pending.
+
+Completed:
+
+- added `wavemesh exit peer create`, `list`, and `remove`;
+- serialized mutating commands with `/run/lock/wavemesh-node.lock`;
+- created loopback-only relay inbounds through the parameterized adapter with API read-back;
+- generated one random UUID, path, and local port per Entry/Exit pair;
+- rendered all route and relay nginx locations from candidate desired state;
+- applied Entry IP allowlists when `--entry-ip` is supplied;
+- added nginx candidate validation, backup, reload, and restoration on failure;
+- generated checksum-protected join manifests with mode `0600` without printing secrets;
+- atomically committed config only after inbound and nginx verification;
+- added removal ordering that closes the public location before deleting the relay inbound;
+- installed CLI libraries and command modules under `/usr/local/lib/wavemesh`.
+
+Changed files:
+
+- `scripts/05_nginx_ssl.sh`
+- `scripts/00_common.sh`
+- `bin/wavemesh`
+- `scripts/lib/nginx_renderer.py`
+- `scripts/lib/nginx_renderer.sh`
+- `scripts/lib/exit_peer.py`
+- `scripts/commands/exit_peer.sh`
+- `tests/fixtures/config-exit-v2.json`
+- `tests/unit/test_exit_peer.py`
+
+Test commands:
+
+```bash
+python3 tests/unit/test_exit_peer.py
+bash -n bin/wavemesh scripts/commands/exit_peer.sh scripts/lib/nginx_renderer.sh
+```
+
+Known limitations:
+
+- TLS/public endpoint checks require a real Exit VPS and domain;
+- manifest trust is operational and checksum detects corruption only;
+- credential rotation remains a controlled multi-command procedure;
+- full interrupted-transaction recovery is hardened in Phase 9.
+
+Next phase: Entry `cascade add-exit` and route wiring.

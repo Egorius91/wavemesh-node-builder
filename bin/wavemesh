@@ -5,6 +5,8 @@ WM_STATE_DIR="/etc/wavemesh-node"
 WM_REPORT_TXT="/root/wavemesh-node-report.txt"
 WM_REPORT_JSON="/root/wavemesh-node-report.json"
 WM_SUB_DIR="/var/www/wavemesh-sub"
+WM_LIB_DIR="${WAVEMESH_LIB_DIR:-/usr/local/lib/wavemesh}"
+if [[ ! -d "$WM_LIB_DIR" ]]; then WM_LIB_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/../scripts" && pwd)"; fi
 
 fail(){ echo "✗ $*" >&2; exit 1; }
 info(){ echo "ℹ $*"; }
@@ -42,6 +44,18 @@ validate_subscription(){
 }
 
 case "${1:-}" in
+  exit)
+    shift
+    # shellcheck source=scripts/00_common.sh
+    source "$WM_LIB_DIR/00_common.sh"
+    source "$WM_LIB_DIR/lib/xui_api.sh"
+    source "$WM_LIB_DIR/lib/inbound_adapter.sh"
+    source "$WM_LIB_DIR/lib/nginx_renderer.sh"
+    WM_EXIT_PEER_TOOL="$WM_LIB_DIR/lib/exit_peer.py"
+    source "$WM_LIB_DIR/commands/exit_peer.sh"
+    [[ "${1:-}" == "peer" ]] || wm_fail "Usage: wavemesh exit peer create|list|remove"
+    shift; wm_exit_peer_command "$@"
+    ;;
   show-report)
     [[ -f "$WM_REPORT_TXT" ]] && cat "$WM_REPORT_TXT" || fail "Report not found"
     ;;
@@ -68,6 +82,9 @@ Usage:
   wavemesh show-report
   wavemesh diagnostics
   wavemesh validate-subscription
+  wavemesh exit peer create --entry-id ID [--entry-ip IP] --display-name TEXT --output FILE
+  wavemesh exit peer list
+  wavemesh exit peer remove --entry-id ID
   wavemesh repair --nginx
   wavemesh repair --ssl
   wavemesh repair --subscriptions

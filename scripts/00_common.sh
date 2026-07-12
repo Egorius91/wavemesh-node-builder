@@ -116,6 +116,12 @@ wm_collect_inputs() {
   if [[ -n "$NODE_COUNTRY" && ! "$NODE_COUNTRY" =~ ^[A-Z]{2}$ ]]; then
     wm_fail "--country must be a two-letter uppercase code"
   fi
+  if [[ "$NODE_ROLE" != "standalone" ]]; then
+    if [[ -z "$NODE_COUNTRY" ]]; then read -rp "Node country code (for example DE): " NODE_COUNTRY; fi
+    if [[ -z "$NODE_CITY" ]]; then read -rp "Node city: " NODE_CITY; fi
+    [[ "$NODE_COUNTRY" =~ ^[A-Z]{2}$ ]] || wm_fail "--country is required for entry/exit and must match ^[A-Z]{2}$"
+    [[ -n "$NODE_CITY" ]] || wm_fail "--city is required for entry/exit"
+  fi
 
   if [[ -z "$EMAIL" ]]; then
     read -rp "Email for Let's Encrypt (optional): " EMAIL || true
@@ -324,5 +330,11 @@ wm_load_config() {
 }
 
 wm_install_cli() {
-  install -m 0755 "$(pwd)/bin/wavemesh" /usr/local/bin/wavemesh 2>/dev/null || true
+  local project_dir
+  project_dir="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
+  mkdir -p /usr/local/lib/wavemesh/lib /usr/local/lib/wavemesh/commands
+  install -m 0755 "$project_dir/bin/wavemesh" /usr/local/bin/wavemesh
+  install -m 0644 "$project_dir/scripts/00_common.sh" /usr/local/lib/wavemesh/00_common.sh
+  install -m 0644 "$project_dir/scripts/lib/"*.sh "$project_dir/scripts/lib/"*.py /usr/local/lib/wavemesh/lib/
+  install -m 0644 "$project_dir/scripts/commands/"*.sh /usr/local/lib/wavemesh/commands/
 }

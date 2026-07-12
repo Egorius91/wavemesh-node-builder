@@ -48,6 +48,7 @@ wm_configure_nginx_https() {
   local panel_path_no_slash sub_path_no_slash
   panel_path_no_slash="${PANEL_PATH%/}"
   sub_path_no_slash="${SUB_PATH%/}"
+  [[ -f /etc/nginx/wavemesh-managed-locations.conf ]] || install -m 0644 /dev/null /etc/nginx/wavemesh-managed-locations.conf
   cat > /etc/nginx/sites-available/wavemesh-node.conf <<EOF
 server {
     listen 80;
@@ -71,6 +72,8 @@ server {
 
     root ${WM_SITE_DIR};
     index index.html;
+
+    include /etc/nginx/wavemesh-managed-locations.conf;
 
     location = ${panel_path_no_slash} {
         return 301 https://\$host${PANEL_PATH};
