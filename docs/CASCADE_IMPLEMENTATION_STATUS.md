@@ -166,3 +166,38 @@ Known limitations:
 - live `testOutbound`/`routeTest` response shapes must be confirmed on the selected release.
 
 Next phase: parameterized inbound adapter with read-back and idempotency.
+
+## Phase 4 - Parameterized inbound adapter
+
+Status: implemented locally; integration into role commands remains pending.
+
+Completed:
+
+- added one XHTTP inbound builder usable for standalone, route, and relay purposes;
+- enforced loopback listen, `stream-one`, explicit managed tags, and structured client input;
+- added add/update/no-op planning based on actual API state;
+- rejected ambiguous duplicate managed tags;
+- added API read-back after every add or update;
+- added focused enable, disable, and delete operations.
+
+Changed files:
+
+- `scripts/lib/inbound_adapter.py`
+- `scripts/lib/inbound_adapter.sh`
+- `tests/fixtures/inbound-clients.json`
+- `tests/unit/test_inbound_adapter.py`
+
+Test commands:
+
+```bash
+python3 tests/unit/test_inbound_adapter.py
+bash -n scripts/lib/inbound_adapter.sh
+```
+
+Known limitations:
+
+- the legacy standalone builder is retained until route-aware install integration;
+- Exit peer creation is implemented in Phase 5;
+- actual inbound tags must be verified against the live API read-back on the test VPS.
+
+Next phase: Exit role, relay peers, allowlist, and join manifests.
