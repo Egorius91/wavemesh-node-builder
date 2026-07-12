@@ -44,6 +44,17 @@ validate_subscription(){
 }
 
 case "${1:-}" in
+  cascade)
+    shift
+    source "$WM_LIB_DIR/00_common.sh"
+    source "$WM_LIB_DIR/lib/xui_api.sh"
+    source "$WM_LIB_DIR/lib/inbound_adapter.sh"
+    source "$WM_LIB_DIR/lib/xray_template.sh"
+    source "$WM_LIB_DIR/lib/nginx_renderer.sh"
+    WM_CASCADE_TOOL="$WM_LIB_DIR/lib/cascade.py"
+    source "$WM_LIB_DIR/commands/cascade.sh"
+    wm_cascade_command "$@"
+    ;;
   exit)
     shift
     # shellcheck source=scripts/00_common.sh
@@ -85,6 +96,8 @@ Usage:
   wavemesh exit peer create --entry-id ID [--entry-ip IP] --display-name TEXT --output FILE
   wavemesh exit peer list
   wavemesh exit peer remove --entry-id ID
+  wavemesh cascade add-exit --manifest FILE [--display-name TEXT] [--sort-order N] [--dry-run]
+  wavemesh cascade list
   wavemesh repair --nginx
   wavemesh repair --ssl
   wavemesh repair --subscriptions

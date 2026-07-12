@@ -247,3 +247,47 @@ Known limitations:
 - full interrupted-transaction recovery is hardened in Phase 9.
 
 Next phase: Entry `cascade add-exit` and route wiring.
+
+## Phase 6 - Entry add-exit
+
+Status: implemented locally; two-VPS verification remains pending.
+
+Completed:
+
+- added `wavemesh cascade add-exit`, `list`, and `status`;
+- validated manifest checksum, kind/version, expiry, Entry constraint, UUID, domain, relay path, transport, and TLS fields;
+- added DNS resolution, expected IP matching, private-target rejection, and CA/SNI TLS handshake checks;
+- added `--allow-private-target` only as an explicit test override;
+- made repeated import of the same manifest a no-op and rejected implicit credential replacement;
+- generated a distinct route credential UUID for every client/route pair;
+- built a TLS-verified VLESS + XHTTP outbound with `allowInsecure=false`;
+- created and read back a dedicated route inbound;
+- applied outbound/routing through `testOutbound` and `routeTest`;
+- rendered and validated the Entry nginx location;
+- restored Xray and removed the route inbound if nginx apply failed;
+- committed desired config only after all post-checks;
+- added a redacted `--dry-run` plan.
+
+Changed files:
+
+- `scripts/lib/cascade.py`
+- `scripts/commands/cascade.sh`
+- `bin/wavemesh`
+- `tests/fixtures/config-entry-v2.json`
+- `tests/unit/test_cascade.py`
+
+Test commands:
+
+```bash
+python3 tests/unit/test_cascade.py
+bash -n scripts/commands/cascade.sh bin/wavemesh
+```
+
+Known limitations:
+
+- real DNS/TLS/API/Xray checks require an Entry and Exit VPS;
+- `--force-update` and controlled credential rotation are intentionally not implicit;
+- route subscription profiles are generated in Phase 7;
+- route removal/enable/disable management is completed in Phase 8.
+
+Next phase: multi-route subscriptions and public profile validation.
