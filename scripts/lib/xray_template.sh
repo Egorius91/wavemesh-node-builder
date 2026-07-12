@@ -1,6 +1,7 @@
 #!/usr/bin/env bash
 
 WM_XRAY_TEMPLATE_TOOL="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/xray_template.py"
+WM_XRAY_RESPONSE_TOOL="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/xray_response.py"
 
 wm_form_field() {
   local name="$1" value="$2"
@@ -8,17 +9,16 @@ wm_form_field() {
 }
 
 wm_xray_get_template() {
-  local response output="$1"
-  response="$(wm_xui_request_success POST /panel/api/xray/ json '{}')" || return 1
-  RESPONSE="$response" OUTPUT="$output" python3 - <<'PY'
-import json, os
-data=json.loads(os.environ["RESPONSE"])
-raw=(data.get("obj") or {}).get("xraySetting")
-if isinstance(raw, str): raw=json.loads(raw)
-if not isinstance(raw, dict): raise SystemExit("3X-UI xraySetting is not an object")
-with open(os.environ["OUTPUT"],"w",encoding="utf-8") as out:
-    json.dump(raw,out,indent=2,sort_keys=True); out.write("\n")
-PY
+  local output="$1" response_file
+  response_file="$(mktemp)"
+  if ! wm_xui_request_success POST /panel/api/xray/ json '{}' > "$response_file"; then
+    rm -f "$response_file"
+    return 1
+  fi
+  python3 "$WM_XRAY_RESPONSE_TOOL" --response "$response_file" --output "$output"
+  local rc=$?
+  rm -f "$response_file"
+  return "$rc"
 }
 
 wm_xray_test_outbound() {

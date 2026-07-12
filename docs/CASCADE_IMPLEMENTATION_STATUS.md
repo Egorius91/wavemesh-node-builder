@@ -291,3 +291,9 @@ Known limitations:
 - route removal/enable/disable management is completed in Phase 8.
 
 Next phase: multi-route subscriptions and public profile validation.
+
+### Phase 6 compatibility fix - Xray response shape
+
+- accepted both known 3X-UI response forms: `obj` as the Xray JSON string and `obj.xraySetting` as a string/object;
+- moved parsing from an environment variable to a temporary file to support large templates;
+- added regression tests for direct-string, wrapped-object, and direct-object responses.
