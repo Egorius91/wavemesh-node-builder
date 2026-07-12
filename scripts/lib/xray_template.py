@@ -6,6 +6,7 @@ import json
 from pathlib import Path
 
 MATCH_KEYS = {"domain", "ip", "port", "sourcePort", "localPort", "network", "source", "sourceIP", "user", "inboundTag", "protocol", "attrs"}
+XRAY_API_PORT = 62789
 
 
 def read_json(path):
@@ -23,6 +24,36 @@ def ensure_unique(items, key, label):
         raise ValueError(f"duplicate {label}: {', '.join(duplicates)}")
 
 
+def ensure_xray_api(template):
+    api = template.setdefault("api", {})
+    api["tag"] = "api"
+    services = api.setdefault("services", [])
+    for service in ("HandlerService", "StatsService", "RoutingService"):
+        if service not in services:
+            services.append(service)
+
+    inbounds = template.setdefault("inbounds", [])
+    api_inbounds = [item for item in inbounds if item.get("tag") == "api"]
+    if len(api_inbounds) > 1:
+        raise ValueError("multiple Xray API inbounds")
+    if not api_inbounds:
+        if any(int(item.get("port", -1)) == XRAY_API_PORT for item in inbounds):
+            raise ValueError(f"Xray API port {XRAY_API_PORT} is occupied")
+        inbounds.insert(0, {"listen": "127.0.0.1", "port": XRAY_API_PORT, "protocol": "tunnel", "settings": {"rewriteAddress": "127.0.0.1"}, "tag": "api"})
+    else:
+        inbound = api_inbounds[0]
+        if inbound.get("listen") != "127.0.0.1" or int(inbound.get("port", 0)) <= 0:
+            raise ValueError("existing Xray API inbound is not loopback with a valid port")
+
+    routing = template.setdefault("routing", {})
+    rules = routing.setdefault("rules", [])
+    has_api_rule = any(item.get("inboundTag") in (["api"], "api") and item.get("outboundTag") == "api" for item in rules)
+    if not has_api_rule:
+        rules.insert(0, {"type": "field", "inboundTag": ["api"], "outboundTag": "api", "ruleTag": "wm-api-rule"})
+    template.setdefault("stats", {})
+    return template
+
+
 def merge(template, outbound, inbound_tag, outbound_tag, rule_tag):
     if not outbound_tag.startswith("wm-exit-") or outbound.get("tag") != outbound_tag:
         raise ValueError("managed outbound tag mismatch")
@@ -30,6 +61,7 @@ def merge(template, outbound, inbound_tag, outbound_tag, rule_tag):
         raise ValueError("managed route tags must use wm- prefixes")
 
     result = json.loads(json.dumps(template))
+    ensure_xray_api(result)
     outbounds = result.setdefault("outbounds", [])
     outbounds[:] = [item for item in outbounds if item.get("tag") != outbound_tag]
     outbounds.append(outbound)

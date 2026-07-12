@@ -301,3 +301,6 @@ Next phase: multi-route subscriptions and public profile validation.
 - split Xray apply and route-test failure diagnostics while preserving rollback.
 - routed warnings to stderr so API errors are not swallowed by response-file redirection;
 - added a secret-free `matched/outboundTag` summary for route-test mismatches.
+- ensured the private Xray gRPC API inbound exists on `127.0.0.1:62789` with RoutingService enabled;
+- preserved or validated an existing API inbound and rejected port conflicts;
+- waited for Xray gRPC readiness after a structural template restart.

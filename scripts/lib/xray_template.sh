@@ -40,10 +40,14 @@ wm_xray_apply_template() {
 }
 
 wm_xray_route_test() {
-  local inbound_tag="$1" expected_outbound="$2" payload response_file actual summary
+  local inbound_tag="$1" expected_outbound="$2" payload response_file actual summary attempt
   payload="domain=example.com&port=443&network=tcp&$(wm_form_field inboundTag "$inbound_tag")"
   response_file="$(mktemp)"
-  if ! wm_xui_request_success POST /panel/api/xray/routeTest form "$payload" > "$response_file"; then rm -f "$response_file"; return 1; fi
+  for attempt in $(seq 1 20); do
+    if wm_xui_request_success POST /panel/api/xray/routeTest form "$payload" > "$response_file"; then break; fi
+    sleep 1
+  done
+  if (( attempt == 20 )) && ! python3 -c 'import json,sys; sys.exit(0 if json.load(open(sys.argv[1])).get("success") is True else 1)' "$response_file" 2>/dev/null; then rm -f "$response_file"; return 1; fi
   actual="$(python3 -c 'import importlib.util,json,sys; spec=importlib.util.spec_from_file_location("xr",sys.argv[1]); m=importlib.util.module_from_spec(spec); spec.loader.exec_module(m); print(m.extract_route_outbound(json.load(open(sys.argv[2],encoding="utf-8"))))' "$WM_XRAY_RESPONSE_TOOL" "$response_file" 2>/dev/null || true)"
   summary="$(python3 -c 'import json,sys; data=json.load(open(sys.argv[1],encoding="utf-8")); obj=data.get("obj"); obj=json.loads(obj) if isinstance(obj,str) else obj; print("matched=%s outbound=%s" % ((obj or {}).get("matched"), (obj or {}).get("outboundTag") or "none")) if isinstance(obj,dict) else print("unsupported routeTest response")' "$response_file" 2>/dev/null || printf 'unparseable routeTest response')"
   rm -f "$response_file"
