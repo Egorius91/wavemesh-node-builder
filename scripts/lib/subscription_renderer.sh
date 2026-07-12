@@ -23,12 +23,15 @@ wm_subscription_restore_files() {
 }
 
 wm_subscription_validate_public() {
-  local metadata="$1" item path sub_id expected actual
+  local metadata="$1" item path sub_id expected response_file status
   while IFS= read -r item; do
     path="$(printf '%s' "$item" | python3 -c 'import json,sys; print(json.load(sys.stdin)["path"])')"
     sub_id="$(printf '%s' "$item" | python3 -c 'import json,sys; print(json.load(sys.stdin)["subscription_id"])')"
     expected="$WM_SUB_DIR/users/${sub_id}.txt"
-    actual="$(curl -fsSk --max-time 10 "https://${DOMAIN}${path}" 2>/dev/null || true)"
-    [[ -n "$actual" && "$actual" == "$(cat "$expected")" ]] || { wm_warn "Public subscription validation failed for ${path}"; return 1; }
+    response_file="$(mktemp)"
+    status="$(curl -sSk --max-time 10 -o "$response_file" -w '%{http_code}' "https://${DOMAIN}${path}" 2>/dev/null || true)"
+    if [[ "$status" != "200" ]]; then rm -f "$response_file"; wm_warn "Public subscription validation returned HTTP ${status:-transport-error} for ${path}"; return 1; fi
+    if ! cmp -s "$response_file" "$expected"; then rm -f "$response_file"; wm_warn "Public subscription content differs from generated file for ${path}"; return 1; fi
+    rm -f "$response_file"
   done < <(python3 -c 'import json,sys; [print(json.dumps(x,separators=(",",":"))) for x in json.load(open(sys.argv[1]))]' "$metadata")
 }
