@@ -1,0 +1,1 @@
+{"openapi":"3.0.0","paths":{"/panel/api/inbounds/list":{},"/panel/api/inbounds/add":{},"/panel/api/setting/apiTokens/create":{},"/panel/api/xray/":{},"/panel/api/xray/update":{},"/panel/api/xray/testOutbound":{},"/panel/api/xray/routeTest":{}}}

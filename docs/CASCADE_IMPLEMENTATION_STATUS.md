@@ -89,3 +89,41 @@ Known limitations:
 - POSIX `0600` behavior is asserted only when tests run on a POSIX host.
 
 Next phase: common 3X-UI API client and capability discovery.
+
+## Phase 2 - Common 3X-UI API client
+
+Status: implemented locally; live-panel verification remains pending.
+
+Completed:
+
+- added a shared API client with separate transport, HTTP status, JSON, and `success` checks;
+- added bounded connect/request timeouts and contextual errors without response-secret logging;
+- retained cookie and CSRF only for bootstrap and compatibility fallback;
+- added OpenAPI capability discovery for every endpoint required by the cascade data plane;
+- added creation and immediate verification of a real 3X-UI Bearer token;
+- stopped treating a locally generated random string as an API token;
+- stored the one-time token with the private config and exported it only to root-owned compatibility state;
+- refactored the standalone inbound flow to use the shared API client.
+
+Changed files:
+
+- `scripts/lib/xui_api.sh`
+- `scripts/07_xhttp_inbound.sh`
+- `install.sh`
+- `tests/fixtures/xui-openapi.json`
+- `tests/integration/test_xui_api.sh`
+
+Test commands:
+
+```bash
+bash tests/integration/test_xui_api.sh
+bash -n install.sh scripts/07_xhttp_inbound.sh scripts/lib/xui_api.sh
+```
+
+Known limitations:
+
+- token bootstrap must still be verified against the exact latest release selected on a clean VPS;
+- WebSocket APIs intentionally remain cookie-only and are not used by WaveMesh;
+- Xray template mutation belongs to Phase 3.
+
+Next phase: transactional Xray template adapter.

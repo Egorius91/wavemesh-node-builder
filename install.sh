@@ -39,6 +39,7 @@ main() {
   wm_create_clients
   wm_install_3xui
   wm_configure_3xui_panel
+  wm_xui_bootstrap_api_token || wm_fail "Could not establish verified 3X-UI bearer API access"
   wm_create_xhttp_inbound
   wm_generate_fallback_subscription
   wm_validate_subscription_output

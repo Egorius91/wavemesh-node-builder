@@ -1,78 +1,16 @@
 #!/usr/bin/env bash
 
-XUI_COOKIE_JAR="/tmp/wavemesh-xui-cookies.txt"
-XUI_CSRF_TOKEN=""
+# shellcheck source=scripts/lib/xui_api.sh
+source "$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/lib/xui_api.sh"
 
-wm_xui_base_url() {
-  printf 'http://127.0.0.1:%s%s' "$PANEL_PORT" "$PANEL_PATH"
-}
-
-wm_xui_api_url() {
-  local path="$1"
-  local base
-  base="$(wm_xui_base_url)"
-  printf '%s%s' "${base%/}" "$path"
-}
-
-wm_xui_json_success() {
-  python3 -c 'import json,sys; data=json.load(sys.stdin); sys.exit(0 if data.get("success") is True else 1)' 2>/dev/null
-}
-
-wm_xui_get_csrf() {
-  local url response token
-  url="$(wm_xui_api_url /csrf-token)"
-  response="$(curl -fsS -c "$XUI_COOKIE_JAR" -b "$XUI_COOKIE_JAR" --max-time 10 "$url" 2>/dev/null || true)"
-  token="$(printf '%s' "$response" | python3 -c 'import json,sys; print(json.load(sys.stdin).get("obj",""))' 2>/dev/null || true)"
-  [[ -n "$token" ]] || return 1
-  XUI_CSRF_TOKEN="$token"
-}
-
-wm_xui_login() {
-  wm_info "Logging in to 3X-UI API"
-  local url
-  url="$(wm_xui_api_url /login)"
-  rm -f "$XUI_COOKIE_JAR"
-
-  wm_xui_get_csrf || {
-    wm_warn "Could not obtain 3X-UI CSRF token"
-    return 1
-  }
-
-  local response
-  response="$(curl -fsS -c "$XUI_COOKIE_JAR" -b "$XUI_COOKIE_JAR" \
-    -H 'Content-Type: application/json' \
-    -H "X-CSRF-Token: ${XUI_CSRF_TOKEN}" \
-    -X POST "$url" \
-    -d "{\"username\":\"${PANEL_USERNAME}\",\"password\":\"${PANEL_PASSWORD}\"}" 2>/dev/null || true)"
-
-  if [[ -s "$XUI_COOKIE_JAR" ]] && printf '%s' "$response" | wm_xui_json_success; then
-    wm_success "3X-UI API login OK"
-    return 0
-  fi
-
-  wm_warn "3X-UI API login not confirmed at $url"
-  return 1
-}
+wm_xui_json_success() { wm_xui_response_success; }
 
 wm_xui_api_post() {
-  local path="$1"
-  local payload="$2"
-  local url
-  url="$(wm_xui_api_url "$path")"
-  curl -fsS -b "$XUI_COOKIE_JAR" -c "$XUI_COOKIE_JAR" \
-    -H 'Content-Type: application/json' \
-    -H "X-CSRF-Token: ${XUI_CSRF_TOKEN}" \
-    -H 'X-Requested-With: XMLHttpRequest' \
-    -X POST "$url" -d "$payload"
+  wm_xui_request POST "$1" json "$2"
 }
 
 wm_xui_api_get() {
-  local path="$1"
-  local url
-  url="$(wm_xui_api_url "$path")"
-  curl -fsS -b "$XUI_COOKIE_JAR" -c "$XUI_COOKIE_JAR" \
-    -H 'X-Requested-With: XMLHttpRequest' \
-    "$url"
+  wm_xui_request GET "$1" none
 }
 
 wm_build_xhttp_inbound_payload() {
