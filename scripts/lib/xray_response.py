@@ -7,17 +7,17 @@ from pathlib import Path
 
 
 def extract_template(response):
-    obj = response.get("obj")
-    if isinstance(obj, str):
-        raw = json.loads(obj)
-    elif isinstance(obj, dict):
-        raw = obj.get("xraySetting", obj)
-    else:
-        raise ValueError("3X-UI returned an unsupported Xray template format")
-    if isinstance(raw, str):
-        raw = json.loads(raw)
+    raw = response.get("obj")
+    for _ in range(8):
+        if isinstance(raw, str):
+            raw = json.loads(raw)
+            continue
+        if isinstance(raw, dict) and "xraySetting" in raw:
+            raw = raw["xraySetting"]
+            continue
+        break
     if not isinstance(raw, dict):
-        raise ValueError("3X-UI Xray template is not a JSON object")
+        raise ValueError("3X-UI returned an unsupported Xray template format")
     return raw
 
 

@@ -357,6 +357,7 @@ Next phase: route lifecycle commands, health, and runtime state.
 - ensured the private Xray gRPC API inbound exists on `127.0.0.1:62789` with RoutingService enabled;
 - preserved or validated an existing API inbound and rejected port conflicts;
 - waited for Xray gRPC readiness after a structural template restart.
+- unwrapped nested 3X-UI settings envelopes where `obj.xraySetting` contains another object whose `xraySetting` field holds the actual Xray JSON; this prevents false `missing` drift while `routeTest` is healthy.
 
 ## Phase 8 - CLI, health, and runtime state
 
