@@ -98,6 +98,8 @@ The script attempts non-interactive setup with generated panel credentials and p
 
 ```text
 /etc/wavemesh-node/config.env
+/etc/wavemesh-node/config.json
+/etc/wavemesh-node/runtime.json
 /etc/wavemesh-node/report.json
 /root/wavemesh-node-report.txt
 /root/wavemesh-node-report.json
@@ -152,6 +154,15 @@ After installation:
 wavemesh show-report
 wavemesh diagnostics
 wavemesh validate-subscription
+wavemesh cascade status --json
+wavemesh cascade health [--exit-id EXIT_ID] [--json]
+wavemesh route list [--json]
+wavemesh route enable --route-id ROUTE_ID
+wavemesh route disable --route-id ROUTE_ID
+wavemesh route remove --route-id ROUTE_ID
+wavemesh cascade remove-exit --exit-id EXIT_ID [--force]
+wavemesh reconcile --dry-run
+wavemesh reconcile --apply
 wavemesh repair --nginx
 wavemesh repair --ssl
 wavemesh repair --subscriptions
@@ -170,17 +181,18 @@ Implemented:
 - nginx/SSL templates;
 - configurable 3X-UI installation layer;
 - 3X-UI database discovery and backup;
-- fallback-generated subscription files;
+- standalone, Entry, and Exit roles;
+- managed Entry-to-Exit VLESS/XHTTP cascade routes;
+- private per-client multi-route subscriptions;
+- route lifecycle and forced Exit removal commands;
+- persisted `runtime.json` health state with three-check thresholds;
+- redacted desired/observed drift detection and managed reconciliation;
 - strict validation;
 - report generation;
 - CLI wrapper.
 
-Next technical layer:
-
-- inspect real 3X-UI v3 database/API on a test VPS;
-- implement inbound creation adapter;
-- replace placeholder `scripts/07_xhttp_inbound.sh` with a version-specific implementation;
-- keep fallback-generated subscription as the canonical validation source until 3X-UI public subscription output is verified.
+Next technical layer: Phase 9 transaction interruption recovery, rollback hardening,
+and backup retention across every mutating lifecycle command.
 
 ## Legal note
 

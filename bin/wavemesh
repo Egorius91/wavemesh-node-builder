@@ -53,8 +53,34 @@ case "${1:-}" in
     source "$WM_LIB_DIR/lib/nginx_renderer.sh"
     source "$WM_LIB_DIR/lib/subscription_renderer.sh"
     WM_CASCADE_TOOL="$WM_LIB_DIR/lib/cascade.py"
+    WM_RUNTIME_TOOL="$WM_LIB_DIR/lib/runtime_state.py"
+    source "$WM_LIB_DIR/commands/runtime.sh"
     source "$WM_LIB_DIR/commands/cascade.sh"
     wm_cascade_command "$@"
+    ;;
+  route)
+    shift
+    source "$WM_LIB_DIR/00_common.sh"
+    source "$WM_LIB_DIR/lib/xui_api.sh"
+    source "$WM_LIB_DIR/lib/inbound_adapter.sh"
+    source "$WM_LIB_DIR/lib/xray_template.sh"
+    source "$WM_LIB_DIR/lib/nginx_renderer.sh"
+    source "$WM_LIB_DIR/lib/subscription_renderer.sh"
+    WM_RUNTIME_TOOL="$WM_LIB_DIR/lib/runtime_state.py"
+    source "$WM_LIB_DIR/commands/runtime.sh"
+    wm_route_command "$@"
+    ;;
+  reconcile)
+    shift
+    source "$WM_LIB_DIR/00_common.sh"
+    source "$WM_LIB_DIR/lib/xui_api.sh"
+    source "$WM_LIB_DIR/lib/inbound_adapter.sh"
+    source "$WM_LIB_DIR/lib/xray_template.sh"
+    source "$WM_LIB_DIR/lib/nginx_renderer.sh"
+    source "$WM_LIB_DIR/lib/subscription_renderer.sh"
+    WM_RUNTIME_TOOL="$WM_LIB_DIR/lib/runtime_state.py"
+    source "$WM_LIB_DIR/commands/runtime.sh"
+    wm_reconcile_command "$@"
     ;;
   subscription)
     shift
@@ -81,6 +107,10 @@ case "${1:-}" in
     ;;
   diagnostics)
     load_config
+    if [[ "${NODE_ROLE:-standalone}" == "entry" ]]; then
+      "$0" cascade health
+      exit $?
+    fi
     systemctl is-active --quiet nginx && ok "nginx active" || fail "nginx inactive"
     [[ -f "/etc/letsencrypt/live/${DOMAIN}/fullchain.pem" ]] && ok "SSL certificate exists" || fail "SSL missing"
     validate_subscription
@@ -107,6 +137,14 @@ Usage:
   wavemesh exit peer remove --entry-id ID
   wavemesh cascade add-exit --manifest FILE [--display-name TEXT] [--sort-order N] [--dry-run]
   wavemesh cascade list
+  wavemesh cascade status [--json]
+  wavemesh cascade health [--exit-id ID] [--json]
+  wavemesh cascade remove-exit --exit-id ID [--force]
+  wavemesh route list [--json]
+  wavemesh route enable --route-id ID
+  wavemesh route disable --route-id ID
+  wavemesh route remove --route-id ID
+  wavemesh reconcile --dry-run|--apply
   wavemesh subscription rebuild
   wavemesh subscription validate
   wavemesh repair --nginx

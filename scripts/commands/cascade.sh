@@ -38,15 +38,12 @@ wm_cascade_add_exit() {
   wm_success "Exit imported and route verified: ${exit_id}"; wm_info "Keep or securely delete the join manifest after confirming service"
 }
 
-wm_cascade_list() {
-  wm_load_config; wm_require_entry_role
-  python3 - "$WM_CONFIG_JSON" <<'PY'
-import json,sys
-cfg=json.load(open(sys.argv[1],encoding="utf-8")); exits={x["id"]:x for x in cfg.get("exits",[])}
-if not exits: print("No imported exits")
-for route in sorted((x for x in cfg.get("routes",[]) if x.get("kind")=="cascade"),key=lambda x:(x.get("sort_order",0),x["id"])):
-    target=exits.get(route["exit_id"],{}); print(f"{target.get('id',route['exit_id'])}\t{'enabled' if route.get('enabled',True) else 'disabled'}\t{route.get('display_name','')}")
-PY
+wm_cascade_command() {
+  case "${1:-}" in
+    add-exit) shift; wm_cascade_add_exit "$@";;
+    list|status) shift; wm_runtime_status "$@";;
+    health) shift; wm_runtime_health "$@";;
+    remove-exit) shift; wm_cascade_remove_exit "$@";;
+    *) wm_fail "Usage: wavemesh cascade add-exit --manifest FILE | list | status [--json] | health [--exit-id ID] [--json] | remove-exit --exit-id ID [--force]";;
+  esac
 }
-
-wm_cascade_command() { case "${1:-}" in add-exit) shift; wm_cascade_add_exit "$@";; list|status) shift; wm_cascade_list "$@";; *) wm_fail "Usage: wavemesh cascade add-exit --manifest FILE | list | status";; esac; }

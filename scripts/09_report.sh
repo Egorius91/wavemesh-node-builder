@@ -6,6 +6,16 @@ wm_write_reports() {
   local panel_public_url="https://${DOMAIN}${PANEL_PATH}"
   local subscription_url="https://${DOMAIN}${SUB_PATH}"
   local panel_internal_url="http://127.0.0.1:${PANEL_PORT}${PANEL_PATH}"
+  local report_summary node_role node_id exit_count route_count node_status
+  report_summary="$(python3 - "$WM_CONFIG_JSON" "$WM_RUNTIME_JSON" <<'PY'
+import json,sys
+cfg=json.load(open(sys.argv[1],encoding="utf-8"))
+try: runtime=json.load(open(sys.argv[2],encoding="utf-8"))
+except (FileNotFoundError,json.JSONDecodeError): runtime={}
+print("\t".join((cfg.get("node",{}).get("role","standalone"),cfg.get("node",{}).get("id",""),str(len(cfg.get("exits",[]))),str(len([r for r in cfg.get("routes",[]) if r.get("kind")=="cascade"])),runtime.get("node_status","unknown"))))
+PY
+)"
+  IFS=$'\t' read -r node_role node_id exit_count route_count node_status <<< "$report_summary"
 
   cat > "$WM_REPORT_TXT" <<EOF
 WaveMesh Node Report
@@ -15,6 +25,11 @@ Domain:              ${DOMAIN}
 Public IP:           ${PUBLIC_IP}
 Public HTTPS port:   443
 Node name:           ${NODE_NAME}
+Node ID:             ${node_id}
+Node role:           ${node_role}
+Cascade exits:       ${exit_count}
+Cascade routes:      ${route_count}
+Observed health:     ${node_status}
 Web Identity:        ${WEB_IDENTITY_NAME}
 
 Panel public URL:    ${panel_public_url}
@@ -42,6 +57,11 @@ EOF
   "public_ip": "${PUBLIC_IP}",
   "public_port": 443,
   "node_name": "${NODE_NAME}",
+  "node_id": "${node_id}",
+  "node_role": "${node_role}",
+  "cascade_exits": ${exit_count},
+  "cascade_routes": ${route_count},
+  "node_status": "${node_status}",
   "web_identity_name": "${WEB_IDENTITY_NAME}",
   "panel_public_url": "${panel_public_url}",
   "panel_internal_url": "${panel_internal_url}",

@@ -294,7 +294,7 @@ Next phase: multi-route subscriptions and public profile validation.
 
 ## Phase 7 - Multi-route subscriptions
 
-Status: implemented locally; public Entry URL verification remains pending.
+Status: completed, including live public Entry URL verification.
 
 Completed:
 
@@ -330,9 +330,13 @@ bash -n scripts/lib/subscription_renderer.sh scripts/commands/subscription.sh
 
 Known limitations:
 
-- public URL comparison requires the live Entry domain;
 - Clash and sing-box output are outside the MVP scope;
 - health does not automatically remove profiles after transient failures.
+
+Live result:
+
+- `sudo wavemesh subscription validate`: passed on the Entry VPS on 2026-07-13;
+- generated files matched the public HTTPS subscription output byte for byte.
 
 ### Phase 7 nginx compatibility fix
 
@@ -353,3 +357,66 @@ Next phase: route lifecycle commands, health, and runtime state.
 - ensured the private Xray gRPC API inbound exists on `127.0.0.1:62789` with RoutingService enabled;
 - preserved or validated an existing API inbound and rejected port conflicts;
 - waited for Xray gRPC readiness after a structural template restart.
+
+## Phase 8 - CLI, health, and runtime state
+
+Status: implemented locally; live lifecycle verification remains pending.
+
+Completed:
+
+- added `wavemesh cascade status`, `health`, and `remove-exit` with mandatory JSON output support for status and health;
+- added `wavemesh route list`, `enable`, `disable`, and `remove`;
+- added `wavemesh reconcile --dry-run|--apply` with a redacted managed-object plan;
+- persisted observed state atomically in `/etc/wavemesh-node/runtime.json` with mode `0600`;
+- implemented `unknown`, `healthy`, `unhealthy`, `disabled`, and `misconfigured` states;
+- required three consecutive successes or failures before normal health transitions;
+- checked 3X-UI, Bearer API, loopback panel binding, Xray, nginx, TLS, managed inbounds, outbounds, routing rules, `testOutbound`, `routeTest`, nginx locations, and subscription profiles;
+- kept a single transient failure from deleting or hiding a subscription profile;
+- made route lifecycle changes regenerate and publicly validate subscriptions before committing desired state;
+- made route and Exit removal verify Xray read-back before deleting route inbounds;
+- allowed `reconcile --apply` to repair WaveMesh-managed inbounds, routes, nginx locations, and subscriptions while leaving unmanaged Xray objects intact;
+- updated stored inbound IDs when reconciliation recreates a missing managed inbound;
+- routed Entry diagnostics through the cascade health checks and added role, route, Exit, and health summaries to the private node report.
+
+Changed files:
+
+- `bin/wavemesh`
+- `scripts/commands/cascade.sh`
+- `scripts/commands/runtime.sh`
+- `scripts/lib/runtime_state.py`
+- `scripts/09_report.sh`
+- `tests/unit/test_runtime_state.py`
+- `README.md`
+- `docs/CASCADE_IMPLEMENTATION_STATUS.md`
+
+Test commands:
+
+```bash
+python3 tests/unit/test_runtime_state.py
+python3 tests/unit/test_cascade.py
+python3 tests/unit/test_config_migration.py
+python3 tests/unit/test_exit_peer.py
+python3 tests/unit/test_inbound_adapter.py
+python3 tests/unit/test_subscription_renderer.py
+python3 tests/unit/test_xray_response.py
+python3 tests/unit/test_xray_template.py
+bash tests/unit/test_baseline.sh
+bash -n install.sh bin/wavemesh scripts/*.sh scripts/lib/*.sh scripts/commands/*.sh
+git diff --check
+```
+
+Local results:
+
+- all Python unit tests passed;
+- baseline test passed through Git Bash;
+- Bash syntax checks passed for installer, CLI, libraries, and command modules;
+- Python bytecode compilation and `git diff --check` passed.
+
+Known limitations:
+
+- live `health`, lifecycle, and reconciliation commands require verification on the Entry VPS;
+- full recovery after process interruption during a multi-route forced Exit removal belongs to Phase 9;
+- automated health scheduling is not installed; health runs on explicit CLI invocation;
+- shellcheck and GitHub Actions are not available in the current repository environment.
+
+Next phase: transaction interruption recovery, rollback hardening, and backup retention.
