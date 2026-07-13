@@ -17,6 +17,18 @@ declare -F wm_transaction_dir >/dev/null || wm_transaction_dir() {
 
 wm_require_entry_role() { [[ "$NODE_ROLE" == "entry" ]] || wm_fail "This command requires an entry node"; }
 
+wm_xray_process_running() {
+  local exe target name proc_root="${WM_PROC_ROOT:-/proc}"
+  for exe in "$proc_root"/[0-9]*/exe; do
+    target="$(readlink "$exe" 2>/dev/null)" || continue
+    name="${target##*/}"
+    case "$name" in
+      xray|xray-*) return 0 ;;
+    esac
+  done
+  return 1
+}
+
 wm_runtime_status() {
   local as_json=0
   while [[ $# -gt 0 ]]; do case "$1" in --json) as_json=1; shift;; *) wm_fail "Unknown status option: $1";; esac; done
@@ -56,7 +68,7 @@ wm_runtime_health() {
   if wm_xui_request_success GET /panel/api/inbounds/list none > "$inbounds"; then api_ok=true; api_state=reachable; fi
   wm_xray_get_template "$template" || printf '{}\n' > "$template"
   systemctl is-active --quiet x-ui && xui_service=active || true
-  (pgrep -x xray >/dev/null 2>&1 || pgrep -f '/xray([[:space:]]|$)' >/dev/null 2>&1) && xray_state=running || true
+  wm_xray_process_running && xray_state=running || true
   if ss -ltnH 2>/dev/null | awk '{print $4}' | grep -Eq "^(127\\.0\\.0\\.1|\\[::1\\]):${PANEL_PORT}$"; then panel_bind=loopback; fi
   [[ "${PANEL_TOKEN:-}" != "" ]] && $api_ok && bearer_state=valid || true
   systemctl is-active --quiet nginx && nginx_state=active || true

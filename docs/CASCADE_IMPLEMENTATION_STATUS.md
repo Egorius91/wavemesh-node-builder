@@ -358,6 +358,7 @@ Next phase: route lifecycle commands, health, and runtime state.
 - preserved or validated an existing API inbound and rejected port conflicts;
 - waited for Xray gRPC readiness after a structural template restart.
 - unwrapped nested 3X-UI settings envelopes where `obj.xraySetting` contains another object whose `xraySetting` field holds the actual Xray JSON; this prevents false `missing` drift while `routeTest` is healthy.
+- detected both the canonical `xray` process name and 3X-UI packaged names such as `xray-linux-amd64` through `/proc/*/exe`, preventing a healthy live core from being reported as stopped.
 
 ## Phase 8 - CLI, health, and runtime state
 
