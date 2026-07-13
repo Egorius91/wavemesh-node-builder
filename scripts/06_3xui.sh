@@ -210,6 +210,8 @@ try:
         "subPath": sub_path,
         "subDomain": domain,
         "subURI": f"https://{domain}{sub_path}",
+        "subShowInfo": "false",
+        "remarkModel": "-o",
     }
     for key, value in values.items():
         cur = conn.execute("UPDATE settings SET value=? WHERE key=?", (value, key))

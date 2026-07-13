@@ -3,7 +3,9 @@
 
 wm_subscription_rebuild_command() {
   local transaction candidate prepared metadata backup
-  wm_lock_mutation "subscription-rebuild"; wm_load_config; wm_transaction_begin "subscription-rebuild"; transaction="$WM_ACTIVE_TRANSACTION"; candidate="$transaction/config.candidate.json"; prepared="$transaction/subscriptions"; metadata="$transaction/subscriptions.json"; backup="$transaction/subscriptions.before"
+  wm_lock_mutation "subscription-rebuild"; wm_load_config
+  wm_apply_subscription_presentation || wm_fail "Could not apply subscription presentation settings"
+  wm_transaction_begin "subscription-rebuild"; transaction="$WM_ACTIVE_TRANSACTION"; candidate="$transaction/config.candidate.json"; prepared="$transaction/subscriptions"; metadata="$transaction/subscriptions.json"; backup="$transaction/subscriptions.before"
   mkdir -p "$prepared" "$backup"
   wm_subscription_prepare "$WM_CONFIG_JSON" "$candidate" "$prepared" "$metadata" || wm_fail "Could not render subscriptions"
   wm_subscription_install_files "$prepared" "$backup"

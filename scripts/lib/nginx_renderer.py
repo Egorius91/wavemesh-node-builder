@@ -19,7 +19,7 @@ def render(config):
         if not client.get("enabled",True) or not SUB_ID_RE.fullmatch(sub_id): continue
         path=f"/sub/{sub_id}/"
         if path in seen: raise ValueError(f"managed path collision: {path}")
-        seen.add(path); blocks.append("\n".join([f"location = {path} {{","    root /var/www/wavemesh-sub/users;",f"    try_files /{sub_id}.txt =404;","    default_type text/plain;",'    add_header Cache-Control "no-store" always;',"}"]))
+        seen.add(path); blocks.append("\n".join([f"location = {path} {{","    root /var/www/wavemesh-sub/users;",f"    try_files /{sub_id}.txt =404;","    default_type text/plain;",'    add_header Cache-Control "no-store" always;','    add_header Profile-Title "base64:V2F2ZU1lc2hWUE4=" always;',"}"]))
     for peer in sorted(config.get("relay_peers",[]),key=lambda x:x["id"]):
         if not peer.get("enabled",True): continue
         inbound=peer["inbound"]; path=inbound["public_path"]

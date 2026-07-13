@@ -116,6 +116,7 @@ server {
         try_files /sub.txt =404;
         default_type text/plain;
         add_header Cache-Control "no-store" always;
+        add_header Profile-Title "base64:V2F2ZU1lc2hWUE4=" always;
     }
 
     location ${SUB_PATH} {
@@ -127,6 +128,8 @@ server {
         proxy_set_header X-Forwarded-Port 443;
         proxy_redirect off;
         proxy_buffering off;
+        proxy_hide_header Profile-Title;
+        add_header Profile-Title "base64:V2F2ZU1lc2hWUE4=" always;
     }
 }
 EOF

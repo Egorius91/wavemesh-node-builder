@@ -11,6 +11,6 @@ with tempfile.TemporaryDirectory() as name:
     cfg=json.loads(final.read_text()); sub_id=cfg["clients"][0]["subscription_id"]; assert sub_id.startswith("sub-") and sub_id!="sub-client-1"
     content=(output/"users"/f"{sub_id}.txt").read_text(); assert content.startswith("vless://") and "@ru-entry.example.com:443" in content and "path=%2Fapi%2Fde%2Fexample-route%2F" in content
     for forbidden in ("de-exit.example.com","198.51.100.20","00000000-0000-0000-0000-000000000002","/relay/example-secret/","21001","22001","127.0.0.1"): assert forbidden not in content
-    subprocess.run([sys.executable,str(nginx_renderer),"--config",str(final),"--output",str(nginx)],check=True); rendered=nginx.read_text(); assert f"location = /sub/{sub_id}/" in rendered and "root /var/www/wavemesh-sub/users;" in rendered and f"try_files /{sub_id}.txt =404;" in rendered and "alias " not in rendered
+    subprocess.run([sys.executable,str(nginx_renderer),"--config",str(final),"--output",str(nginx)],check=True); rendered=nginx.read_text(); assert f"location = /sub/{sub_id}/" in rendered and "root /var/www/wavemesh-sub/users;" in rendered and f"try_files /{sub_id}.txt =404;" in rendered and 'Profile-Title "base64:V2F2ZU1lc2hWUE4="' in rendered and "alias " not in rendered
     assert json.loads(metadata.read_text())[0]["profiles"]==1
 print("subscription renderer tests: OK")

@@ -14,7 +14,7 @@ wm_cascade_verify_e2e() {
 }
 
 wm_cascade_add_exit() {
-  local manifest="" display_name="" sort_order=100 allow_private=0 dry_run=0 state transaction port path candidate clients outbound desired inbound_id exit_id route_id inbound_tag outbound_tag rule_tag xray_before prepared_subs sub_metadata sub_backup subscription_candidate
+  local manifest="" display_name="" sort_order=100 allow_private=0 dry_run=0 state transaction port path candidate clients outbound desired inbound_id exit_id route_id route_display_name inbound_tag outbound_tag rule_tag xray_before prepared_subs sub_metadata sub_backup subscription_candidate
   while [[ $# -gt 0 ]]; do case "$1" in
     --manifest) manifest="${2:-}"; shift 2;; --display-name) display_name="${2:-}"; shift 2;; --sort-order) sort_order="${2:-}"; shift 2;; --allow-private-target) allow_private=1; shift;; --dry-run) dry_run=1; shift;; *) wm_fail "Unknown cascade add-exit option: $1";; esac; done
   [[ -f "$manifest" ]] || wm_fail "Join manifest not found: $manifest"
@@ -33,7 +33,8 @@ wm_cascade_add_exit() {
   local prepare_args=(--config "$WM_CONFIG_JSON" --manifest "$manifest" --candidate "$candidate" --clients "$clients" --outbound "$outbound" --path "$path" --port "$port" --sort-order "$sort_order"); [[ -n "$display_name" ]] && prepare_args+=(--display-name "$display_name")
   python3 "$WM_CASCADE_TOOL" prepare "${prepare_args[@]}" || wm_fail "Could not build Entry candidate state"
   route_id="$(EXIT_ID="$exit_id" python3 -c 'import hashlib,os; v=os.environ["EXIT_ID"]; p="route-"; print(p+v if len(p+v)<=48 else p+v[:48-len(p)-8]+"-"+hashlib.sha256(v.encode()).hexdigest()[:7])')"; inbound_tag="wm-route-${exit_id}"; outbound_tag="wm-exit-${exit_id}"; rule_tag="wm-rule-${exit_id}"
-  python3 "$WM_INBOUND_TOOL" build --tag "$inbound_tag" --port "$port" --path "$path" --host "$DOMAIN" --clients "$clients" --public-domain "$DOMAIN" --fingerprint "$FINGERPRINT" --output "$desired"
+  route_display_name="$(python3 -c 'import json,sys; print(next(r["display_name"] for r in json.load(open(sys.argv[1],encoding="utf-8"))["routes"] if r["id"]==sys.argv[2]))' "$candidate" "$route_id")"
+  python3 "$WM_INBOUND_TOOL" build --tag "$inbound_tag" --remark "$route_display_name" --port "$port" --path "$path" --host "$DOMAIN" --clients "$clients" --public-domain "$DOMAIN" --fingerprint "$FINGERPRINT" --output "$desired"
   wm_xray_get_template "$xray_before" || wm_fail "Could not capture Xray template before mutation"
   inbound_id="$(wm_inbound_reconcile "$desired")" || wm_fail "Could not create and verify route inbound"
   python3 "$WM_CASCADE_TOOL" finalize --candidate "$candidate" --route-id "$route_id" --inbound-id "$inbound_id" || wm_fail "Could not finalize Entry desired state"

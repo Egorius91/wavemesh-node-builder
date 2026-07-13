@@ -81,6 +81,7 @@ case "${1:-}" in
     source "$WM_LIB_DIR/lib/xray_template.sh"
     source "$WM_LIB_DIR/lib/nginx_renderer.sh"
     source "$WM_LIB_DIR/lib/subscription_renderer.sh"
+    source "$WM_LIB_DIR/lib/subscription_presentation.sh"
     WM_RUNTIME_TOOL="$WM_LIB_DIR/lib/runtime_state.py"
     source "$WM_LIB_DIR/commands/runtime.sh"
     wm_reconcile_command "$@"
@@ -91,6 +92,7 @@ case "${1:-}" in
     source "$WM_LIB_DIR/lib/transaction.sh"
     source "$WM_LIB_DIR/lib/nginx_renderer.sh"
     source "$WM_LIB_DIR/lib/subscription_renderer.sh"
+    source "$WM_LIB_DIR/lib/subscription_presentation.sh"
     source "$WM_LIB_DIR/commands/subscription.sh"
     wm_subscription_command "$@"
     ;;

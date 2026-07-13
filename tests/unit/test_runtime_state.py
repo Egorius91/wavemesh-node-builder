@@ -53,6 +53,8 @@ with tempfile.TemporaryDirectory() as name:
     desired_inbound = json.loads(inbound.read_text(encoding="utf-8"))
     desired_outbound = json.loads(outbound.read_text(encoding="utf-8"))
     assert desired_inbound["listen"] == "127.0.0.1" and desired_inbound["enable"] is True
+    assert desired_inbound["tag"] == "wm-route-de-fra-1" and desired_inbound["remark"] == "wm-route-de-fra-1"
+    assert desired_inbound["streamSettings"]["externalProxy"][0]["remark"] == "RU -> Germany"
     assert desired_inbound["settings"]["clients"][0]["tgId"] == 0
     assert desired_outbound["tag"] == "wm-exit-de-fra-1"
     assert desired_outbound["streamSettings"]["tlsSettings"]["allowInsecure"] is False

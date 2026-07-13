@@ -236,7 +236,9 @@ wm_reconcile_command() {
   [[ "$mode" == "--dry-run" || "$mode" == "--apply" ]] || wm_fail "Usage: wavemesh reconcile --dry-run|--apply"
   wm_runtime_health --json >/dev/null
   if [[ "$mode" == "--dry-run" ]]; then python3 "$WM_RUNTIME_TOOL" plan --config "$WM_CONFIG_JSON" --runtime "$WM_RUNTIME_JSON"; return; fi
-  wm_lock_mutation "reconcile-apply"; wm_load_config; wm_require_entry_role; wm_transaction_begin "reconcile-apply"; transaction="$WM_ACTIVE_TRANSACTION"; candidate="$transaction/config.candidate.json"; cp "$WM_CONFIG_JSON" "$candidate"
+  wm_lock_mutation "reconcile-apply"; wm_load_config; wm_require_entry_role
+  wm_apply_subscription_presentation || wm_fail "Could not apply subscription presentation settings"
+  wm_transaction_begin "reconcile-apply"; transaction="$WM_ACTIVE_TRANSACTION"; candidate="$transaction/config.candidate.json"; cp "$WM_CONFIG_JSON" "$candidate"
   while IFS=$'\t' read -r route_id enabled inbound_tag outbound_tag rule_tag; do
     inbound_file="$transaction/${route_id}.inbound.json"; outbound_file="$transaction/${route_id}.outbound.json"
     python3 "$WM_RUNTIME_TOOL" artifacts --config "$candidate" --route-id "$route_id" --inbound "$inbound_file" --outbound "$outbound_file" || wm_fail "Could not build reconcile artifacts"

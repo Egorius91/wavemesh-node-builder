@@ -107,6 +107,7 @@ def inbound_payload(config, item):
     entry = item["entry"]
     domain = config["server"]["domain"]
     tag = entry["inbound_tag"]
+    public_name = item.get("display_name") or tag
     return {
         "up": 0, "down": 0, "total": 0, "remark": tag, "tag": tag,
         "enable": bool(item.get("enabled", True)), "expiryTime": 0,
@@ -115,7 +116,7 @@ def inbound_payload(config, item):
         "streamSettings": {
             "network": "xhttp", "security": "none",
             "xhttpSettings": {"path": entry["public_path"], "host": domain, "mode": "stream-one"},
-            "externalProxy": [{"dest": domain, "port": 443, "remark": tag, "forceTls": "tls", "sni": domain, "fingerprint": "randomized"}],
+            "externalProxy": [{"dest": domain, "port": 443, "remark": public_name, "forceTls": "tls", "sni": domain, "fingerprint": "randomized"}],
         },
         "sniffing": {"enabled": True, "destOverride": ["http", "tls", "quic", "fakedns"], "metadataOnly": False, "routeOnly": False},
         "allocate": {"strategy": "always"},
@@ -168,8 +169,12 @@ def normalize_inbound(value):
     settings = as_object(value.get("settings"))
     xhttp = as_object(stream.get("xhttpSettings"))
     clients = settings.get("clients") if isinstance(settings.get("clients"), list) else []
+    proxies = stream.get("externalProxy") if isinstance(stream.get("externalProxy"), list) else []
+    proxy_remark = next((item.get("remark") for item in proxies if isinstance(item, dict)), None)
     return {
         "tag": value.get("tag") or value.get("remark"),
+        "remark": value.get("remark"),
+        "external_proxy_remark": proxy_remark,
         "listen": value.get("listen"),
         "port": int(value.get("port", -1)),
         "protocol": value.get("protocol"),
