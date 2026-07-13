@@ -1,6 +1,17 @@
 #!/usr/bin/env bash
 
+WM_E2E_CHECK_TOOL="$(cd "$(dirname "${BASH_SOURCE[0]}")/../lib" && pwd)/e2e_check.py"
+
 wm_require_entry_role() { [[ "$NODE_ROLE" == "entry" ]] || wm_fail "This command requires an entry node"; }
+
+wm_cascade_verify_e2e() {
+  local output_json=0
+  while [[ $# -gt 0 ]]; do case "$1" in --json) output_json=1; shift;; *) wm_fail "Usage: wavemesh cascade verify-e2e [--json]";; esac; done
+  wm_load_config; wm_require_entry_role
+  local args=(--config "$WM_CONFIG_JSON" --runtime "$WM_RUNTIME_JSON" --subscriptions "$WM_SUB_DIR")
+  if (( output_json == 1 )); then args+=(--json); fi
+  python3 "$WM_E2E_CHECK_TOOL" "${args[@]}"
+}
 
 wm_cascade_add_exit() {
   local manifest="" display_name="" sort_order=100 allow_private=0 dry_run=0 state transaction port path candidate clients outbound desired inbound_id exit_id route_id inbound_tag outbound_tag rule_tag xray_before prepared_subs sub_metadata sub_backup subscription_candidate
@@ -41,7 +52,8 @@ wm_cascade_command() {
     add-exit) shift; wm_cascade_add_exit "$@";;
     list|status) shift; wm_runtime_status "$@";;
     health) shift; wm_runtime_health "$@";;
+    verify-e2e) shift; wm_cascade_verify_e2e "$@";;
     remove-exit) shift; wm_cascade_remove_exit "$@";;
-    *) wm_fail "Usage: wavemesh cascade add-exit --manifest FILE | list | status [--json] | health [--exit-id ID] [--json] | remove-exit --exit-id ID [--force]";;
+    *) wm_fail "Usage: wavemesh cascade add-exit --manifest FILE | list | status [--json] | health [--exit-id ID] [--json] | verify-e2e [--json] | remove-exit --exit-id ID [--force]";;
   esac
 }

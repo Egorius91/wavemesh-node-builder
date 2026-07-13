@@ -480,3 +480,31 @@ Live verification:
 - `cascade health --json` reported both the Entry node and route `route-de-fra-1` as `healthy`.
 
 Next phase: multi-Exit E2E verification and operations/troubleshooting documentation.
+
+## Phase 10 - E2E and operator documentation
+
+Status: implemented locally; live two-Exit and client external-IP verification remain pending.
+
+Completed:
+
+- added a deterministic E2E topology with one Entry and two independent Exits;
+- exercised manifest creation/validation, sequential Exit import, two managed Xray outbounds and rules, nginx rendering, and one subscription containing two ordered profiles;
+- verified that profiles expose only the Entry domain and never Exit domains, IPs, relay paths, or relay UUIDs;
+- added `wavemesh cascade verify-e2e [--json]` for redacted live validation of two healthy Exits, expected `routeTest` outbounds, and per-client profile coverage;
+- added `docs/CASCADE_OPERATIONS.md` for installation, manifest transfer, import, second Exit, client verification, lifecycle, rotation, backup/restore, health, upgrades, and recovery;
+- added `docs/CASCADE_TROUBLESHOOTING.md` for the failure scenarios required by the cascade specification;
+- added a GitHub Actions workflow for Python, Bash, adapter, transaction, and two-Exit E2E coverage;
+- updated `TESTING.md` and the main README with the Phase 10 verification path.
+
+Local acceptance:
+
+- the two-Exit E2E fixture passes with two routes and two ordered profiles for one client;
+- the live verifier output contains only route ids, display names, managed outbound tags, counts, and health state;
+- Python compilation, Bash syntax, existing unit/integration suites, and diff checks passed before publication.
+
+Live acceptance remaining:
+
+- provision or identify a second foreign Exit VPS with a distinct domain and node id;
+- import its manifest into the verified Entry;
+- reach `healthy` for both routes and pass `cascade verify-e2e --json`;
+- connect a real client to both profiles and verify the corresponding external Exit countries.

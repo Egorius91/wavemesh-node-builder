@@ -156,6 +156,7 @@ wavemesh diagnostics
 wavemesh validate-subscription
 wavemesh cascade status --json
 wavemesh cascade health [--exit-id EXIT_ID] [--json]
+wavemesh cascade verify-e2e [--json]
 wavemesh route list [--json]
 wavemesh route enable --route-id ROUTE_ID
 wavemesh route disable --route-id ROUTE_ID
@@ -191,6 +192,8 @@ Implemented:
 - persisted `runtime.json` health state with three-check thresholds;
 - redacted desired/observed drift detection and managed reconciliation;
 - interruption-safe mutation transactions with explicit recovery and bounded retention;
+- redacted two-Exit E2E verification for route selection and subscription profiles;
+- GitHub Actions coverage for Python, Bash, adapter, transaction, and two-Exit E2E tests;
 - strict validation;
 - report generation;
 - CLI wrapper.
@@ -202,7 +205,13 @@ mutations until `wavemesh transaction recover --id ID` (or `--latest`) completes
 the restore and post-rollback checks. Terminal transactions and each backup
 family retain the newest 20 entries by default.
 
-Next technical layer: Phase 10 multi-Exit E2E verification and operations documentation.
+Operator documentation:
+
+- [`docs/CASCADE_OPERATIONS.md`](docs/CASCADE_OPERATIONS.md)
+- [`docs/CASCADE_TROUBLESHOOTING.md`](docs/CASCADE_TROUBLESHOOTING.md)
+
+Phase 10 tooling and documentation are implemented. Final acceptance requires a
+live second Exit and client-side external-IP verification for both profiles.
 
 ## Legal note
 

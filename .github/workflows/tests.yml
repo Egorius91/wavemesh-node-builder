@@ -1,0 +1,36 @@
+name: tests
+
+on:
+  push:
+  pull_request:
+
+permissions:
+  contents: read
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - name: Python unit and E2E tests
+        run: |
+          set -Eeuo pipefail
+          python3 -m compileall -q scripts tests
+          for test in tests/unit/test_*.py; do
+            python3 "$test"
+          done
+          python3 tests/e2e/test_multi_exit.py
+      - name: Bash and adapter tests
+        run: |
+          set -Eeuo pipefail
+          bash tests/unit/test_baseline.sh
+          bash tests/unit/test_runtime_process.sh
+          bash tests/unit/test_transaction.sh
+          bash tests/integration/test_xui_api.sh
+          bash -n bin/wavemesh scripts/commands/*.sh scripts/lib/*.sh
+      - name: Patch hygiene
+        run: git diff --check

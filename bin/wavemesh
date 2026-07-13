@@ -154,6 +154,7 @@ Usage:
   wavemesh cascade list
   wavemesh cascade status [--json]
   wavemesh cascade health [--exit-id ID] [--json]
+  wavemesh cascade verify-e2e [--json]
   wavemesh cascade remove-exit --exit-id ID [--force]
   wavemesh route list [--json]
   wavemesh route enable --route-id ID
