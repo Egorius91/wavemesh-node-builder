@@ -9,11 +9,14 @@ wm_subscription_prepare() {
 wm_subscription_install_files() {
   local prepared_dir="$1" backup_dir="$2"
   mkdir -p "$backup_dir" "$WM_SUB_DIR/users"
+  chmod 0755 "$WM_SUB_DIR" "$WM_SUB_DIR/users"
   cp -a "$WM_SUB_DIR/." "$backup_dir/"
   find "$WM_SUB_DIR/users" -maxdepth 1 -type f -name '*.txt' -delete
   install -m 0644 "$prepared_dir/sub.txt" "$WM_SUB_DIR/sub.txt"
   local file
   for file in "$prepared_dir"/users/*.txt; do [[ -e "$file" ]] || continue; install -m 0644 "$file" "$WM_SUB_DIR/users/$(basename "$file")"; done
+  find "$WM_SUB_DIR" -type d -exec chmod 0755 {} +
+  find "$WM_SUB_DIR" -type f -exec chmod 0644 {} +
 }
 
 wm_subscription_restore_files() {

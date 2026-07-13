@@ -50,6 +50,9 @@ wm_transaction_rollback "$transaction" "unit failure"
 grep -q '"schema_version": 2' "$WM_CONFIG_JSON"
 grep -q 'original nginx' "$WM_NGINX_MANAGED_CONF"
 grep -q 'original subscription' "$WM_SUB_DIR/users/test.txt"
+[[ "$(stat -c '%a' "$WM_SUB_DIR")" == "755" ]]
+[[ "$(stat -c '%a' "$WM_SUB_DIR/users")" == "755" ]]
+[[ "$(stat -c '%a' "$WM_SUB_DIR/users/test.txt")" == "644" ]]
 python3 - "$xui_db" <<'PY'
 import sqlite3,sys
 assert sqlite3.connect(sys.argv[1]).execute("select value from state").fetchone()[0] == "original"

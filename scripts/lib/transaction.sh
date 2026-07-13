@@ -111,7 +111,12 @@ wm_transaction_rollback() {
   if [[ -f "$transaction/xray.before.json" ]] && declare -F wm_xray_apply_template >/dev/null; then wm_xray_apply_template "$transaction/xray.before.json" || failed=1; fi
   if [[ -f "$transaction/nginx.before.absent" ]]; then rm -f "$nginx_conf"; elif [[ -f "$transaction/nginx.before.conf" ]]; then install -m 0644 "$transaction/nginx.before.conf" "$nginx_conf" || failed=1; fi
   rm -rf "$WM_SUB_DIR"
-  if [[ ! -f "$transaction/subscriptions.before.absent" ]]; then mkdir -p "$WM_SUB_DIR"; cp -a "$transaction/subscriptions.before/." "$WM_SUB_DIR/" || failed=1; fi
+  if [[ ! -f "$transaction/subscriptions.before.absent" ]]; then
+    mkdir -p "$WM_SUB_DIR"
+    cp -a "$transaction/subscriptions.before/." "$WM_SUB_DIR/" || failed=1
+    find "$WM_SUB_DIR" -type d -exec chmod 0755 {} + || failed=1
+    find "$WM_SUB_DIR" -type f -exec chmod 0644 {} + || failed=1
+  fi
   if [[ -f "$transaction/manifest.output.path" ]]; then rm -f -- "$(cat "$transaction/manifest.output.path")" || failed=1; fi
   nginx -t && systemctl reload nginx || failed=1
   wm_transaction_post_rollback_check "$transaction" || failed=1
