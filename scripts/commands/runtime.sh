@@ -2,19 +2,6 @@
 
 WM_RUNTIME_TOOL="${WM_RUNTIME_TOOL:-$WM_LIB_DIR/lib/runtime_state.py}"
 
-declare -F wm_lock_mutation >/dev/null || wm_lock_mutation() {
-  mkdir -p /run/lock
-  exec 9>/run/lock/wavemesh-node.lock
-  flock -n 9 || wm_fail "Another WaveMesh mutation is running"
-}
-
-declare -F wm_transaction_dir >/dev/null || wm_transaction_dir() {
-  local dir="$WM_STATE_DIR/transactions/$(date -u +%Y%m%dT%H%M%SZ)-$(wm_random_alnum 6)"
-  mkdir -p "$dir"
-  chmod 700 "$WM_STATE_DIR/transactions" "$dir"
-  printf '%s' "$dir"
-}
-
 wm_require_entry_role() { [[ "$NODE_ROLE" == "entry" ]] || wm_fail "This command requires an entry node"; }
 
 wm_xray_process_running() {
@@ -123,8 +110,8 @@ wm_runtime_prepare_subscriptions() {
 wm_runtime_apply_public_state() {
   local transaction="$1"
   wm_subscription_install_files "$WM_RUNTIME_PREPARED" "$WM_RUNTIME_SUB_BACKUP"
-  if ! wm_nginx_apply_desired "$WM_RUNTIME_CANDIDATE" "$transaction"; then wm_subscription_restore_files "$WM_RUNTIME_SUB_BACKUP"; return 1; fi
-  if ! wm_subscription_validate_public "$WM_RUNTIME_METADATA"; then wm_nginx_restore_transaction "$transaction" || true; wm_subscription_restore_files "$WM_RUNTIME_SUB_BACKUP"; return 1; fi
+  wm_nginx_apply_desired "$WM_RUNTIME_CANDIDATE" "$transaction" || return 1
+  wm_subscription_validate_public "$WM_RUNTIME_METADATA" || return 1
 }
 
 wm_runtime_remove_xray_routes() {
@@ -162,8 +149,7 @@ wm_route_set() {
   local route_id="" transaction candidate affected inbound_id old_enabled inbound_file outbound_file reconciled_id updated_candidate
   while [[ $# -gt 0 ]]; do case "$1" in --route-id) route_id="${2:-}"; shift 2;; *) wm_fail "Unknown route option: $1";; esac; done
   [[ -n "$route_id" ]] || wm_fail "Usage: wavemesh route ${operation} --route-id ID"
-  wm_lock_mutation; wm_load_config; wm_require_entry_role; transaction="$(wm_transaction_dir)"; candidate="$transaction/config.candidate.json"; affected="$transaction/affected.json"
-  cp "$WM_CONFIG_JSON" "$transaction/config.before.json"; [[ -f "$WM_RUNTIME_JSON" ]] && cp "$WM_RUNTIME_JSON" "$transaction/runtime.before.json" || printf '{}\n' > "$transaction/runtime.before.json"
+  wm_lock_mutation "route-${operation}"; wm_load_config; wm_require_entry_role; wm_transaction_begin "route-${operation}"; transaction="$WM_ACTIVE_TRANSACTION"; candidate="$transaction/config.candidate.json"; affected="$transaction/affected.json"
   python3 "$WM_RUNTIME_TOOL" mutate --config "$WM_CONFIG_JSON" --output "$candidate" --operation "$operation" --target "$route_id" --affected "$affected" || wm_fail "Could not build route mutation"
   read -r inbound_id old_enabled < <(python3 - "$WM_CONFIG_JSON" "$route_id" <<'PY'
 import json,sys
@@ -182,11 +168,11 @@ PY
   else
     wm_inbound_set_enabled "$inbound_id" false || wm_fail "Could not disable route inbound"
   fi
-  wm_runtime_prepare_subscriptions "$candidate" "$transaction" || { wm_inbound_set_enabled "$inbound_id" "$old_enabled" || true; wm_fail "Could not render subscriptions"; }
-  if ! wm_runtime_apply_public_state "$transaction"; then wm_inbound_set_enabled "$inbound_id" "$old_enabled" || true; wm_fail "Could not apply public route state; changes rolled back"; fi
-  install -m 0600 "$WM_RUNTIME_CANDIDATE" "$WM_CONFIG_JSON"; wm_export_config_env_from_json
+  wm_runtime_prepare_subscriptions "$candidate" "$transaction" || wm_fail "Could not render subscriptions"
+  wm_runtime_apply_public_state "$transaction" || wm_fail "Could not apply public route state; transaction will be rolled back"
+  wm_atomic_install_json "$WM_RUNTIME_CANDIDATE" "$WM_CONFIG_JSON"; wm_export_config_env_from_json
   python3 "$WM_RUNTIME_TOOL" sync --config "$WM_CONFIG_JSON" --runtime "$WM_RUNTIME_JSON" --output "$WM_RUNTIME_JSON"
-  printf '{"status":"committed"}\n' > "$transaction/result.json"; chmod 600 "$transaction"/*.json
+  wm_transaction_commit "$transaction"
   wm_success "Route ${operation}d: ${route_id}"
 }
 
@@ -194,18 +180,17 @@ wm_route_remove() {
   local route_id="" transaction candidate affected inbound_id original_xray candidate_xray
   while [[ $# -gt 0 ]]; do case "$1" in --route-id) route_id="${2:-}"; shift 2;; *) wm_fail "Unknown route remove option: $1";; esac; done
   [[ -n "$route_id" ]] || wm_fail "Usage: wavemesh route remove --route-id ID"
-  wm_lock_mutation; wm_load_config; wm_require_entry_role; transaction="$(wm_transaction_dir)"; candidate="$transaction/config.candidate.json"; affected="$transaction/affected.json"
-  cp "$WM_CONFIG_JSON" "$transaction/config.before.json"
+  wm_lock_mutation "route-remove"; wm_load_config; wm_require_entry_role; wm_transaction_begin "route-remove"; transaction="$WM_ACTIVE_TRANSACTION"; candidate="$transaction/config.candidate.json"; affected="$transaction/affected.json"
   python3 "$WM_RUNTIME_TOOL" mutate --config "$WM_CONFIG_JSON" --output "$candidate" --operation remove-route --target "$route_id" --affected "$affected" || wm_fail "Could not build route removal"
   inbound_id="$(python3 -c 'import json,sys; r=next(x for x in json.load(open(sys.argv[1]))["routes"] if x["id"]==sys.argv[2]); print(r["entry"]["inbound_id"])' "$WM_CONFIG_JSON" "$route_id")"
   wm_runtime_prepare_subscriptions "$candidate" "$transaction" || wm_fail "Could not render route removal"
-  wm_runtime_apply_public_state "$transaction" || wm_fail "Could not remove public route state; changes rolled back"
+  wm_runtime_apply_public_state "$transaction" || wm_fail "Could not remove public route state; transaction will be rolled back"
   original_xray="$transaction/xray.before.json"; candidate_xray="$transaction/xray.candidate.json"
-  if ! wm_runtime_remove_xray_routes "$WM_CONFIG_JSON" "$affected" "$original_xray" "$candidate_xray"; then wm_nginx_restore_transaction "$transaction" || true; wm_subscription_restore_files "$WM_RUNTIME_SUB_BACKUP"; wm_fail "Could not remove Xray route; public state restored"; fi
-  if ! wm_inbound_delete "$inbound_id"; then wm_xray_apply_template "$original_xray" || true; wm_nginx_restore_transaction "$transaction" || true; wm_subscription_restore_files "$WM_RUNTIME_SUB_BACKUP"; wm_fail "Could not delete route inbound; transaction rolled back"; fi
-  install -m 0600 "$WM_RUNTIME_CANDIDATE" "$WM_CONFIG_JSON"; wm_export_config_env_from_json
+  wm_runtime_remove_xray_routes "$WM_CONFIG_JSON" "$affected" "$original_xray" "$candidate_xray" || wm_fail "Could not remove Xray route; transaction will be rolled back"
+  wm_inbound_delete "$inbound_id" || wm_fail "Could not delete route inbound; transaction will be rolled back"
+  wm_atomic_install_json "$WM_RUNTIME_CANDIDATE" "$WM_CONFIG_JSON"; wm_export_config_env_from_json
   python3 "$WM_RUNTIME_TOOL" sync --config "$WM_CONFIG_JSON" --runtime "$WM_RUNTIME_JSON" --output "$WM_RUNTIME_JSON"
-  printf '{"status":"committed"}\n' > "$transaction/result.json"; chmod 600 "$transaction"/*.json
+  wm_transaction_commit "$transaction"
   wm_success "Route removed: ${route_id}"
 }
 
@@ -223,17 +208,16 @@ wm_cascade_remove_exit() {
   local exit_id="" force=0 transaction candidate affected original_xray candidate_xray inbound_id
   while [[ $# -gt 0 ]]; do case "$1" in --exit-id) exit_id="${2:-}"; shift 2;; --force) force=1; shift;; *) wm_fail "Unknown remove-exit option: $1";; esac; done
   [[ -n "$exit_id" ]] || wm_fail "Usage: wavemesh cascade remove-exit --exit-id ID [--force]"
-  wm_lock_mutation; wm_load_config; wm_require_entry_role; transaction="$(wm_transaction_dir)"; candidate="$transaction/config.candidate.json"; affected="$transaction/affected.json"
-  cp "$WM_CONFIG_JSON" "$transaction/config.before.json"
+  wm_lock_mutation "cascade-remove-exit"; wm_load_config; wm_require_entry_role; wm_transaction_begin "cascade-remove-exit"; transaction="$WM_ACTIVE_TRANSACTION"; candidate="$transaction/config.candidate.json"; affected="$transaction/affected.json"
   local args=(mutate --config "$WM_CONFIG_JSON" --output "$candidate" --operation remove-exit --target "$exit_id" --affected "$affected"); (( force == 1 )) && args+=(--force)
   python3 "$WM_RUNTIME_TOOL" "${args[@]}" || wm_fail "Could not build Exit removal"
   wm_runtime_prepare_subscriptions "$candidate" "$transaction" || wm_fail "Could not render Exit removal"
-  wm_runtime_apply_public_state "$transaction" || wm_fail "Could not remove Exit public state; changes rolled back"
+  wm_runtime_apply_public_state "$transaction" || wm_fail "Could not remove Exit public state; transaction will be rolled back"
   original_xray="$transaction/xray.before.json"; candidate_xray="$transaction/xray.candidate.json"
-  if ! wm_runtime_remove_xray_routes "$WM_CONFIG_JSON" "$affected" "$original_xray" "$candidate_xray"; then wm_nginx_restore_transaction "$transaction" || true; wm_subscription_restore_files "$WM_RUNTIME_SUB_BACKUP"; wm_fail "Could not remove Exit routing; public state restored"; fi
+  wm_runtime_remove_xray_routes "$WM_CONFIG_JSON" "$affected" "$original_xray" "$candidate_xray" || wm_fail "Could not remove Exit routing; transaction will be rolled back"
   while IFS= read -r inbound_id; do
     [[ -n "$inbound_id" ]] || continue
-    if ! wm_inbound_delete "$inbound_id"; then wm_xray_apply_template "$original_xray" || true; wm_nginx_restore_transaction "$transaction" || true; wm_subscription_restore_files "$WM_RUNTIME_SUB_BACKUP"; wm_fail "Could not delete all route inbounds; run reconcile before retrying"; fi
+    wm_inbound_delete "$inbound_id" || wm_fail "Could not delete all route inbounds; transaction will be rolled back"
   done < <(python3 - "$WM_CONFIG_JSON" "$affected" <<'PY'
 import json,sys
 cfg=json.load(open(sys.argv[1],encoding="utf-8")); ids=set(json.load(open(sys.argv[2],encoding="utf-8")))
@@ -241,9 +225,9 @@ for r in cfg.get("routes",[]):
     if r.get("id") in ids: print(r["entry"]["inbound_id"])
 PY
 )
-  install -m 0600 "$WM_RUNTIME_CANDIDATE" "$WM_CONFIG_JSON"; wm_export_config_env_from_json
+  wm_atomic_install_json "$WM_RUNTIME_CANDIDATE" "$WM_CONFIG_JSON"; wm_export_config_env_from_json
   python3 "$WM_RUNTIME_TOOL" sync --config "$WM_CONFIG_JSON" --runtime "$WM_RUNTIME_JSON" --output "$WM_RUNTIME_JSON"
-  printf '{"status":"committed"}\n' > "$transaction/result.json"; chmod 600 "$transaction"/*.json
+  wm_transaction_commit "$transaction"
   wm_success "Exit removed: ${exit_id}"
 }
 
@@ -252,7 +236,7 @@ wm_reconcile_command() {
   [[ "$mode" == "--dry-run" || "$mode" == "--apply" ]] || wm_fail "Usage: wavemesh reconcile --dry-run|--apply"
   wm_runtime_health --json >/dev/null
   if [[ "$mode" == "--dry-run" ]]; then python3 "$WM_RUNTIME_TOOL" plan --config "$WM_CONFIG_JSON" --runtime "$WM_RUNTIME_JSON"; return; fi
-  wm_lock_mutation; wm_load_config; wm_require_entry_role; transaction="$(wm_transaction_dir)"; cp "$WM_CONFIG_JSON" "$transaction/config.before.json"; candidate="$transaction/config.candidate.json"; cp "$WM_CONFIG_JSON" "$candidate"
+  wm_lock_mutation "reconcile-apply"; wm_load_config; wm_require_entry_role; wm_transaction_begin "reconcile-apply"; transaction="$WM_ACTIVE_TRANSACTION"; candidate="$transaction/config.candidate.json"; cp "$WM_CONFIG_JSON" "$candidate"
   while IFS=$'\t' read -r route_id enabled inbound_tag outbound_tag rule_tag; do
     inbound_file="$transaction/${route_id}.inbound.json"; outbound_file="$transaction/${route_id}.outbound.json"
     python3 "$WM_RUNTIME_TOOL" artifacts --config "$candidate" --route-id "$route_id" --inbound "$inbound_file" --outbound "$outbound_file" || wm_fail "Could not build reconcile artifacts"
@@ -274,8 +258,8 @@ for r in json.load(open(sys.argv[1],encoding="utf-8")).get("routes",[]):
 PY
 )
   wm_runtime_prepare_subscriptions "$candidate" "$transaction" || wm_fail "Could not rebuild subscriptions"
-  wm_runtime_apply_public_state "$transaction" || wm_fail "Could not reconcile nginx/subscriptions; public state restored"
-  install -m 0600 "$WM_RUNTIME_CANDIDATE" "$WM_CONFIG_JSON"; wm_export_config_env_from_json
-  printf '{"status":"committed"}\n' > "$transaction/result.json"; chmod 600 "$transaction"/*.json
+  wm_runtime_apply_public_state "$transaction" || wm_fail "Could not reconcile nginx/subscriptions; transaction will be rolled back"
+  wm_atomic_install_json "$WM_RUNTIME_CANDIDATE" "$WM_CONFIG_JSON"; wm_export_config_env_from_json
+  wm_transaction_commit "$transaction"
   wm_runtime_health
 }

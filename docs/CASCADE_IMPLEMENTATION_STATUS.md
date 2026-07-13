@@ -427,4 +427,52 @@ Known limitations:
 - automated health scheduling is not installed; health runs on explicit CLI invocation;
 - shellcheck and GitHub Actions are not available in the current repository environment.
 
-Next phase: transaction interruption recovery, rollback hardening, and backup retention.
+## Phase 9 - Transaction and rollback hardening
+
+Status: implemented locally; live interruption and recovery verification remains pending.
+
+Completed:
+
+- centralized mutation locking with private PID and operation metadata;
+- added atomic `in_progress`, `recovering`, `committed`, `rolled_back`, and `rollback_failed` transaction states;
+- captured pre-mutation config, runtime, nginx, subscription, Xray-template, and SQLite online-backup snapshots where applicable;
+- installed EXIT, INT, TERM, and HUP handling so ordinary failures and signals trigger one common rollback path;
+- blocked new mutations while an incomplete or failed-recovery transaction exists;
+- added `wavemesh transaction list [--json]` and explicit `recover --id|--latest` commands;
+- restored 3X-UI SQLite, Xray, nginx, subscription files, desired/runtime JSON, and newly written secret manifest output;
+- required post-rollback JSON validation, service checks, nginx validation, Xray read-back, and public subscription validation;
+- changed desired-state commits to same-filesystem atomic JSON replacement;
+- retained the newest 20 terminal transactions and the newest 20 files per backup family while never pruning incomplete transactions;
+- integrated the shared lifecycle into cascade add/remove, route enable/disable/remove, reconcile apply, Exit peer create/remove, and subscription rebuild.
+
+Changed files:
+
+- `bin/wavemesh`
+- `scripts/commands/cascade.sh`
+- `scripts/commands/exit_peer.sh`
+- `scripts/commands/runtime.sh`
+- `scripts/commands/subscription.sh`
+- `scripts/lib/nginx_renderer.sh`
+- `scripts/lib/subscription_renderer.sh`
+- `scripts/lib/transaction_state.py`
+- `scripts/lib/transaction.sh`
+- `scripts/lib/xray_template.sh`
+- `tests/unit/test_transaction_state.py`
+- `tests/unit/test_transaction_integration.py`
+- `tests/unit/test_transaction.sh`
+- `README.md`
+- `docs/CASCADE_IMPLEMENTATION_STATUS.md`
+
+Test coverage:
+
+- incomplete transactions block new mutations and terminal transactions cannot be recovered;
+- traversal-like transaction IDs are rejected;
+- automatic and operator rollback restore JSON, nginx, subscriptions, and SQLite snapshots;
+- interrupted transactions survive retention while old terminal transactions and backups are pruned;
+- every mutating command path is statically required to acquire the shared lock, begin a transaction, and commit it.
+
+Known limitation:
+
+- live failure injection and interruption recovery must be verified on the Entry VPS before Phase 9 is marked complete.
+
+Next phase: multi-Exit E2E verification and operations/troubleshooting documentation.

@@ -56,10 +56,16 @@ wm_xray_route_test() {
 
 wm_xray_apply_managed_route() {
   local outbound_file="$1" inbound_tag="$2" outbound_tag="$3" rule_tag="$4"
-  local transaction_dir original candidate
-  transaction_dir="$WM_STATE_DIR/transactions/$(date -u +%Y%m%dT%H%M%SZ)-xray-$$"
-  mkdir -p "$transaction_dir" "$WM_STATE_DIR/backups"
-  chmod 700 "$WM_STATE_DIR/transactions" "$transaction_dir"
+  local transaction_dir original candidate owns_transaction=0
+  if [[ -n "${WM_ACTIVE_TRANSACTION:-}" ]]; then
+    transaction_dir="$WM_ACTIVE_TRANSACTION"
+  else
+    owns_transaction=1
+    transaction_dir="$WM_STATE_DIR/transactions/$(date -u +%Y%m%dT%H%M%SZ)-xray-$$"
+    mkdir -p "$transaction_dir"
+    chmod 700 "$WM_STATE_DIR/transactions" "$transaction_dir"
+  fi
+  mkdir -p "$WM_STATE_DIR/backups"
   original="$transaction_dir/original.json"; candidate="$transaction_dir/candidate.json"
 
   wm_xray_get_template "$original" || return 1
@@ -76,6 +82,6 @@ wm_xray_apply_managed_route() {
     wm_xray_apply_template "$original" || wm_warn "Automatic Xray rollback failed; restore $original manually"
     return 1
   fi
-  printf '%s\n' '{"status":"committed"}' > "$transaction_dir/status.json"
+  if (( owns_transaction == 1 )); then printf '%s\n' '{"status":"committed"}' > "$transaction_dir/status.json"; fi
   chmod 600 "$transaction_dir"/*.json
 }

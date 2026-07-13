@@ -8,7 +8,9 @@ wm_nginx_apply_desired() {
   [[ -f "$WM_NGINX_MANAGED_CONF" ]] && cp "$WM_NGINX_MANAGED_CONF" "$backup" || : > "$backup"
   install -m 0644 "$candidate" "$WM_NGINX_MANAGED_CONF"
   if ! nginx -t || ! systemctl reload nginx; then
-    install -m 0644 "$backup" "$WM_NGINX_MANAGED_CONF"; nginx -t && systemctl reload nginx || true; return 1
+    install -m 0644 "$backup" "$WM_NGINX_MANAGED_CONF"
+    if ! nginx -t || ! systemctl reload nginx; then wm_warn "Immediate nginx restore failed; transaction recovery is required"; fi
+    return 1
   fi
 }
 wm_nginx_restore_transaction() {

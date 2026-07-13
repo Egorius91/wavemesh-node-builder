@@ -1,17 +1,15 @@
 #!/usr/bin/env bash
 
-declare -F wm_lock_mutation >/dev/null || wm_lock_mutation() { mkdir -p /run/lock; exec 9>/run/lock/wavemesh-node.lock; flock -n 9 || wm_fail "Another WaveMesh mutation is running"; }
-declare -F wm_transaction_dir >/dev/null || wm_transaction_dir() { local dir="$WM_STATE_DIR/transactions/$(date -u +%Y%m%dT%H%M%SZ)-$(wm_random_alnum 6)"; mkdir -p "$dir"; chmod 700 "$WM_STATE_DIR/transactions" "$dir"; printf '%s' "$dir"; }
 
 wm_subscription_rebuild_command() {
   local transaction candidate prepared metadata backup
-  wm_lock_mutation; wm_load_config; transaction="$(wm_transaction_dir)"; candidate="$transaction/config.candidate.json"; prepared="$transaction/subscriptions"; metadata="$transaction/subscriptions.json"; backup="$transaction/subscriptions.before"
-  cp "$WM_CONFIG_JSON" "$transaction/config.before.json"; mkdir -p "$prepared" "$backup"
+  wm_lock_mutation "subscription-rebuild"; wm_load_config; wm_transaction_begin "subscription-rebuild"; transaction="$WM_ACTIVE_TRANSACTION"; candidate="$transaction/config.candidate.json"; prepared="$transaction/subscriptions"; metadata="$transaction/subscriptions.json"; backup="$transaction/subscriptions.before"
+  mkdir -p "$prepared" "$backup"
   wm_subscription_prepare "$WM_CONFIG_JSON" "$candidate" "$prepared" "$metadata" || wm_fail "Could not render subscriptions"
   wm_subscription_install_files "$prepared" "$backup"
-  if ! wm_nginx_apply_desired "$candidate" "$transaction"; then wm_subscription_restore_files "$backup"; wm_fail "nginx rejected subscription locations; files restored"; fi
-  if ! wm_subscription_validate_public "$metadata"; then wm_nginx_restore_transaction "$transaction" || true; wm_subscription_restore_files "$backup"; wm_fail "Public subscription validation failed; nginx and files restored"; fi
-  install -m 0600 "$candidate" "$WM_CONFIG_JSON"; wm_export_config_env_from_json; printf '{"status":"committed"}\n' > "$transaction/result.json"; chmod 600 "$transaction"/*.json
+  wm_nginx_apply_desired "$candidate" "$transaction" || wm_fail "nginx rejected subscription locations; transaction will be rolled back"
+  wm_subscription_validate_public "$metadata" || wm_fail "Public subscription validation failed; transaction will be rolled back"
+  wm_atomic_install_json "$candidate" "$WM_CONFIG_JSON"; wm_export_config_env_from_json; wm_transaction_commit "$transaction"
   python3 - "$metadata" "$DOMAIN" <<'PY'
 import json,sys
 for item in json.load(open(sys.argv[1],encoding="utf-8")):

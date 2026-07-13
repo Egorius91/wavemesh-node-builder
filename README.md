@@ -163,6 +163,9 @@ wavemesh route remove --route-id ROUTE_ID
 wavemesh cascade remove-exit --exit-id EXIT_ID [--force]
 wavemesh reconcile --dry-run
 wavemesh reconcile --apply
+wavemesh transaction list [--json]
+wavemesh transaction recover --id TRANSACTION_ID
+wavemesh transaction recover --latest
 wavemesh repair --nginx
 wavemesh repair --ssl
 wavemesh repair --subscriptions
@@ -187,12 +190,19 @@ Implemented:
 - route lifecycle and forced Exit removal commands;
 - persisted `runtime.json` health state with three-check thresholds;
 - redacted desired/observed drift detection and managed reconciliation;
+- interruption-safe mutation transactions with explicit recovery and bounded retention;
 - strict validation;
 - report generation;
 - CLI wrapper.
 
-Next technical layer: Phase 9 transaction interruption recovery, rollback hardening,
-and backup retention across every mutating lifecycle command.
+Every mutating command records an `in_progress` transaction under
+`/etc/wavemesh-node/transactions`. A failed command rolls back automatically. A
+process kill or reboot leaves the transaction discoverable and blocks later
+mutations until `wavemesh transaction recover --id ID` (or `--latest`) completes
+the restore and post-rollback checks. Terminal transactions and each backup
+family retain the newest 20 entries by default.
+
+Next technical layer: Phase 10 multi-Exit E2E verification and operations documentation.
 
 ## Legal note
 

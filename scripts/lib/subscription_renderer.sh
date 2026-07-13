@@ -9,7 +9,7 @@ wm_subscription_prepare() {
 wm_subscription_install_files() {
   local prepared_dir="$1" backup_dir="$2"
   mkdir -p "$backup_dir" "$WM_SUB_DIR/users"
-  cp -a "$WM_SUB_DIR/." "$backup_dir/" 2>/dev/null || true
+  cp -a "$WM_SUB_DIR/." "$backup_dir/"
   find "$WM_SUB_DIR/users" -maxdepth 1 -type f -name '*.txt' -delete
   install -m 0644 "$prepared_dir/sub.txt" "$WM_SUB_DIR/sub.txt"
   local file
@@ -19,7 +19,7 @@ wm_subscription_install_files() {
 wm_subscription_restore_files() {
   local backup_dir="$1"
   rm -rf "$WM_SUB_DIR/users"; mkdir -p "$WM_SUB_DIR/users"
-  cp -a "$backup_dir/." "$WM_SUB_DIR/" 2>/dev/null || true
+  cp -a "$backup_dir/." "$WM_SUB_DIR/"
 }
 
 wm_subscription_validate_public() {
