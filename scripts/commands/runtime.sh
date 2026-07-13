@@ -1,4 +1,3 @@
-
 #!/usr/bin/env bash
 
 WM_RUNTIME_TOOL="${WM_RUNTIME_TOOL:-$WM_LIB_DIR/lib/runtime_state.py}"

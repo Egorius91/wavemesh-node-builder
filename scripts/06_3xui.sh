@@ -1,4 +1,3 @@
-
 #!/usr/bin/env bash
 
 XUI_REPO="${XUI_REPO:-MHSanaei/3x-ui}"

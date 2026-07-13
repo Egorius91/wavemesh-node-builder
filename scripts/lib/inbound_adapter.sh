@@ -1,4 +1,3 @@
-
 #!/usr/bin/env bash
 
 WM_INBOUND_TOOL="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/inbound_adapter.py"
