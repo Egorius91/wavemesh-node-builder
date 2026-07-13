@@ -483,7 +483,7 @@ Next phase: multi-Exit E2E verification and operations/troubleshooting documenta
 
 ## Phase 10 - E2E and operator documentation
 
-Status: implemented locally; live two-Exit and client external-IP verification remain pending.
+Status: complete and live-verified with two Exits on 2026-07-13.
 
 Completed:
 
@@ -495,6 +495,10 @@ Completed:
 - added `docs/CASCADE_TROUBLESHOOTING.md` for the failure scenarios required by the cascade specification;
 - added a GitHub Actions workflow for Python, Bash, adapter, transaction, and two-Exit E2E coverage;
 - updated `TESTING.md` and the main README with the Phase 10 verification path.
+- made resumed installs recover and verify an existing one-time 3X-UI bearer token;
+- made CLI diagnostics role-aware so Exit nodes do not require client subscriptions;
+- normalized shell entrypoints to LF and enforced LF checkout through `.gitattributes`;
+- changed generated 3X-UI client `tgId` values from empty strings to numeric zero for 3X-UI 3.5 compatibility.
 
 Local acceptance:
 
@@ -502,9 +506,12 @@ Local acceptance:
 - the live verifier output contains only route ids, display names, managed outbound tags, counts, and health state;
 - Python compilation, Bash syntax, existing unit/integration suites, and diff checks passed before publication.
 
-Live acceptance remaining:
+Live verification:
 
-- provision or identify a second foreign Exit VPS with a distinct domain and node id;
-- import its manifest into the verified Entry;
-- reach `healthy` for both routes and pass `cascade verify-e2e --json`;
-- connect a real client to both profiles and verify the corresponding external Exit countries.
+- installed the second Exit as `de-frankfurt-2` and created its Entry-scoped relay peer and private join manifest;
+- imported `route-de-frankfurt-2` transactionally alongside the existing `route-de-fra-1` route;
+- three consecutive health observations transitioned the new route and Entry node to `healthy`;
+- `wavemesh subscription validate` matched desired state to the public subscription output;
+- `wavemesh cascade verify-e2e --json` reported two healthy Exits, two routes, one client, and two profiles;
+- a real client received both ordered profiles and observed distinct external Exit addresses for `RU -> Germany` and `RU -> Frankfurt`;
+- the Frankfurt profile matched the new Exit address, while neither profile exposed the Entry address.
