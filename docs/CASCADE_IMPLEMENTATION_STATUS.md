@@ -423,13 +423,12 @@ Live result (2026-07-13):
 
 Known limitations:
 
-- full recovery after process interruption during a multi-route forced Exit removal belongs to Phase 9;
 - automated health scheduling is not installed; health runs on explicit CLI invocation;
 - shellcheck and GitHub Actions are not available in the current repository environment.
 
 ## Phase 9 - Transaction and rollback hardening
 
-Status: implemented locally; live interruption and recovery verification remains pending.
+Status: complete and live-verified on the Entry VPS on 2026-07-13.
 
 Completed:
 
@@ -440,6 +439,7 @@ Completed:
 - blocked new mutations while an incomplete or failed-recovery transaction exists;
 - added `wavemesh transaction list [--json]` and explicit `recover --id|--latest` commands;
 - restored 3X-UI SQLite, Xray, nginx, subscription files, desired/runtime JSON, and newly written secret manifest output;
+- normalized restored public subscription directories to `0755` and files to `0644` so nginx can serve transaction snapshots after rollback;
 - required post-rollback JSON validation, service checks, nginx validation, Xray read-back, and public subscription validation;
 - changed desired-state commits to same-filesystem atomic JSON replacement;
 - retained the newest 20 terminal transactions and the newest 20 files per backup family while never pruning incomplete transactions;
@@ -471,8 +471,12 @@ Test coverage:
 - interrupted transactions survive retention while old terminal transactions and backups are pruned;
 - every mutating command path is statically required to acquire the shared lock, begin a transaction, and commit it.
 
-Known limitation:
+Live verification:
 
-- live failure injection and interruption recovery must be verified on the Entry VPS before Phase 9 is marked complete.
+- SIGKILL left transaction `20260713T112031Z-6bd5b0` discoverable as `in_progress`;
+- a subsequent subscription mutation was rejected with the explicit recovery command;
+- `transaction recover --latest` restored the snapshots and marked the transaction `rolled_back`;
+- public subscription validation passed after recovery;
+- `cascade health --json` reported both the Entry node and route `route-de-fra-1` as `healthy`.
 
 Next phase: multi-Exit E2E verification and operations/troubleshooting documentation.
