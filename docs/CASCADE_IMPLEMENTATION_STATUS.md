@@ -362,7 +362,7 @@ Next phase: route lifecycle commands, health, and runtime state.
 
 ## Phase 8 - CLI, health, and runtime state
 
-Status: implemented locally; live lifecycle verification remains pending.
+Status: complete; implementation and live Entry VPS verification passed.
 
 Completed:
 
@@ -414,9 +414,15 @@ Local results:
 - Bash syntax checks passed for installer, CLI, libraries, and command modules;
 - Python bytecode compilation and `git diff --check` passed.
 
+Live result (2026-07-13):
+
+- `sudo wavemesh reconcile --apply` restored the managed Xray outbound and routing rule and completed nginx validation;
+- three consecutive structural and route probes transitioned `route-de-fra-1` from `unknown` to `healthy`;
+- `sudo wavemesh cascade health --json` reported both `node_status: healthy` and route `status: healthy` for `RU -> Germany`;
+- live compatibility fixes covered nested 3X-UI Xray settings responses and packaged process names such as `xray-linux-amd64`.
+
 Known limitations:
 
-- live `health`, lifecycle, and reconciliation commands require verification on the Entry VPS;
 - full recovery after process interruption during a multi-route forced Exit removal belongs to Phase 9;
 - automated health scheduling is not installed; health runs on explicit CLI invocation;
 - shellcheck and GitHub Actions are not available in the current repository environment.
