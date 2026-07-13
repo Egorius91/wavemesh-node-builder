@@ -86,6 +86,18 @@ wm_xui_request_success() {
   printf '%s' "$response"
 }
 
+wm_xui_wait_ready() {
+  local attempt attempts="${WM_XUI_READY_ATTEMPTS:-30}"
+  for (( attempt=1; attempt<=attempts; attempt++ )); do
+    if systemctl is-active --quiet x-ui && wm_xui_request_success GET /panel/api/inbounds/list none >/dev/null 2>&1; then
+      return 0
+    fi
+    sleep 1
+  done
+  wm_warn "3X-UI API did not become ready after ${attempts} seconds"
+  return 1
+}
+
 wm_xui_discover_capabilities() {
   local openapi_file
   openapi_file="$(mktemp)"

@@ -38,6 +38,10 @@ PY
 )" || return 1
   if [[ "$changed" == "1" ]]; then
     systemctl restart x-ui || return 1
-    systemctl is-active --quiet x-ui || return 1
+    if declare -F wm_xui_wait_ready >/dev/null; then
+      wm_xui_wait_ready || return 1
+    else
+      systemctl is-active --quiet x-ui || return 1
+    fi
   fi
 }

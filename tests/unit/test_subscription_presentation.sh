@@ -28,6 +28,7 @@ export PATH="$TEMP_DIR/bin:$PATH"
 export WM_SYSTEMCTL_LOG="$TEMP_DIR/systemctl.log"
 
 wm_fail() { echo "$*" >&2; return 1; }
+wm_xui_wait_ready() { printf 'ready\n' >> "$WM_SYSTEMCTL_LOG"; }
 source "$ROOT_DIR/scripts/lib/subscription_presentation.sh"
 wm_apply_subscription_presentation
 
@@ -41,8 +42,8 @@ assert values["subShowInfo"] == "false"
 conn.close()
 PY
 
-[[ "$(wc -l < "$WM_SYSTEMCTL_LOG")" -eq 1 ]]
+[[ "$(wc -l < "$WM_SYSTEMCTL_LOG")" -eq 2 ]]
 wm_apply_subscription_presentation
-[[ "$(wc -l < "$WM_SYSTEMCTL_LOG")" -eq 1 ]]
+[[ "$(wc -l < "$WM_SYSTEMCTL_LOG")" -eq 2 ]]
 
 echo "subscription presentation tests: OK"
