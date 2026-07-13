@@ -122,13 +122,29 @@ case "${1:-}" in
     ;;
   diagnostics)
     load_config
-    if [[ "${NODE_ROLE:-standalone}" == "entry" ]]; then
-      "$0" cascade health
-      exit $?
-    fi
-    systemctl is-active --quiet nginx && ok "nginx active" || fail "nginx inactive"
-    [[ -f "/etc/letsencrypt/live/${DOMAIN}/fullchain.pem" ]] && ok "SSL certificate exists" || fail "SSL missing"
-    validate_subscription
+    case "${NODE_ROLE:-standalone}" in
+      entry)
+        "$0" cascade health
+        ;;
+      exit)
+        systemctl is-active --quiet nginx && ok "nginx active" || fail "nginx inactive"
+        systemctl is-active --quiet x-ui && ok "3X-UI active" || fail "3X-UI inactive"
+        [[ -f "/etc/letsencrypt/live/${DOMAIN}/fullchain.pem" ]] && ok "SSL certificate exists" || fail "SSL missing"
+        [[ -n "${PANEL_TOKEN:-}" ]] && ok "3X-UI bearer API token present" || fail "3X-UI bearer API token missing"
+        curl -fsS --max-time 5 "http://127.0.0.1:${PANEL_PORT}${PANEL_PATH}" >/dev/null 2>&1 \
+          && ok "3X-UI panel reachable on loopback" \
+          || fail "3X-UI panel is not reachable on loopback"
+        ok "Exit diagnostics OK; client subscription is not applicable"
+        ;;
+      standalone)
+        systemctl is-active --quiet nginx && ok "nginx active" || fail "nginx inactive"
+        [[ -f "/etc/letsencrypt/live/${DOMAIN}/fullchain.pem" ]] && ok "SSL certificate exists" || fail "SSL missing"
+        validate_subscription
+        ;;
+      *)
+        fail "Unsupported node role: ${NODE_ROLE}"
+        ;;
+    esac
     ;;
   validate-subscription)
     validate_subscription
