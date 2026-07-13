@@ -1,3 +1,4 @@
+
 #!/usr/bin/env python3
 """Build and compare WaveMesh-managed 3X-UI XHTTP inbounds."""
 
@@ -36,15 +37,47 @@ def normalized(inbound):
     return {"tag":inbound.get("tag") or inbound.get("remark"),"remark":inbound.get("remark"),"external_proxy_remark":proxy_remark,"listen":inbound.get("listen"),"port":int(inbound.get("port",-1)),"protocol":inbound.get("protocol"),"path":xhttp.get("path"),"host":xhttp.get("host"),"mode":xhttp.get("mode"),"clients":sorted((x.get("id"),x.get("email"),x.get("enable",True)) for x in clients if isinstance(x,dict))}
 
 
-def plan(desired, response):
+def matching_inbound(desired, response):
     items=response.get("obj") if isinstance(response,dict) else None
     if not isinstance(items,list): raise ValueError("3X-UI inbound list response has no obj array")
     wanted=normalized(desired)
     matches=[item for item in items if (item.get("tag") or item.get("remark"))==wanted["tag"]]
     if len(matches)>1: raise ValueError(f"multiple inbounds use managed tag {wanted['tag']}")
-    if not matches: return {"action":"add","id":None}
-    inbound_id=matches[0].get("id") or matches[0].get("Id")
-    return {"action":"noop" if normalized(matches[0])==wanted else "update","id":inbound_id}
+    return matches[0] if matches else None
+
+
+def client_identity(client):
+    return {value for key in ("id","email","subId") if (value:=client.get(key)) not in (None,"")}
+
+
+def merge_external_clients(desired, response):
+    """Keep non-WaveMesh clients which another control plane added to our inbound."""
+    actual=matching_inbound(desired,response)
+    if actual is None: return desired
+    desired_settings=as_object(desired.get("settings"))
+    actual_settings=as_object(actual.get("settings"))
+    managed=desired_settings.get("clients") if isinstance(desired_settings.get("clients"),list) else []
+    existing=actual_settings.get("clients") if isinstance(actual_settings.get("clients"),list) else []
+    identities=set().union(*(client_identity(client) for client in managed if isinstance(client,dict)))
+    external=[]
+    for client in existing:
+        if not isinstance(client,dict): continue
+        email=str(client.get("email") or "")
+        identity=client_identity(client)
+        if email.startswith("wm.") or identities.intersection(identity): continue
+        external.append(client)
+        identities.update(identity)
+    desired_settings["clients"]=[client for client in managed if isinstance(client,dict)]+external
+    desired["settings"]=desired_settings
+    return desired
+
+
+def plan(desired, response):
+    wanted=normalized(desired)
+    actual=matching_inbound(desired,response)
+    if actual is None: return {"action":"add","id":None}
+    inbound_id=actual.get("id") or actual.get("Id")
+    return {"action":"noop" if normalized(actual)==wanted else "update","id":inbound_id}
 
 
 def main():
@@ -52,11 +85,15 @@ def main():
     make=sub.add_parser("build")
     make.add_argument("--tag",required=True); make.add_argument("--remark",default=""); make.add_argument("--port",type=int,required=True); make.add_argument("--path",required=True); make.add_argument("--host",required=True); make.add_argument("--clients",required=True); make.add_argument("--public-domain",default=""); make.add_argument("--fingerprint",default="chrome"); make.add_argument("--output",required=True)
     compare=sub.add_parser("plan"); compare.add_argument("--desired",required=True); compare.add_argument("--actual",required=True)
+    merge=sub.add_parser("merge-clients"); merge.add_argument("--desired",required=True); merge.add_argument("--actual",required=True); merge.add_argument("--output",required=True)
     args=parser.parse_args()
     if args.command=="build":
         Path(args.output).write_text(json.dumps(build(args),indent=2,sort_keys=True)+"\n",encoding="utf-8")
-    else:
+    elif args.command=="plan":
         print(json.dumps(plan(json.loads(Path(args.desired).read_text(encoding="utf-8")),json.loads(Path(args.actual).read_text(encoding="utf-8"))),separators=(",",":")))
+    else:
+        desired=json.loads(Path(args.desired).read_text(encoding="utf-8")); actual=json.loads(Path(args.actual).read_text(encoding="utf-8"))
+        Path(args.output).write_text(json.dumps(merge_external_clients(desired,actual),indent=2,sort_keys=True)+"\n",encoding="utf-8")
 
 
 if __name__=="__main__": main()

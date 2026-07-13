@@ -1,3 +1,4 @@
+
 #!/usr/bin/env bash
 
 wm_find_xui_settings_db() {

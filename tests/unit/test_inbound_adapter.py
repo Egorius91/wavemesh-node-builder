@@ -1,3 +1,4 @@
+
 import json, subprocess, sys, tempfile
 from pathlib import Path
 
@@ -15,6 +16,19 @@ with tempfile.TemporaryDirectory() as name:
     plan=json.loads(subprocess.check_output([sys.executable,str(tool),"plan","--desired",str(desired),"--actual",str(actual)])); assert plan=={"action":"noop","id":12}
     clone["streamSettings"]["externalProxy"][0]["remark"]="wm-route-de-fra-1"; actual.write_text(json.dumps({"success":True,"obj":[clone]}))
     plan=json.loads(subprocess.check_output([sys.executable,str(tool),"plan","--desired",str(desired),"--actual",str(actual)])); assert plan=={"action":"update","id":12}
+    bot_client={"id":"bot-uuid","email":"user_EgoriusLutius_f026d","subId":"bot-sub-id","enable":True,"tgId":0}
+    stale_managed={"id":"stale-uuid","email":"wm.stale.client","subId":"stale-sub-id","enable":True}
+    clone=json.loads(desired.read_text()); clone["id"]=12; clone["settings"]["clients"] += [bot_client,stale_managed]
+    clone["streamSettings"]["externalProxy"][0]["remark"]="wm-route-de-fra-1"
+    actual.write_text(json.dumps({"success":True,"obj":[clone]}))
+    merged=Path(name)/"merged.json"
+    subprocess.run([sys.executable,str(tool),"merge-clients","--desired",str(desired),"--actual",str(actual),"--output",str(merged)],check=True)
+    merged_data=json.loads(merged.read_text()); emails=[client["email"] for client in merged_data["settings"]["clients"]]
+    assert "user_EgoriusLutius_f026d" in emails and "wm.stale.client" not in emails
+    assert merged_data["streamSettings"]["externalProxy"][0]["remark"]=="RU -> Germany"
+    plan=json.loads(subprocess.check_output([sys.executable,str(tool),"plan","--desired",str(merged),"--actual",str(actual)])); assert plan=={"action":"update","id":12}
+    updated=dict(merged_data); updated["id"]=12; actual.write_text(json.dumps({"success":True,"obj":[updated]}))
+    plan=json.loads(subprocess.check_output([sys.executable,str(tool),"plan","--desired",str(merged),"--actual",str(actual)])); assert plan=={"action":"noop","id":12}
     clone=json.loads(desired.read_text()); clone["id"]=12
     clone["port"]=21002; actual.write_text(json.dumps({"success":True,"obj":[clone]}))
     plan=json.loads(subprocess.check_output([sys.executable,str(tool),"plan","--desired",str(desired),"--actual",str(actual)])); assert plan=={"action":"update","id":12}

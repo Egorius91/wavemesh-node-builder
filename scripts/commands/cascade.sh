@@ -1,3 +1,4 @@
+
 #!/usr/bin/env bash
 
 WM_E2E_CHECK_TOOL="$(cd "$(dirname "${BASH_SOURCE[0]}")/../lib" && pwd)/e2e_check.py"

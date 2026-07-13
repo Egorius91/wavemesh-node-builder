@@ -1,26 +1,29 @@
+
 #!/usr/bin/env bash
 
 WM_INBOUND_TOOL="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/inbound_adapter.py"
 
 wm_inbound_reconcile() {
-  local desired_file="$1" actual_file plan action inbound_id response
+  local desired_file="$1" actual_file effective_file plan action inbound_id response
   actual_file="$(mktemp)"
   wm_xui_request_success GET /panel/api/inbounds/list none > "$actual_file" || { rm -f "$actual_file"; return 1; }
-  plan="$(python3 "$WM_INBOUND_TOOL" plan --desired "$desired_file" --actual "$actual_file")" || { rm -f "$actual_file"; return 1; }
+  effective_file="$(mktemp)"
+  python3 "$WM_INBOUND_TOOL" merge-clients --desired "$desired_file" --actual "$actual_file" --output "$effective_file" || { rm -f "$actual_file" "$effective_file"; return 1; }
+  plan="$(python3 "$WM_INBOUND_TOOL" plan --desired "$effective_file" --actual "$actual_file")" || { rm -f "$actual_file" "$effective_file"; return 1; }
   rm -f "$actual_file"
   action="$(printf '%s' "$plan" | python3 -c 'import json,sys; print(json.load(sys.stdin)["action"])')"
   inbound_id="$(printf '%s' "$plan" | python3 -c 'import json,sys; print(json.load(sys.stdin).get("id") or "")')"
   case "$action" in
-    noop) printf '%s\n' "$inbound_id"; return 0 ;;
-    add) response="$(wm_xui_request_success POST /panel/api/inbounds/add json "$(cat "$desired_file")")" || return 1 ;;
-    update) response="$(wm_xui_request_success POST "/panel/api/inbounds/update/${inbound_id}" json "$(cat "$desired_file")")" || return 1 ;;
-    *) wm_warn "Unknown inbound reconciliation action"; return 1 ;;
+    noop) rm -f "$effective_file"; printf '%s\n' "$inbound_id"; return 0 ;;
+    add) response="$(wm_xui_request_success POST /panel/api/inbounds/add json "$(cat "$effective_file")")" || { rm -f "$effective_file"; return 1; } ;;
+    update) response="$(wm_xui_request_success POST "/panel/api/inbounds/update/${inbound_id}" json "$(cat "$effective_file")")" || { rm -f "$effective_file"; return 1; } ;;
+    *) rm -f "$effective_file"; wm_warn "Unknown inbound reconciliation action"; return 1 ;;
   esac
 
   actual_file="$(mktemp)"
-  wm_xui_request_success GET /panel/api/inbounds/list none > "$actual_file" || { rm -f "$actual_file"; return 1; }
-  plan="$(python3 "$WM_INBOUND_TOOL" plan --desired "$desired_file" --actual "$actual_file")" || { rm -f "$actual_file"; return 1; }
-  rm -f "$actual_file"
+  wm_xui_request_success GET /panel/api/inbounds/list none > "$actual_file" || { rm -f "$actual_file" "$effective_file"; return 1; }
+  plan="$(python3 "$WM_INBOUND_TOOL" plan --desired "$effective_file" --actual "$actual_file")" || { rm -f "$actual_file" "$effective_file"; return 1; }
+  rm -f "$actual_file" "$effective_file"
   [[ "$(printf '%s' "$plan" | python3 -c 'import json,sys; print(json.load(sys.stdin)["action"])')" == "noop" ]] || { wm_warn "Inbound read-back does not match desired state"; return 1; }
   printf '%s' "$plan" | python3 -c 'import json,sys; print(json.load(sys.stdin).get("id") or "")'
 }

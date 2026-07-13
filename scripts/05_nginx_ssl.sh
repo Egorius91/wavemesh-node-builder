@@ -1,3 +1,4 @@
+
 #!/usr/bin/env bash
 
 wm_configure_nginx_http() {
