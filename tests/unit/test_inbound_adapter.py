@@ -6,6 +6,7 @@ with tempfile.TemporaryDirectory() as name:
     desired=Path(name)/"desired.json"
     subprocess.run([sys.executable,str(tool),"build","--tag","wm-route-de-fra-1","--port","21001","--path","/api/de/example-path/","--host","entry.example.com","--clients",str(clients),"--public-domain","entry.example.com","--output",str(desired)],check=True)
     data=json.loads(desired.read_text()); assert data["listen"]=="127.0.0.1"; assert data["streamSettings"]["xhttpSettings"]["mode"]=="stream-one"
+    client=data["settings"]["clients"][0]; assert client["tgId"] == 0 and isinstance(client["tgId"], int)
     empty=Path(name)/"empty.json"; empty.write_text('{"success":true,"obj":[]}')
     plan=json.loads(subprocess.check_output([sys.executable,str(tool),"plan","--desired",str(desired),"--actual",str(empty)])); assert plan["action"]=="add"
     actual=Path(name)/"actual.json"; clone=dict(data); clone["id"]=12; actual.write_text(json.dumps({"success":True,"obj":[clone]}))

@@ -14,6 +14,7 @@ with tempfile.TemporaryDirectory() as name:
     subprocess.run([sys.executable,str(tool),"finalize","--candidate",str(candidate),"--route-id","route-de-fra-1","--inbound-id","12"],check=True)
     cfg=json.loads(candidate.read_text()); route=cfg["routes"][0]; assert route["entry"]["inbound_id"]==12 and route["routing"]["outbound_tag"]=="wm-exit-de-fra-1"
     credential=cfg["clients"][0]["credentials"][0]; assert credential["uuid"]!="00000000-0000-0000-0000-000000000002"
+    inbound_client=json.loads(clients.read_text())[0]; assert inbound_client["tgId"] == 0 and isinstance(inbound_client["tgId"], int)
     out=json.loads(outbound.read_text()); tls=out["streamSettings"]["tlsSettings"]; assert tls["allowInsecure"] is False and tls["serverName"]=="de-exit.example.com"
     assert subprocess.check_output([sys.executable,str(tool),"inspect","--config",str(candidate),"--manifest",str(manifest)],text=True).strip()=="same"
     subprocess.run([sys.executable,str(renderer),"--config",str(candidate),"--output",str(nginx)],check=True); text=nginx.read_text(); assert "/api/de/example-route/" in text and "127.0.0.1:21001" in text; assert "de-exit.example.com" not in text and "00000000" not in text

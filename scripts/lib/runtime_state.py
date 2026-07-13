@@ -101,7 +101,7 @@ def inbound_payload(config, item):
             "limitIp": 0,
             "totalGB": 0,
             "expiryTime": 0,
-            "tgId": "",
+            "tgId": 0,
             "subId": client.get("subscription_id", ""),
         })
     entry = item["entry"]

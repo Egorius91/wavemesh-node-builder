@@ -14,7 +14,7 @@ wm_exit_peer_create() {
   clients="$transaction/clients.json"; desired="$transaction/inbound.json"; candidate="$transaction/config.candidate.json"; manifest="$transaction/manifest.secret.json"
   UUID="$uuid" TAG="$tag" python3 - <<'PY' > "$clients"
 import json,os
-print(json.dumps([{"id":os.environ["UUID"],"email":os.environ["TAG"],"enable":True,"flow":"","limitIp":0,"totalGB":0,"expiryTime":0,"tgId":"","subId":""}]))
+print(json.dumps([{"id":os.environ["UUID"],"email":os.environ["TAG"],"enable":True,"flow":"","limitIp":0,"totalGB":0,"expiryTime":0,"tgId":0,"subId":""}]))
 PY
   python3 "$WM_INBOUND_TOOL" build --tag "$tag" --port "$port" --path "$path" --host "$DOMAIN" --clients "$clients" --output "$desired"
   inbound_id="$(wm_inbound_reconcile "$desired")" || wm_fail "Could not create and verify relay inbound"

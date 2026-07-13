@@ -42,7 +42,7 @@ payload = {
       'totalGB': 0,
       'expiryTime': 0,
       'enable': True,
-      'tgId': '',
+      'tgId': 0,
       'subId': ''
     }],
     'decryption': 'none',

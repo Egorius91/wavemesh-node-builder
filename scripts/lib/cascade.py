@@ -53,7 +53,7 @@ def prepare(a):
         value=str(uuid.uuid4())
         while value in used: value=str(uuid.uuid4())
         used.add(value); email=f"wm.{client['id']}.{route_id}"; credential={"route_id":route_id,"email":email,"uuid":value,"enabled":True}; client.setdefault("credentials",[]).append(credential); credentials.append(credential)
-        inbound_clients.append({"id":value,"email":email,"enable":True,"flow":"","limitIp":0,"totalGB":0,"expiryTime":0,"tgId":"","subId":client.get("subscription_id","")})
+        inbound_clients.append({"id":value,"email":email,"enable":True,"flow":"","limitIp":0,"totalGB":0,"expiryTime":0,"tgId":0,"subId":client.get("subscription_id","")})
     if not credentials: raise ValueError("Entry has no clients")
     cfg.setdefault("exits",[]).append({"id":exit_id,"display_name":a.display_name or e["display_name"],"country":e["country"],"city":e["city"],"enabled":True,"manifest_checksum":manifest["checksum_sha256"],"endpoint":{"domain":e["domain"],"expected_public_ips":e.get("expected_public_ips",[]),"port":e["port"],"security":"tls","sni":e["sni"],"host":e["host"],"fingerprint":e["fingerprint"],"transport":"xhttp","xhttp_mode":"stream-one","relay_path":e["relay_path"],"relay_uuid":e["relay_uuid"]},"xray":{"outbound_tag":outbound_tag}})
     cfg.setdefault("routes",[]).append({"id":route_id,"kind":"cascade","display_name":a.display_name or e["display_name"],"exit_id":exit_id,"enabled":True,"sort_order":a.sort_order,"entry":{"listen":"127.0.0.1","local_port":a.port,"public_path":a.path,"inbound_id":None,"inbound_tag":inbound_tag,"xhttp_mode":"stream-one"},"routing":{"rule_tag":rule_tag,"outbound_tag":outbound_tag}})

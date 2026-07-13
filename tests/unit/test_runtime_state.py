@@ -53,6 +53,7 @@ with tempfile.TemporaryDirectory() as name:
     desired_inbound = json.loads(inbound.read_text(encoding="utf-8"))
     desired_outbound = json.loads(outbound.read_text(encoding="utf-8"))
     assert desired_inbound["listen"] == "127.0.0.1" and desired_inbound["enable"] is True
+    assert desired_inbound["settings"]["clients"][0]["tgId"] == 0
     assert desired_outbound["tag"] == "wm-exit-de-fra-1"
     assert desired_outbound["streamSettings"]["tlsSettings"]["allowInsecure"] is False
     (subs / "sub-runtime-example-1234.txt").write_text("vless://00000000-0000-0000-0000-000000000010@ru-entry.example.com:443\n", encoding="utf-8")
