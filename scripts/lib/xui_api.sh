@@ -134,8 +134,19 @@ PY
   chmod 600 "$WM_CONFIG_JSON"
 }
 
+wm_xui_read_existing_api_token() {
+  local output token
+  [[ -n "${XUI_RUNTIME_BIN:-}" && -x "$XUI_RUNTIME_BIN" ]] || return 1
+
+  output="$("$XUI_RUNTIME_BIN" setting -getApiToken true 2>/dev/null || \
+    "$XUI_RUNTIME_BIN" setting -getApiToken 2>/dev/null || true)"
+  token="$(printf '%s\n' "$output" | sed -n 's/^[[:space:]]*apiToken:[[:space:]]*//p' | head -n 1)"
+  [[ -n "$token" ]] || return 1
+  printf '%s' "$token"
+}
+
 wm_xui_bootstrap_api_token() {
-  local capabilities token_name payload response token
+  local capabilities token_name payload response token existing_token
   if [[ -n "${PANEL_TOKEN:-}" ]]; then
     wm_xui_request_success GET /panel/api/inbounds/list none >/dev/null || return 1
     return 0
@@ -145,6 +156,20 @@ wm_xui_bootstrap_api_token() {
   capabilities="$(wm_xui_discover_capabilities)" || { wm_warn "Installed 3X-UI lacks required cascade API capabilities"; return 1; }
   token_name="wavemesh-${NODE_ID:-node-builder}"
   token_name="${token_name:0:64}"
+
+  existing_token="$(wm_xui_read_existing_api_token || true)"
+  if [[ -n "$existing_token" ]]; then
+    PANEL_TOKEN="$existing_token"
+    if wm_xui_request_success GET /panel/api/inbounds/list none >/dev/null; then
+      wm_xui_store_api_state "$existing_token" "$token_name" "$capabilities"
+      wm_export_config_env_from_json
+      wm_success "Existing 3X-UI bearer API token recovered and verified"
+      return 0
+    fi
+    PANEL_TOKEN=""
+    wm_warn "Existing 3X-UI bearer token failed verification; creating a replacement"
+  fi
+
   payload="$(TOKEN_NAME="$token_name" python3 -c 'import json,os; print(json.dumps({"name":os.environ["TOKEN_NAME"]}))')"
   response="$(wm_xui_request_success POST /panel/api/setting/apiTokens/create json "$payload")" || return 1
   token="$(printf '%s' "$response" | python3 -c 'import json,sys; obj=json.load(sys.stdin).get("obj") or {}; print(obj.get("token") or obj.get("value") or "")' 2>/dev/null || true)"

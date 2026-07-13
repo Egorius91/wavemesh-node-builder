@@ -290,6 +290,9 @@ wm_write_config_env() {
     wm_write_config_json
   fi
   wm_export_config_env_from_json
+  # Keep resumed/partial installs on the persisted ports, paths, and credentials.
+  # shellcheck disable=SC1091
+  source "$WM_STATE_DIR/config.env"
 }
 
 wm_config_json_set_clients_from_csv() {

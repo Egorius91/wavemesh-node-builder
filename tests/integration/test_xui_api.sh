@@ -31,4 +31,16 @@ data=json.loads(os.environ["CAPABILITIES"])
 assert data and all(data.values())
 PY
 
+tmp_dir="$(mktemp -d)"
+trap 'rm -rf "$tmp_dir"' EXIT
+XUI_RUNTIME_BIN="$tmp_dir/x-ui"
+cat > "$XUI_RUNTIME_BIN" <<'SH'
+#!/usr/bin/env bash
+printf 'apiToken: recovered-test-token\n'
+SH
+chmod +x "$XUI_RUNTIME_BIN"
+
+recovered_token="$(wm_xui_read_existing_api_token)"
+[[ "$recovered_token" == "recovered-test-token" ]]
+
 echo "xui api adapter tests: OK"
