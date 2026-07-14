@@ -29,6 +29,8 @@ case "${1:-}" in
     shift; source "$WM_LIB_DIR/00_common.sh"; source "$WM_LIB_DIR/lib/transaction.sh"; source "$WM_LIB_DIR/lib/nginx_renderer.sh"; source "$WM_LIB_DIR/lib/subscription_renderer.sh"; source "$WM_LIB_DIR/lib/subscription_presentation.sh"; source "$WM_LIB_DIR/commands/subscription.sh"; wm_subscription_command "$@" ;;
   exit)
     shift; source "$WM_LIB_DIR/00_common.sh"; source "$WM_LIB_DIR/lib/transaction.sh"; source "$WM_LIB_DIR/lib/xui_api.sh"; source "$WM_LIB_DIR/lib/inbound_adapter.sh"; source "$WM_LIB_DIR/lib/nginx_renderer.sh"; WM_EXIT_PEER_TOOL="$WM_LIB_DIR/lib/exit_peer.py"; source "$WM_LIB_DIR/commands/exit_peer.sh"; [[ "${1:-}" == "peer" ]] || wm_fail "Usage: wavemesh exit peer create|list|remove"; shift; wm_exit_peer_command "$@" ;;
+  monitor)
+    shift; source "$WM_LIB_DIR/00_common.sh"; source "$WM_LIB_DIR/commands/monitor.sh"; wm_monitor_command "$@" ;;
   transaction)
     shift; source "$WM_LIB_DIR/00_common.sh"; source "$WM_LIB_DIR/lib/xui_api.sh"; source "$WM_LIB_DIR/lib/xray_template.sh"; source "$WM_LIB_DIR/lib/nginx_renderer.sh"; source "$WM_LIB_DIR/lib/subscription_renderer.sh"; source "$WM_LIB_DIR/lib/transaction.sh"; wm_transaction_command "$@" ;;
   show-report) [[ -f "$WM_REPORT_TXT" ]] && cat "$WM_REPORT_TXT" || fail "Report not found" ;;
@@ -66,6 +68,11 @@ Usage:
   wavemesh reconcile --dry-run|--apply
   wavemesh subscription rebuild
   wavemesh subscription validate
+  wavemesh monitor run [--json]
+  wavemesh monitor status [--json]
+  wavemesh monitor events [--limit N] [--json]
+  wavemesh monitor install
+  wavemesh monitor uninstall
   wavemesh transaction list [--json]
   wavemesh transaction recover --id ID|--latest
   wavemesh repair --nginx

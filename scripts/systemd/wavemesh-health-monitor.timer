@@ -1,0 +1,13 @@
+[Unit]
+Description=Run WaveMesh route health monitor every minute
+
+[Timer]
+OnBootSec=2min
+OnUnitActiveSec=1min
+RandomizedDelaySec=10s
+AccuracySec=5s
+Persistent=true
+Unit=wavemesh-health-monitor.service
+
+[Install]
+WantedBy=timers.target
