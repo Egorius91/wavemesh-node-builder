@@ -36,10 +36,13 @@ def exit_config(base, node_id, country, city, domain, public_ip):
 with tempfile.TemporaryDirectory() as name:
     temp = Path(name)
     entry = temp / "entry.json"
-    entry.write_text(
-        (root / "tests/fixtures/config-entry-v2.json").read_text(encoding="utf-8"),
-        encoding="utf-8",
+    entry_config = json.loads(
+        (root / "tests/fixtures/config-entry-v2.json").read_text(encoding="utf-8")
     )
+    entry_config.setdefault("network", {}).setdefault("subscription", {})[
+        "path"
+    ] = "/q8Kp2RmXn4/Dt7Vb3Ls9Qc6Hw2ZaP/"
+    entry.write_text(json.dumps(entry_config), encoding="utf-8")
     exit_base = json.loads((root / "tests/fixtures/config-exit-v2.json").read_text(encoding="utf-8"))
     definitions = [
         {
@@ -150,8 +153,14 @@ with tempfile.TemporaryDirectory() as name:
     assert [urllib.parse.unquote(urllib.parse.urlsplit(line).fragment) for line in lines] == ["RU -> Netherlands", "RU -> Germany"]
     assert all("@ru-entry.example.com:443" in line for line in lines)
     assert all(value not in "\n".join(lines) for item in definitions for value in (item["domain"], item["ip"], item["relay_uuid"], item["relay_path"]))
-    assert json.loads(metadata.read_text(encoding="utf-8"))[0]["profiles"] == 2
+    metadata_item = json.loads(metadata.read_text(encoding="utf-8"))[0]
+    expected_subscription_path = config["network"]["subscription"]["path"]
+    assert metadata_item["profiles"] == 2
+    assert metadata_item["path"] == expected_subscription_path
+    assert not expected_subscription_path.startswith("/sub/")
     rendered_nginx = nginx_output.read_text(encoding="utf-8")
+    assert f"location = {expected_subscription_path}" in rendered_nginx
+    assert "/sub/" not in rendered_nginx
     assert rendered_nginx.count("wm-route-") == 0
     assert all(item["route_path"] in rendered_nginx for item in definitions)
 

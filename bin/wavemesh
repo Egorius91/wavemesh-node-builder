@@ -66,6 +66,7 @@ Usage:
   wavemesh reconcile --dry-run|--apply
   wavemesh subscription rebuild
   wavemesh subscription validate
+  wavemesh subscription rotate-path --dry-run|--apply [--path PATH]
   wavemesh transaction list [--json]
   wavemesh transaction recover --id ID|--latest
   wavemesh repair --nginx

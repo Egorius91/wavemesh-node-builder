@@ -15,6 +15,7 @@ source "$SCRIPTS_DIR/07_xhttp_inbound.sh"
 source "$SCRIPTS_DIR/08_subscriptions.sh"
 source "$SCRIPTS_DIR/09_report.sh"
 source "$SCRIPTS_DIR/10_diagnostics.sh"
+source "$SCRIPTS_DIR/11_subscription_paths.sh"
 
 main() {
   wm_banner
