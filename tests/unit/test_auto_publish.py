@@ -26,7 +26,7 @@ def config(published=False):
         "balancers": [{"id": "auto-europe", "enabled": True, "strategy": "leastPing", "selector": ["wm-exit-de-1"], "balancer_tag": "wm-balancer-auto-europe"}],
         "routes": [
             {"id": "route-de-1", "kind": "cascade", "display_name": "Germany", "exit_id": "de-1", "enabled": True, "sort_order": 100, "entry": {"public_path": "/api/de/abcdefghijkl/", "local_port": 21101}},
-            {"id": "route-auto-auto-europe", "kind": "auto", "display_name": "⚡ RU -> Auto Europe", "enabled": True, "sort_order": 50, "balancer_id": "auto-europe", "entry": {"public_path": "/api/auto/abcdefghijkl/", "local_port": 21102}, "presentation": {"published": published}},
+            {"id": "route-auto-auto-europe", "kind": "auto", "display_name": "⚡ RU -> Auto Europe", "enabled": True, "sort_order": 50, "balancer_id": "auto-europe", "entry": {"public_path": "/api/auto/abcdefghijkl/", "local_port": 21102}, "routing": {"balancer_tag": "wm-balancer-auto-europe"}, "presentation": {"published": published}},
         ],
         "clients": [{"id": "client-1", "enabled": True, "subscription_id": "ABCDEFGHIJKLMNOP", "credentials": [
             {"route_id": "route-de-1", "uuid": "11111111-1111-4111-8111-111111111111", "enabled": True},
@@ -68,6 +68,26 @@ def test_disabled_auto_cannot_be_published():
         assert "disabled" in str(error)
     else:
         raise AssertionError("disabled Auto Route was published")
+
+
+def test_auto_requires_least_ping_and_enabled_exit():
+    cfg = config(False)
+    cfg["balancers"][0]["strategy"] = "random"
+    try:
+        auto.set_published(cfg, "auto-europe", True)
+    except ValueError as error:
+        assert "leastPing" in str(error)
+    else:
+        raise AssertionError("Auto Route without leastPing was published")
+
+    cfg = config(False)
+    cfg["exits"][0]["enabled"] = False
+    try:
+        auto.set_published(cfg, "auto-europe", True)
+    except ValueError as error:
+        assert "enabled Exit" in str(error)
+    else:
+        raise AssertionError("Auto Route without an enabled Exit was published")
 
 
 def test_unpublish_removes_only_auto_profile():

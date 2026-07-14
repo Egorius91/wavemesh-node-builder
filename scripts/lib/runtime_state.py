@@ -104,15 +104,19 @@ def inbound_payload(config, item):
     domain = config["server"]["domain"]
     tag = entry["inbound_tag"]
     public_name = item.get("display_name") or tag
+    published = bool(item.get("enabled", True))
+    if item.get("kind") == "auto":
+        published = published and bool(item.get("presentation", {}).get("published", False))
+    remark = public_name if published else f"--!{public_name}"
     return {
-        "up": 0, "down": 0, "total": 0, "remark": tag, "tag": tag,
+        "up": 0, "down": 0, "total": 0, "remark": remark, "tag": tag,
         "enable": bool(item.get("enabled", True)), "expiryTime": 0,
         "listen": "127.0.0.1", "port": entry["local_port"], "protocol": "vless",
         "settings": {"clients": clients, "decryption": "none", "fallbacks": []},
         "streamSettings": {
             "network": "xhttp", "security": "none",
             "xhttpSettings": {"path": entry["public_path"], "host": domain, "mode": "stream-one"},
-            "externalProxy": [{"dest": domain, "port": 443, "remark": public_name, "forceTls": "tls", "sni": domain, "fingerprint": "randomized"}],
+            "externalProxy": [{"dest": domain, "port": 443, "remark": remark, "forceTls": "tls", "sni": domain, "fingerprint": "randomized"}],
         },
         "sniffing": {"enabled": True, "destOverride": ["http", "tls", "quic", "fakedns"], "metadataOnly": False, "routeOnly": False},
         "allocate": {"strategy": "always"},

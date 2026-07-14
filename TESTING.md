@@ -158,6 +158,7 @@ Run the deterministic two-Exit E2E test together with the unit and adapter suite
 ```bash
 python3 tests/e2e/test_multi_exit.py
 python3 tests/unit/test_subscription_renderer.py
+python3 tests/unit/test_subscription_backend.py
 python3 tests/unit/test_runtime_state.py
 python3 tests/unit/test_xray_template.py
 bash tests/unit/test_transaction.sh
@@ -182,3 +183,38 @@ sudo wavemesh cascade verify-e2e --json
 Then connect a client to each profile separately and record only the profile
 name, observed country/ASN, timestamp, and pass/fail result. Never paste the
 subscription URL or decoded VLESS lines.
+
+## 10. Native 3X-UI subscription acceptance
+
+On a new installation, verify the selected backend and the loopback-only native
+listener:
+
+```bash
+sudo wavemesh subscription backend status
+sudo ss -ltnp | grep ':2096 '
+sudo wavemesh routes public --json
+sudo wavemesh subscription validate-native
+```
+
+For a known 3X-UI client `subId`, perform the full public-content check without
+printing the subscription body:
+
+```bash
+sudo wavemesh subscription validate-native \
+  --sub-id 'CLIENT_SUB_ID' \
+  --expected-profiles 3
+```
+
+Before migrating an existing node, inspect the dry-run. Apply only after it
+reports the expected domain and opaque path:
+
+```bash
+sudo wavemesh subscription backend switch xui-native --dry-run
+sudo wavemesh subscription backend switch xui-native --apply
+```
+
+If the post-migration bot check fails, restore the captured pre-switch state:
+
+```bash
+sudo wavemesh subscription backend rollback
+```

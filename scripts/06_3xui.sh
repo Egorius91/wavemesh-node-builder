@@ -1,7 +1,8 @@
 #!/usr/bin/env bash
 
 XUI_REPO="${XUI_REPO:-MHSanaei/3x-ui}"
-XUI_RELEASE_TAG="${XUI_RELEASE_TAG:-latest}"
+XUI_RELEASE_TAG="${XUI_RELEASE_TAG:-v3.4.2}"
+XUI_ALLOW_LATEST="${XUI_ALLOW_LATEST:-0}"
 XUI_MANAGER_BIN="${XUI_MANAGER_BIN:-/usr/bin/x-ui}"
 XUI_HOME="${XUI_HOME:-/usr/local/x-ui}"
 XUI_RUNTIME_BIN="${XUI_RUNTIME_BIN:-/usr/local/x-ui/x-ui}"
@@ -36,6 +37,7 @@ wm_xui_panel_installed() {
 
 wm_get_latest_xui_release_json() {
   if [[ "$XUI_RELEASE_TAG" == "latest" ]]; then
+    [[ "$XUI_ALLOW_LATEST" == "1" ]] || wm_fail "XUI_RELEASE_TAG=latest requires XUI_ALLOW_LATEST=1 and is not allowed for production installs"
     curl -fsSL "https://api.github.com/repos/${XUI_REPO}/releases/latest"
   else
     curl -fsSL "https://api.github.com/repos/${XUI_REPO}/releases/tags/${XUI_RELEASE_TAG}"
@@ -72,7 +74,7 @@ wm_select_xui_asset_url() {
 wm_download_latest_xui_release() {
   local arch release_json asset_url tag workdir archive
   arch="$(wm_detect_xui_arch)"
-  wm_info "Resolving latest stable 3X-UI release for linux-${arch}" >&2
+  wm_info "Resolving pinned 3X-UI release ${XUI_RELEASE_TAG} for linux-${arch}" >&2
   release_json="$(wm_get_latest_xui_release_json)" || wm_fail "Could not query GitHub releases for ${XUI_REPO}"
 
   if ! printf '%s' "$release_json" | jq -e '.tag_name and .assets' >/dev/null 2>&1; then
@@ -189,7 +191,7 @@ wm_harden_xui_sqlite_settings() {
   local db
   db="$(wm_find_xui_db || true)"
   [[ -n "$db" ]] || return 0
-  DOMAIN="$DOMAIN" SUB_PATH="$SUB_PATH" python3 - "$db" <<'PY'
+  DOMAIN="$DOMAIN" SUB_PATH="$SUB_PATH" SUBSCRIPTION_BACKEND="$SUBSCRIPTION_BACKEND" python3 - "$db" <<'PY'
 import os
 import sqlite3
 import sys
@@ -202,7 +204,7 @@ try:
     values = {
         "webCertFile": "",
         "webKeyFile": "",
-        "subEnable": "true",
+        "subEnable": "true" if os.environ.get("SUBSCRIPTION_BACKEND", "xui-native") == "xui-native" else "false",
         "subJsonEnable": "false",
         "subClashEnable": "false",
         "subListen": "127.0.0.1",
@@ -329,7 +331,7 @@ wm_install_3xui() {
   wm_wait_for_xui_service || wm_fail "3X-UI service did not become active"
   sleep 1
   wm_assert_xui_bound_to_loopback
-  wm_assert_xui_builtin_sub_loopback
+  if [[ "$SUBSCRIPTION_BACKEND" == "xui-native" ]]; then wm_assert_xui_builtin_sub_loopback; fi
   wm_wait_for_xui_http || wm_fail "3X-UI panel did not become reachable locally"
 }
 

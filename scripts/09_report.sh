@@ -6,16 +6,18 @@ wm_write_reports() {
   local panel_public_url="https://${DOMAIN}${PANEL_PATH}"
   local subscription_url="https://${DOMAIN}${SUB_PATH}"
   local panel_internal_url="http://127.0.0.1:${PANEL_PORT}${PANEL_PATH}"
-  local report_summary node_role node_id exit_count route_count node_status
+  local report_summary node_role node_id exit_count route_count node_status subscription_backend xui_version clients_api native_subscription
   report_summary="$(python3 - "$WM_CONFIG_JSON" "$WM_RUNTIME_JSON" <<'PY'
 import json,sys
 cfg=json.load(open(sys.argv[1],encoding="utf-8"))
 try: runtime=json.load(open(sys.argv[2],encoding="utf-8"))
 except (FileNotFoundError,json.JSONDecodeError): runtime={}
-print("\t".join((cfg.get("node",{}).get("role","standalone"),cfg.get("node",{}).get("id",""),str(len(cfg.get("exits",[]))),str(len([r for r in cfg.get("routes",[]) if r.get("kind")=="cascade"])),runtime.get("node_status","unknown"))))
+xui=cfg.get("installation",{}).get("xui",{})
+subscription=cfg.get("network",{}).get("subscription",{})
+print("\t".join((cfg.get("node",{}).get("role","standalone"),cfg.get("node",{}).get("id",""),str(len(cfg.get("exits",[]))),str(len([r for r in cfg.get("routes",[]) if r.get("kind")=="cascade"])),runtime.get("node_status","unknown"),subscription.get("backend","wavemesh-renderer"),xui.get("release","unknown"),str(bool(xui.get("clients_api",False))).lower(),str(bool(xui.get("native_subscription",False))).lower())))
 PY
 )"
-  IFS=$'\t' read -r node_role node_id exit_count route_count node_status <<< "$report_summary"
+  IFS=$'\t' read -r node_role node_id exit_count route_count node_status subscription_backend xui_version clients_api native_subscription <<< "$report_summary"
 
   cat > "$WM_REPORT_TXT" <<EOF
 WaveMesh Node Report
@@ -42,7 +44,10 @@ Transport:           VLESS + XHTTP + TLS via nginx
 XHTTP public path:   ${XHTTP_PATH}
 XHTTP local listen:  127.0.0.1:${XHTTP_LOCAL_PORT}
 Subscription URL:    ${subscription_url}
-Subscription mode:   fallback-generated static file
+Subscription backend:${subscription_backend}
+3X-UI version:       ${xui_version}
+3X-UI Clients API:   ${clients_api}
+Native subscription: ${native_subscription}
 
 Important:
 - Public client links must use ${DOMAIN}:443.
@@ -72,7 +77,12 @@ EOF
   "xhttp_path": "${XHTTP_PATH}",
   "xhttp_local_port": "${XHTTP_LOCAL_PORT}",
   "subscription_url": "${subscription_url}",
-  "subscription_mode": "fallback-generated",
+  "subscription_backend": "${subscription_backend}",
+  "xui": {
+    "version": "${xui_version}",
+    "clients_api": ${clients_api},
+    "native_subscription": ${native_subscription}
+  },
   "fingerprint": "${FINGERPRINT}",
   "validation_status": "ok"
 }

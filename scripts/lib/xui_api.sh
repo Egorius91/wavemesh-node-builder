@@ -98,6 +98,13 @@ wm_xui_wait_ready() {
   return 1
 }
 
+wm_xui_probe_clients_api() {
+  wm_xui_request_success GET /panel/api/clients/list/paged none >/dev/null || {
+    wm_warn "Installed 3X-UI does not provide the required first-class Clients API"
+    return 1
+  }
+}
+
 wm_xui_discover_capabilities() {
   local openapi_file
   openapi_file="$(mktemp)"
@@ -135,6 +142,8 @@ path=Path(os.environ["WM_CONFIG_JSON"])
 cfg=json.loads(path.read_text(encoding="utf-8"))
 cfg.setdefault("panel", {})["api_auth"]={"mode":"bearer","token_name":os.environ["TOKEN_NAME"],"token":os.environ["TOKEN"]}
 cfg.setdefault("installation", {}).setdefault("xui", {})["adapter"]={"version":1,"capabilities":json.loads(os.environ["CAPABILITIES"])}
+cfg["installation"]["xui"]["clients_api"]=True
+cfg["installation"]["xui"]["native_subscription"]=True
 fd,temp=tempfile.mkstemp(prefix=".config.", dir=path.parent)
 try:
     with os.fdopen(fd,"w",encoding="utf-8") as out:
@@ -161,6 +170,7 @@ wm_xui_bootstrap_api_token() {
   local capabilities token_name payload response token existing_token
   if [[ -n "${PANEL_TOKEN:-}" ]]; then
     wm_xui_request_success GET /panel/api/inbounds/list none >/dev/null || return 1
+    wm_xui_probe_clients_api || return 1
     return 0
   fi
 
@@ -174,6 +184,7 @@ wm_xui_bootstrap_api_token() {
     PANEL_TOKEN="$existing_token"
     if wm_xui_request_success GET /panel/api/inbounds/list none >/dev/null; then
       wm_xui_store_api_state "$existing_token" "$token_name" "$capabilities"
+      wm_xui_probe_clients_api || return 1
       wm_export_config_env_from_json
       wm_success "Existing 3X-UI bearer API token recovered and verified"
       return 0
@@ -190,6 +201,7 @@ wm_xui_bootstrap_api_token() {
   wm_xui_store_api_state "$token" "$token_name" "$capabilities"
   PANEL_TOKEN="$token"
   wm_xui_request_success GET /panel/api/inbounds/list none >/dev/null || { wm_warn "New 3X-UI bearer token failed verification"; return 1; }
+  wm_xui_probe_clients_api || return 1
   wm_export_config_env_from_json
   wm_success "3X-UI bearer API token created and verified"
 }

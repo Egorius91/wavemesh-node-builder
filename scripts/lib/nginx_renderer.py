@@ -42,12 +42,21 @@ def render_location(path,port,allowed_ips):
 def render(config):
     subscription_path=configured_subscription_base(config)
     seen={config.get("panel",{}).get("path"),config.get("network",{}).get("xhttp",{}).get("path")}; blocks=[]
-    subscription_paths=client_subscription_paths(config)
-    for client,sub_id,path in subscription_paths:
-        if path in seen: raise ValueError(f"managed path collision: {path}")
-        seen.add(path); blocks.append("\n".join([f"location = {path} {{","    root /var/www/wavemesh-sub/users;",f"    try_files /{sub_id}.txt =404;","    default_type text/plain;",'    add_header Cache-Control "no-store" always;','    add_header Profile-Title "base64:V2F2ZU1lc2hWUE4=" always;',"}"]))
-    if subscription_path and not any(path == subscription_path for _,_,path in subscription_paths):
+    backend=config.get("network",{}).get("subscription",{}).get("backend","wavemesh-renderer")
+    if backend=="xui-native":
+        if not subscription_path: raise ValueError("xui-native requires an opaque configured subscription path")
         seen.add(subscription_path)
+        no_slash=subscription_path.rstrip("/")
+        blocks.append("\n".join(["# wavemesh-subscription-backend: xui-native",f"location = {no_slash} {{",f"    return 301 https://$host{subscription_path};","}","",f"location {subscription_path} {{","    proxy_pass http://127.0.0.1:2096;","    proxy_http_version 1.1;","    proxy_set_header Host $host;","    proxy_set_header X-Forwarded-Proto https;","    proxy_set_header X-Forwarded-Host $host;","    proxy_set_header X-Forwarded-Port 443;","    proxy_redirect off;","    proxy_buffering off;","    proxy_hide_header Profile-Title;",'    add_header Profile-Title "base64:V2F2ZU1lc2hWUE4=" always;',"}"]))
+    elif backend=="wavemesh-renderer":
+        blocks.append("# wavemesh-subscription-backend: wavemesh-renderer")
+        subscription_paths=client_subscription_paths(config)
+        for client,sub_id,path in subscription_paths:
+            if path in seen: raise ValueError(f"managed path collision: {path}")
+            seen.add(path); blocks.append("\n".join([f"location = {path} {{","    root /var/www/wavemesh-sub/users;",f"    try_files /{sub_id}.txt =404;","    default_type text/plain;",'    add_header Cache-Control "no-store" always;','    add_header Profile-Title "base64:V2F2ZU1lc2hWUE4=" always;',"}"]))
+        if subscription_path and not any(path == subscription_path for _,_,path in subscription_paths): seen.add(subscription_path)
+    else:
+        raise ValueError(f"unsupported subscription backend: {backend}")
     for peer in sorted(config.get("relay_peers",[]),key=lambda x:x["id"]):
         if not peer.get("enabled",True): continue
         inbound=peer["inbound"]; path=inbound["public_path"]

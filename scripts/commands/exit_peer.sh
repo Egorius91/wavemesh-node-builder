@@ -16,7 +16,7 @@ wm_exit_peer_create() {
 import json,os
 print(json.dumps([{"id":os.environ["UUID"],"email":os.environ["TAG"],"enable":True,"flow":"","limitIp":0,"totalGB":0,"expiryTime":0,"tgId":0,"subId":""}]))
 PY
-  python3 "$WM_INBOUND_TOOL" build --tag "$tag" --port "$port" --path "$path" --host "$DOMAIN" --clients "$clients" --output "$desired"
+  python3 "$WM_INBOUND_TOOL" build --tag "$tag" --remark "--!${tag}" --port "$port" --path "$path" --host "$DOMAIN" --clients "$clients" --output "$desired"
   inbound_id="$(wm_inbound_reconcile "$desired")" || wm_fail "Could not create and verify relay inbound"
   python3 "$WM_EXIT_PEER_TOOL" create --config "$WM_CONFIG_JSON" --candidate "$candidate" --manifest "$manifest" --entry-id "$entry_id" --entry-ip "$entry_ip" --display-name "$display_name" --path "$path" --uuid "$uuid" --port "$port" --inbound-id "$inbound_id" || wm_fail "Could not build relay peer desired state"
   wm_nginx_apply_desired "$candidate" "$transaction" || wm_fail "nginx rejected relay location; transaction will be rolled back"

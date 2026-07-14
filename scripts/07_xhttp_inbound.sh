@@ -14,7 +14,7 @@ wm_xui_api_get() {
 }
 
 wm_build_xhttp_inbound_payload() {
-  DOMAIN="$DOMAIN" FINGERPRINT="$FINGERPRINT" FIRST_CLIENT_UUID="$FIRST_CLIENT_UUID" XHTTP_LOCAL_PORT="$XHTTP_LOCAL_PORT" XHTTP_PATH="$XHTTP_PATH" NODE_NAME="$NODE_NAME" python3 - <<'PY'
+  DOMAIN="$DOMAIN" FINGERPRINT="$FINGERPRINT" FIRST_CLIENT_UUID="$FIRST_CLIENT_UUID" FIRST_CLIENT_SUB_ID="$FIRST_CLIENT_SUB_ID" XHTTP_LOCAL_PORT="$XHTTP_LOCAL_PORT" XHTTP_PATH="$XHTTP_PATH" NODE_NAME="$NODE_NAME" python3 - <<'PY'
 import json
 import os
 
@@ -22,7 +22,7 @@ port = int(os.environ['XHTTP_LOCAL_PORT'])
 path = os.environ['XHTTP_PATH']
 domain = os.environ['DOMAIN']
 client_id = os.environ['FIRST_CLIENT_UUID']
-email = os.environ['NODE_NAME'] + '-1'
+email = 'wm.client-1.route-standalone-default'
 payload = {
   'up': 0,
   'down': 0,
@@ -43,7 +43,7 @@ payload = {
       'expiryTime': 0,
       'enable': True,
       'tgId': 0,
-      'subId': ''
+      'subId': os.environ['FIRST_CLIENT_SUB_ID']
     }],
     'decryption': 'none',
     'fallbacks': []
@@ -163,7 +163,9 @@ wm_create_xhttp_inbound() {
   wm_info "Creating VLESS + XHTTP inbound via 3X-UI API"
   wm_load_config
   FIRST_CLIENT_UUID="${CLIENT_UUIDS%%,*}"
+  FIRST_CLIENT_SUB_ID="$(python3 -c 'import json,sys; print(json.load(open(sys.argv[1]))["clients"][0].get("subscription_id",""))' "$WM_CONFIG_JSON")"
   [[ -n "$FIRST_CLIENT_UUID" ]] || wm_fail "No canonical client UUID found in config.json"
+  [[ -n "$FIRST_CLIENT_SUB_ID" ]] || wm_fail "No canonical client subId found in config.json"
 
   if ! wm_xui_login; then
     wm_fail "Could not login to 3X-UI API; stopping before subscription generation"

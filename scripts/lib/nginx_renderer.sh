@@ -1,6 +1,16 @@
 #!/usr/bin/env bash
 WM_NGINX_RENDERER="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/nginx_renderer.py"
+WM_NGINX_SITE_TOOL="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/nginx_site.py"
 WM_NGINX_MANAGED_CONF="/etc/nginx/wavemesh-managed-locations.conf"
+WM_NGINX_SITE_CONF="/etc/nginx/sites-available/wavemesh-node.conf"
+
+wm_nginx_sanitize_subscription_site() {
+  local config_file="$1" transaction_dir="$2" candidate
+  [[ -f "$WM_NGINX_SITE_CONF" ]] || return 0
+  candidate="$transaction_dir/nginx.site.candidate.conf"
+  python3 "$WM_NGINX_SITE_TOOL" --site "$WM_NGINX_SITE_CONF" --config "$config_file" --output "$candidate" || return 1
+  install -m 0644 "$candidate" "$WM_NGINX_SITE_CONF"
+}
 wm_nginx_apply_desired() {
   local config_file="$1" transaction_dir="$2" candidate backup
   candidate="$transaction_dir/nginx.candidate.conf"; backup="$transaction_dir/nginx.before.conf"

@@ -5,6 +5,11 @@ WM_SUBSCRIPTION_PATH_TOOL="${WM_SUBSCRIPTION_PATH_TOOL:-$WM_LIB_DIR/lib/subscrip
 wm_subscription_rebuild_command() {
   local transaction candidate prepared metadata backup
   wm_lock_mutation "subscription-rebuild"; wm_load_config
+  if wm_subscription_backend_is_native; then
+    wm_info "WaveMesh renderer is inactive because subscription backend is xui-native"
+    wm_subscription_validate_native_command
+    return 0
+  fi
   wm_apply_subscription_presentation || wm_fail "Could not apply subscription presentation settings"
   wm_transaction_begin "subscription-rebuild"; transaction="$WM_ACTIVE_TRANSACTION"; candidate="$transaction/config.candidate.json"; prepared="$transaction/subscriptions"; metadata="$transaction/subscriptions.json"; backup="$transaction/subscriptions.before"
   mkdir -p "$prepared" "$backup"
@@ -22,7 +27,9 @@ PY
 
 wm_subscription_validate_command() {
   local transaction candidate prepared metadata item sub_id installed generated
-  wm_load_config; transaction="$(mktemp -d)"; candidate="$transaction/config.json"; prepared="$transaction/subscriptions"; metadata="$transaction/metadata.json"; mkdir -p "$prepared"
+  wm_load_config
+  if wm_subscription_backend_is_native; then wm_subscription_validate_native_command "$@"; return; fi
+  transaction="$(mktemp -d)"; candidate="$transaction/config.json"; prepared="$transaction/subscriptions"; metadata="$transaction/metadata.json"; mkdir -p "$prepared"
   wm_subscription_prepare "$WM_CONFIG_JSON" "$candidate" "$prepared" "$metadata" || wm_fail "Could not render desired subscriptions"
   while IFS= read -r item; do
     sub_id="$(printf '%s' "$item" | python3 -c 'import json,sys; print(json.load(sys.stdin)["subscription_id"])')"; installed="$WM_SUB_DIR/users/${sub_id}.txt"; generated="$prepared/users/${sub_id}.txt"
@@ -65,10 +72,20 @@ wm_subscription_rotate_path_command() {
   args=(--config "$WM_CONFIG_JSON" --output "$raw_candidate")
   [[ -n "$requested" ]] && args+=(--path "$requested")
   plan="$(python3 "$WM_SUBSCRIPTION_PATH_TOOL" "${args[@]}")" || wm_fail "Could not build subscription path rotation"
-  wm_subscription_prepare "$raw_candidate" "$candidate" "$prepared" "$metadata" || wm_fail "Could not render rotated subscriptions"
-  wm_subscription_install_files "$prepared" "$backup"
+  if wm_subscription_backend_is_native "$raw_candidate"; then
+    cp "$raw_candidate" "$candidate"; printf '[]\n' > "$metadata"
+    wm_subscription_apply_xui_settings "$candidate" || wm_fail "Could not apply rotated 3X-UI subscription path"
+  else
+    wm_subscription_prepare "$raw_candidate" "$candidate" "$prepared" "$metadata" || wm_fail "Could not render rotated subscriptions"
+    wm_subscription_install_files "$prepared" "$backup"
+  fi
+  wm_nginx_sanitize_subscription_site "$candidate" "$transaction" || wm_fail "Could not remove legacy subscription locations from nginx site"
   wm_nginx_apply_desired "$candidate" "$transaction" || wm_fail "nginx rejected rotated subscription locations; transaction will be rolled back"
-  wm_subscription_validate_public "$metadata" || wm_fail "Rotated public subscription validation failed; transaction will be rolled back"
+  if wm_subscription_backend_is_native "$candidate"; then
+    wm_subscription_validate_native "$candidate" || wm_fail "Rotated native subscription validation failed; transaction will be rolled back"
+  else
+    wm_subscription_validate_public "$metadata" || wm_fail "Rotated public subscription validation failed; transaction will be rolled back"
+  fi
   wm_atomic_install_json "$candidate" "$WM_CONFIG_JSON"; wm_export_config_env_from_json; wm_transaction_commit "$transaction"
   wm_success "Subscription path rotated. Update the bot and clients to the new URL before the next refresh"
   python3 - "$metadata" "$DOMAIN" <<'PY'
@@ -82,7 +99,9 @@ wm_subscription_command() {
   case "${1:-}" in
     rebuild) shift; wm_subscription_rebuild_command "$@" ;;
     validate) shift; wm_subscription_validate_command "$@" ;;
+    validate-native) shift; wm_subscription_validate_native_command "$@" ;;
     rotate-path) shift; wm_subscription_rotate_path_command "$@" ;;
-    *) wm_fail "Usage: wavemesh subscription rebuild|validate|rotate-path --dry-run|--apply [--path PATH]" ;;
+    backend) shift; wm_subscription_backend_command "$@" ;;
+    *) wm_fail "Usage: wavemesh subscription rebuild|validate|validate-native|rotate-path|backend" ;;
   esac
 }

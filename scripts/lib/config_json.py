@@ -64,7 +64,35 @@ def migrate_v1(config, backup_path):
     config.setdefault("routes", [{"id": "route-standalone-default", "kind": "direct", "display_name": "Direct", "enabled": True, "sort_order": 0}])
     config.setdefault("migrations", []).append({"from": 1, "to": 2, "applied_at": utc_now(), "backup": str(backup_path)})
     config.setdefault("builder", {})["version"] = "0.2.0"
+    config.setdefault("network", {}).setdefault("subscription", {})["backend"] = "wavemesh-renderer"
     return config
+
+
+def migrate_v2_defaults(config, backup_path):
+    """Add compatible defaults without changing a running node's subscription backend."""
+    subscription = config.setdefault("network", {}).setdefault("subscription", {})
+    if "backend" in subscription:
+        return config, False
+    has_metadata = any(client.get("subscription_id") for client in config.get("clients", []))
+    mode = str(subscription.get("mode", ""))
+    nginx_path = Path(os.environ.get("WM_NGINX_MANAGED_CONF", "/etc/nginx/wavemesh-managed-locations.conf"))
+    has_locations = False
+    try:
+        nginx_text = nginx_path.read_text(encoding="utf-8")
+        has_locations = "/var/www/wavemesh-sub/users" in nginx_text or "try_files /sub.txt" in nginx_text
+    except OSError:
+        pass
+    files_present = Path(os.environ.get("WM_SUB_DIR", "/var/www/wavemesh-sub")).joinpath("sub.txt").is_file()
+    renderer_state = mode in {"generated", "fallback-generated"} or has_locations or files_present
+    detected = "wavemesh-renderer" if renderer_state or (has_metadata and mode != "native") else "xui-native"
+    subscription["backend"] = detected
+    config.setdefault("migrations", []).append({
+        "name": "subscription-backend",
+        "applied_at": utc_now(),
+        "backup": str(backup_path),
+        "selected_backend": detected,
+    })
+    return config, True
 
 
 def migrate(path, backup_dir):
@@ -72,6 +100,15 @@ def migrate(path, backup_dir):
     config = json.loads(path.read_text(encoding="utf-8"))
     version = config.get("schema_version", config.get("version", 1))
     if version == 2:
+        backup_dir = Path(backup_dir)
+        backup_dir.mkdir(parents=True, exist_ok=True)
+        backup_path = backup_dir / f"config.pre-subscription-backend.{datetime.now(timezone.utc).strftime('%Y%m%dT%H%M%SZ')}.json"
+        migrated, changed = migrate_v2_defaults(config, backup_path)
+        if not changed:
+            return
+        shutil.copy2(path, backup_path)
+        os.chmod(backup_path, 0o600)
+        atomic_write(path, migrated)
         return
     if version != 1:
         raise SystemExit(f"unsupported config schema version: {version}")

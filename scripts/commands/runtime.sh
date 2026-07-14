@@ -104,14 +104,18 @@ wm_runtime_prepare_subscriptions() {
   WM_RUNTIME_METADATA="$transaction/subscriptions.json"
   WM_RUNTIME_SUB_BACKUP="$transaction/subscriptions.before"
   mkdir -p "$WM_RUNTIME_PREPARED" "$WM_RUNTIME_SUB_BACKUP"
-  wm_subscription_prepare "$source" "$WM_RUNTIME_CANDIDATE" "$WM_RUNTIME_PREPARED" "$WM_RUNTIME_METADATA"
+  if wm_subscription_backend_is_native "$source"; then
+    cp "$source" "$WM_RUNTIME_CANDIDATE"; printf '[]\n' > "$WM_RUNTIME_METADATA"
+  else
+    wm_subscription_prepare "$source" "$WM_RUNTIME_CANDIDATE" "$WM_RUNTIME_PREPARED" "$WM_RUNTIME_METADATA"
+  fi
 }
 
 wm_runtime_apply_public_state() {
   local transaction="$1"
-  wm_subscription_install_files "$WM_RUNTIME_PREPARED" "$WM_RUNTIME_SUB_BACKUP"
+  if ! wm_subscription_backend_is_native "$WM_RUNTIME_CANDIDATE"; then wm_subscription_install_files "$WM_RUNTIME_PREPARED" "$WM_RUNTIME_SUB_BACKUP"; fi
   wm_nginx_apply_desired "$WM_RUNTIME_CANDIDATE" "$transaction" || return 1
-  wm_subscription_validate_public "$WM_RUNTIME_METADATA" || return 1
+  if wm_subscription_backend_is_native "$WM_RUNTIME_CANDIDATE"; then wm_subscription_validate_native "$WM_RUNTIME_CANDIDATE" || return 1; else wm_subscription_validate_public "$WM_RUNTIME_METADATA" || return 1; fi
 }
 
 wm_runtime_remove_xray_routes() {
@@ -146,14 +150,14 @@ PY
 
 wm_route_set() {
   local operation="$1"; shift
-  local route_id="" transaction candidate affected inbound_id old_enabled inbound_file outbound_file reconciled_id updated_candidate
+  local route_id="" transaction candidate affected inbound_id old_enabled display_name inbound_file outbound_file reconciled_id updated_candidate
   while [[ $# -gt 0 ]]; do case "$1" in --route-id) route_id="${2:-}"; shift 2;; *) wm_fail "Unknown route option: $1";; esac; done
   [[ -n "$route_id" ]] || wm_fail "Usage: wavemesh route ${operation} --route-id ID"
   wm_lock_mutation "route-${operation}"; wm_load_config; wm_require_entry_role; wm_transaction_begin "route-${operation}"; transaction="$WM_ACTIVE_TRANSACTION"; candidate="$transaction/config.candidate.json"; affected="$transaction/affected.json"
   python3 "$WM_RUNTIME_TOOL" mutate --config "$WM_CONFIG_JSON" --output "$candidate" --operation "$operation" --target "$route_id" --affected "$affected" || wm_fail "Could not build route mutation"
-  read -r inbound_id old_enabled < <(python3 - "$WM_CONFIG_JSON" "$route_id" <<'PY'
+  IFS=$'\t' read -r inbound_id old_enabled display_name < <(python3 - "$WM_CONFIG_JSON" "$route_id" <<'PY'
 import json,sys
-r=next(x for x in json.load(open(sys.argv[1],encoding="utf-8"))["routes"] if x["id"]==sys.argv[2]); print(r["entry"]["inbound_id"],str(r.get("enabled",True)).lower())
+r=next(x for x in json.load(open(sys.argv[1],encoding="utf-8"))["routes"] if x["id"]==sys.argv[2]); print("\t".join((str(r["entry"]["inbound_id"]),str(r.get("enabled",True)).lower(),r.get("display_name") or r["entry"]["inbound_tag"])))
 PY
 )
   inbound_file="$transaction/inbound.json"; outbound_file="$transaction/outbound.json"
@@ -166,6 +170,7 @@ PY
     candidate="$updated_candidate"
     wm_xray_apply_managed_route "$outbound_file" "$(python3 -c 'import json,sys; r=next(x for x in json.load(open(sys.argv[1]))["routes"] if x["id"]==sys.argv[2]); print(r["entry"]["inbound_tag"])' "$candidate" "$route_id")" "$(python3 -c 'import json,sys; r=next(x for x in json.load(open(sys.argv[1]))["routes"] if x["id"]==sys.argv[2]); print(r["routing"]["outbound_tag"])' "$candidate" "$route_id")" "$(python3 -c 'import json,sys; r=next(x for x in json.load(open(sys.argv[1]))["routes"] if x["id"]==sys.argv[2]); print(r["routing"]["rule_tag"])' "$candidate" "$route_id")" || wm_fail "Could not verify managed route"
   else
+    wm_inbound_set_remark "$inbound_id" "--!${display_name}" || wm_fail "Could not hide disabled route inbound"
     wm_inbound_set_enabled "$inbound_id" false || wm_fail "Could not disable route inbound"
   fi
   wm_runtime_prepare_subscriptions "$candidate" "$transaction" || wm_fail "Could not render subscriptions"
@@ -197,10 +202,11 @@ wm_route_remove() {
 wm_route_command() {
   case "${1:-}" in
     list) shift; wm_runtime_status "$@";;
+    public) shift; [[ "${1:-}" == "--json" && $# -eq 1 ]] || wm_fail "Usage: wavemesh routes public --json"; wm_load_config; python3 "$WM_SUBSCRIPTION_BACKEND_TOOL" public-routes --config "$WM_CONFIG_JSON" ;;
     enable) shift; wm_route_set enable "$@";;
     disable) shift; wm_route_set disable "$@";;
     remove) shift; wm_route_remove "$@";;
-    *) wm_fail "Usage: wavemesh route list [--json] | enable|disable|remove --route-id ID";;
+    *) wm_fail "Usage: wavemesh route list [--json] | public --json | enable|disable|remove --route-id ID";;
   esac
 }
 

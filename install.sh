@@ -16,6 +16,10 @@ source "$SCRIPTS_DIR/08_subscriptions.sh"
 source "$SCRIPTS_DIR/09_report.sh"
 source "$SCRIPTS_DIR/10_diagnostics.sh"
 source "$SCRIPTS_DIR/11_subscription_paths.sh"
+source "$SCRIPTS_DIR/lib/nginx_renderer.sh"
+source "$SCRIPTS_DIR/lib/subscription_renderer.sh"
+source "$SCRIPTS_DIR/lib/subscription_backend.sh"
+source "$SCRIPTS_DIR/lib/transaction.sh"
 
 main() {
   wm_banner
@@ -44,12 +48,17 @@ main() {
     standalone)
       wm_create_clients
       wm_create_xhttp_inbound
-      wm_generate_fallback_subscription
-      wm_validate_subscription_output
+      if wm_subscription_backend_is_native; then
+        wm_subscription_validate_native "$WM_CONFIG_JSON" "$(python3 -c 'import json,sys; print(json.load(open(sys.argv[1]))["clients"][0]["subscription_id"])' "$WM_CONFIG_JSON")" 1 || wm_fail "Native subscription validation failed"
+      else
+        wm_generate_fallback_subscription
+        wm_validate_subscription_output
+      fi
       wm_run_diagnostics
       ;;
     entry)
       wm_create_clients
+      if wm_subscription_backend_is_native; then wm_subscription_validate_native "$WM_CONFIG_JSON" || wm_fail "Native subscription validation failed"; fi
       wm_info "Entry base installed; add Exit manifests with wavemesh cascade add-exit"
       ;;
     exit)

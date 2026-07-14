@@ -39,10 +39,15 @@ wm_cascade_add_exit() {
   python3 "$WM_CASCADE_TOOL" finalize --candidate "$candidate" --route-id "$route_id" --inbound-id "$inbound_id" || wm_fail "Could not finalize Entry desired state"
   wm_xray_apply_managed_route "$outbound" "$inbound_tag" "$outbound_tag" "$rule_tag" || wm_fail "Could not apply and verify Exit outbound routing"
   prepared_subs="$transaction/subscriptions"; sub_metadata="$transaction/subscriptions.json"; sub_backup="$transaction/subscriptions.before"; subscription_candidate="$transaction/config.subscription.json"; mkdir -p "$prepared_subs" "$sub_backup"
-  wm_subscription_prepare "$candidate" "$subscription_candidate" "$prepared_subs" "$sub_metadata" || wm_fail "Could not render route subscriptions"
-  candidate="$subscription_candidate"; wm_subscription_install_files "$prepared_subs" "$sub_backup"
+  if wm_subscription_backend_is_native "$candidate"; then
+    cp "$candidate" "$subscription_candidate"; printf '[]\n' > "$sub_metadata"
+  else
+    wm_subscription_prepare "$candidate" "$subscription_candidate" "$prepared_subs" "$sub_metadata" || wm_fail "Could not render route subscriptions"
+    wm_subscription_install_files "$prepared_subs" "$sub_backup"
+  fi
+  candidate="$subscription_candidate"
   wm_nginx_apply_desired "$candidate" "$transaction" || wm_fail "nginx rejected route; transaction will be rolled back"
-  wm_subscription_validate_public "$sub_metadata" || wm_fail "Public subscriptions failed validation; transaction will be rolled back"
+  if wm_subscription_backend_is_native "$candidate"; then wm_subscription_validate_native "$candidate" || wm_fail "Native subscriptions failed validation; transaction will be rolled back"; else wm_subscription_validate_public "$sub_metadata" || wm_fail "Public subscriptions failed validation; transaction will be rolled back"; fi
   wm_atomic_install_json "$candidate" "$WM_CONFIG_JSON"; wm_export_config_env_from_json; wm_transaction_commit "$transaction"
   wm_success "Exit imported and route verified: ${exit_id}"; wm_info "Keep or securely delete the join manifest after confirming service"
 }

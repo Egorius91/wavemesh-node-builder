@@ -22,6 +22,7 @@ XHTTP_LOCAL_PORT=""
 XHTTP_PATH=""
 SUB_PATH=""
 SUB_LOCAL_PORT=""
+SUBSCRIPTION_BACKEND="xui-native"
 FINGERPRINT="randomized"
 NODE_NAME=""
 WEB_IDENTITY_NAME=""
@@ -221,7 +222,7 @@ cfg = {
     "http_port": 80,
     "public_port": 443,
     "xhttp": {"listen": "127.0.0.1", "port": int("$XHTTP_LOCAL_PORT"), "path": "$XHTTP_PATH"},
-    "subscription": {"path": "$SUB_PATH", "mode": "generated", "local_port": int("$SUB_LOCAL_PORT")}
+    "subscription": {"backend": "xui-native", "path": "$SUB_PATH", "mode": "native", "local_port": 2096}
   },
   "panel": {"type": "3x-ui", "listen_port": int("$PANEL_PORT"), "path": "$PANEL_PATH", "username": "$PANEL_USERNAME", "password": "$PANEL_PASSWORD", "api_auth": {"mode": "pending", "token_name": "wavemesh-node-builder", "token": ""}},
   "tls": {"provider": "letsencrypt", "email": "$EMAIL", "certificate_path": "/etc/letsencrypt/live/$DOMAIN/fullchain.pem", "key_path": "/etc/letsencrypt/live/$DOMAIN/privkey.pem"},
@@ -261,6 +262,7 @@ vals={
 "XHTTP_PATH": cfg["network"]["xhttp"]["path"],
 "SUB_PATH": cfg["network"]["subscription"]["path"],
 "SUB_LOCAL_PORT": str(cfg["network"]["subscription"].get("local_port", "")),
+"SUBSCRIPTION_BACKEND": cfg["network"]["subscription"].get("backend", "wavemesh-renderer"),
 "CLIENT_COUNT": str(max(len(clients), int("$CLIENT_COUNT"))),
 "FINGERPRINT": "$FINGERPRINT",
 "NODE_NAME": "$NODE_NAME",
@@ -325,6 +327,7 @@ PY
 
 wm_load_config() {
   if [[ -f "$WM_CONFIG_JSON" ]]; then
+    wm_migrate_config_if_needed
     wm_export_config_env_from_json
   fi
   [[ -f "$WM_STATE_DIR/config.env" ]] || wm_fail "Missing config: $WM_CONFIG_JSON or $WM_STATE_DIR/config.env"

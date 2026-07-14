@@ -16,7 +16,7 @@ wm_auto_create() {
   python3 "$WM_AUTO_TOOL" prepare --config "$WM_CONFIG_JSON" --candidate "$candidate" --clients "$clients" --id "$auto_id" --display-name "$display_name" --exit-ids "$exit_ids" --port "$port" --path "$path" --sort-order "$sort_order" || wm_fail "Could not build Auto Route desired state"
   route_id="route-auto-${auto_id}"; inbound_tag="wm-route-auto-${auto_id}"; balancer_tag="wm-balancer-${auto_id}"; rule_tag="wm-rule-auto-${auto_id}"
   selectors="$(python3 -c 'import json,sys; c=json.load(open(sys.argv[1],encoding="utf-8")); print(",".join(next(x["selector"] for x in c["balancers"] if x["id"]==sys.argv[2])))' "$candidate" "$auto_id")"
-  python3 "$WM_INBOUND_TOOL" build --tag "$inbound_tag" --remark "$display_name" --port "$port" --path "$path" --host "$DOMAIN" --clients "$clients" --public-domain "$DOMAIN" --fingerprint "$FINGERPRINT" --output "$desired"
+  python3 "$WM_INBOUND_TOOL" build --tag "$inbound_tag" --remark "--!${display_name}" --port "$port" --path "$path" --host "$DOMAIN" --clients "$clients" --public-domain "$DOMAIN" --fingerprint "$FINGERPRINT" --output "$desired"
   inbound_id="$(wm_inbound_reconcile "$desired")" || wm_fail "Could not create and verify Auto Route inbound"
   python3 "$WM_AUTO_TOOL" finalize --candidate "$candidate" --route-id "$route_id" --inbound-id "$inbound_id" || wm_fail "Could not finalize Auto Route desired state"
   wm_xray_apply_managed_balancer "$selectors" "$inbound_tag" "$balancer_tag" "$rule_tag" leastPing || wm_fail "Could not apply and verify Auto Route balancer"
@@ -97,21 +97,41 @@ PY
 }
 
 wm_auto_publish_toggle() {
-  local published="$1" auto_id="auto-europe" transaction candidate prepared_subs sub_metadata sub_backup subscription_candidate; shift
-  while [[ $# -gt 0 ]]; do case "$1" in --id) auto_id="${2:-}"; shift 2 ;; *) wm_fail "Usage: wavemesh cascade auto publish|unpublish [--id ID]" ;; esac; done
+  local published="$1" auto_id="auto-europe" json_output=0 transaction candidate prepared_subs sub_metadata sub_backup subscription_candidate inbound_id display_name target_remark; shift
+  while [[ $# -gt 0 ]]; do case "$1" in --id) auto_id="${2:-}"; shift 2 ;; --json) json_output=1; shift ;; *) wm_fail "Usage: wavemesh cascade auto publish|unpublish [--id ID] [--json]" ;; esac; done
   wm_lock_mutation "auto-route-publish"; wm_load_config; wm_require_entry_role
   wm_transaction_begin "auto-route-publish"; transaction="$WM_ACTIVE_TRANSACTION"; candidate="$transaction/config.auto.publish.json"
   python3 "$WM_AUTO_TOOL" set-published --config "$WM_CONFIG_JSON" --output "$candidate" --id "$auto_id" --published "$published" || wm_fail "Could not update Auto Route publication state"
+  read -r inbound_id display_name < <(python3 - "$candidate" "$auto_id" <<'PY'
+import json,sys
+r=next(x for x in json.load(open(sys.argv[1],encoding="utf-8"))["routes"] if x.get("kind")=="auto" and (x.get("auto_id")==sys.argv[2] or x.get("id")=="route-auto-"+sys.argv[2]))
+print(r["entry"]["inbound_id"],r["display_name"])
+PY
+)
+  target_remark="$display_name"; [[ "$published" == "true" ]] || target_remark="--!${display_name}"
+  wm_inbound_set_remark "$inbound_id" "$target_remark" || wm_fail "Could not update Auto Route visibility"
   prepared_subs="$transaction/subscriptions"; sub_metadata="$transaction/subscriptions.json"; sub_backup="$transaction/subscriptions.before"; subscription_candidate="$transaction/config.subscription.json"; mkdir -p "$prepared_subs" "$sub_backup"
-  wm_subscription_prepare "$candidate" "$subscription_candidate" "$prepared_subs" "$sub_metadata" || wm_fail "Could not render subscriptions"
-  candidate="$subscription_candidate"; wm_subscription_install_files "$prepared_subs" "$sub_backup"
+  if wm_subscription_backend_is_native "$candidate"; then
+    cp "$candidate" "$subscription_candidate"; printf '[]\n' > "$sub_metadata"
+  else
+    wm_subscription_prepare "$candidate" "$subscription_candidate" "$prepared_subs" "$sub_metadata" || wm_fail "Could not render subscriptions"
+    wm_subscription_install_files "$prepared_subs" "$sub_backup"
+  fi
+  candidate="$subscription_candidate"
   wm_nginx_apply_desired "$candidate" "$transaction" || wm_fail "nginx rejected Auto Route publication"
-  wm_subscription_validate_public "$sub_metadata" || wm_fail "Public subscriptions failed validation"
+  if wm_subscription_backend_is_native "$candidate"; then wm_subscription_validate_native "$candidate" || wm_fail "Native subscriptions failed validation"; else wm_subscription_validate_public "$sub_metadata" || wm_fail "Public subscriptions failed validation"; fi
   wm_atomic_install_json "$candidate" "$WM_CONFIG_JSON"; wm_export_config_env_from_json; wm_transaction_commit "$transaction"
-  wm_success "Auto Route ${auto_id} $([[ "$published" == "true" ]] && echo published || echo unpublished)"
+  if (( json_output == 1 )); then
+    AUTO_ID="$auto_id" PUBLISHED="$published" INBOUND_ID="$inbound_id" DISPLAY_NAME="$display_name" python3 - <<'PY'
+import json,os
+print(json.dumps({"auto_id":os.environ["AUTO_ID"],"published":os.environ["PUBLISHED"]=="true","inbound_id":int(os.environ["INBOUND_ID"]),"display_name":os.environ["DISPLAY_NAME"]},ensure_ascii=False))
+PY
+  else
+    wm_success "Auto Route ${auto_id} $([[ "$published" == "true" ]] && echo published || echo unpublished)"
+  fi
 }
 
 wm_auto_command() {
   case "${1:-}" in
-    create) shift; wm_auto_create "$@" ;; status|list) shift; wm_auto_status "$@" ;; health) shift; wm_auto_health "$@" ;; enable) shift; wm_auto_toggle true "$@" ;; disable) shift; wm_auto_toggle false "$@" ;; override) shift; wm_auto_override "$@" ;; publish) shift; wm_auto_publish_toggle true "$@" ;; unpublish) shift; wm_auto_publish_toggle false "$@" ;; *) wm_fail "Usage: wavemesh cascade auto create [...] | status [--json] | health [--json] | enable|disable [--id ID] | override [--id ID] --exit-id EXIT_ID|clear | publish|unpublish [--id ID]" ;; esac
+    create) shift; wm_auto_create "$@" ;; status|list) shift; wm_auto_status "$@" ;; health) shift; wm_auto_health "$@" ;; enable) shift; wm_auto_toggle true "$@" ;; disable) shift; wm_auto_toggle false "$@" ;; override) shift; wm_auto_override "$@" ;; publish) shift; wm_auto_publish_toggle true "$@" ;; unpublish) shift; wm_auto_publish_toggle false "$@" ;; *) wm_fail "Usage: wavemesh cascade auto create [...] | status [--json] | health [--json] | enable|disable [--id ID] | override [--id ID] --exit-id EXIT_ID|clear | publish|unpublish [--id ID] [--json]" ;; esac
 }

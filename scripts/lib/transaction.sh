@@ -22,10 +22,12 @@ wm_lock_mutation() {
 }
 
 wm_transaction_snapshot() {
-  local transaction="$1" db="" nginx_conf="${WM_NGINX_MANAGED_CONF:-/etc/nginx/wavemesh-managed-locations.conf}"
+  local transaction="$1" db="" nginx_conf="${WM_NGINX_MANAGED_CONF:-/etc/nginx/wavemesh-managed-locations.conf}" nginx_site="/etc/nginx/sites-available/wavemesh-node.conf"
   cp "$WM_CONFIG_JSON" "$transaction/config.before.json"
+  if [[ -f "$WM_STATE_DIR/config.env" ]]; then cp "$WM_STATE_DIR/config.env" "$transaction/config.env.before"; else : > "$transaction/config.env.before.absent"; fi
   if [[ -f "$WM_RUNTIME_JSON" ]]; then cp "$WM_RUNTIME_JSON" "$transaction/runtime.before.json"; else : > "$transaction/runtime.before.absent"; fi
   if [[ -f "$nginx_conf" ]]; then cp "$nginx_conf" "$transaction/nginx.before.conf"; else : > "$transaction/nginx.before.absent"; fi
+  if [[ -f "$nginx_site" ]]; then cp "$nginx_site" "$transaction/nginx.site.before.conf"; else : > "$transaction/nginx.site.before.absent"; fi
   mkdir -p "$transaction/subscriptions.before"
   if [[ -d "$WM_SUB_DIR" ]]; then cp -a "$WM_SUB_DIR/." "$transaction/subscriptions.before/"; else : > "$transaction/subscriptions.before.absent"; fi
   if declare -F wm_xray_get_template >/dev/null && [[ "${NODE_ROLE:-}" == "entry" ]]; then wm_xray_get_template "$transaction/xray.before.json" || return 1; fi
@@ -76,7 +78,9 @@ if json.load(open(sys.argv[1],encoding="utf-8")) != json.load(open(sys.argv[2],e
     raise SystemExit("Xray rollback read-back differs from snapshot")
 PY
   fi
-  if declare -F wm_subscription_prepare >/dev/null && declare -F wm_subscription_validate_public >/dev/null; then
+  if declare -F wm_subscription_backend_is_native >/dev/null && wm_subscription_backend_is_native "$WM_CONFIG_JSON"; then
+    wm_subscription_validate_native "$WM_CONFIG_JSON" || return 1
+  elif declare -F wm_subscription_prepare >/dev/null && declare -F wm_subscription_validate_public >/dev/null; then
     mkdir -p "$check_dir/rendered"
     wm_subscription_prepare "$WM_CONFIG_JSON" "$check_dir/config.json" "$check_dir/rendered" "$check_dir/metadata.json" || return 1
     wm_subscription_validate_public "$check_dir/metadata.json" || return 1
@@ -95,10 +99,11 @@ wm_transaction_wait_xui() {
 }
 
 wm_transaction_rollback() {
-  local transaction="$1" message="${2:-automatic rollback}" failed=0 db="" nginx_conf="${WM_NGINX_MANAGED_CONF:-/etc/nginx/wavemesh-managed-locations.conf}"
+  local transaction="$1" message="${2:-automatic rollback}" failed=0 db="" nginx_conf="${WM_NGINX_MANAGED_CONF:-/etc/nginx/wavemesh-managed-locations.conf}" nginx_site="/etc/nginx/sites-available/wavemesh-node.conf"
   trap - EXIT INT TERM HUP
   python3 "$WM_TRANSACTION_TOOL" mark --transaction "$transaction" --status recovering --message "$message" || failed=1
   [[ ! -f "$transaction/config.before.json" ]] || wm_atomic_install_json "$transaction/config.before.json" "$WM_CONFIG_JSON" || failed=1
+  if [[ -f "$transaction/config.env.before.absent" ]]; then rm -f "$WM_STATE_DIR/config.env"; elif [[ -f "$transaction/config.env.before" ]]; then install -m 0600 "$transaction/config.env.before" "$WM_STATE_DIR/config.env" || failed=1; fi
   if [[ -f "$transaction/runtime.before.absent" ]]; then rm -f "$WM_RUNTIME_JSON"; elif [[ -f "$transaction/runtime.before.json" ]]; then wm_atomic_install_json "$transaction/runtime.before.json" "$WM_RUNTIME_JSON" || failed=1; fi
   wm_load_config || failed=1
   if [[ -f "$transaction/x-ui.before.db" && -f "$transaction/x-ui.before.db.path" ]]; then
@@ -110,6 +115,7 @@ wm_transaction_rollback() {
   fi
   if [[ -f "$transaction/xray.before.json" ]] && declare -F wm_xray_apply_template >/dev/null; then wm_xray_apply_template "$transaction/xray.before.json" || failed=1; fi
   if [[ -f "$transaction/nginx.before.absent" ]]; then rm -f "$nginx_conf"; elif [[ -f "$transaction/nginx.before.conf" ]]; then install -m 0644 "$transaction/nginx.before.conf" "$nginx_conf" || failed=1; fi
+  if [[ -f "$transaction/nginx.site.before.absent" ]]; then rm -f "$nginx_site"; elif [[ -f "$transaction/nginx.site.before.conf" ]]; then install -m 0644 "$transaction/nginx.site.before.conf" "$nginx_site" || failed=1; fi
   rm -rf "$WM_SUB_DIR"
   if [[ ! -f "$transaction/subscriptions.before.absent" ]]; then
     mkdir -p "$WM_SUB_DIR"

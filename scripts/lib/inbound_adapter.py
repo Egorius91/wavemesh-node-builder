@@ -57,15 +57,15 @@ def merge_external_clients(desired, response):
     actual_settings=as_object(actual.get("settings"))
     managed=desired_settings.get("clients") if isinstance(desired_settings.get("clients"),list) else []
     existing=actual_settings.get("clients") if isinstance(actual_settings.get("clients"),list) else []
-    identities=set().union(*(client_identity(client) for client in managed if isinstance(client,dict)))
     external=[]
+    external_identities=set()
     for client in existing:
         if not isinstance(client,dict): continue
         email=str(client.get("email") or "")
         identity=client_identity(client)
-        if email.startswith("wm.") or identities.intersection(identity): continue
+        if email.startswith("wm.") or external_identities.intersection(identity): continue
         external.append(client)
-        identities.update(identity)
+        external_identities.update(identity)
     desired_settings["clients"]=[client for client in managed if isinstance(client,dict)]+external
     desired["settings"]=desired_settings
     return desired
@@ -79,20 +79,39 @@ def plan(desired, response):
     return {"action":"noop" if normalized(actual)==wanted else "update","id":inbound_id}
 
 
+def update_remark(response, inbound_id, remark):
+    items=response.get("obj") if isinstance(response,dict) else None
+    if not isinstance(items,list): raise ValueError("3X-UI inbound list response has no obj array")
+    inbound=next((dict(item) for item in items if str(item.get("id") or item.get("Id"))==str(inbound_id)),None)
+    if inbound is None: raise ValueError(f"inbound not found: {inbound_id}")
+    inbound["remark"]=remark
+    stream=as_object(inbound.get("streamSettings"))
+    proxies=stream.get("externalProxy") if isinstance(stream.get("externalProxy"),list) else []
+    for proxy in proxies:
+        if isinstance(proxy,dict): proxy["remark"]=remark
+    stream["externalProxy"]=proxies
+    inbound["streamSettings"]=stream
+    return inbound
+
+
 def main():
     parser=argparse.ArgumentParser(); sub=parser.add_subparsers(dest="command",required=True)
     make=sub.add_parser("build")
     make.add_argument("--tag",required=True); make.add_argument("--remark",default=""); make.add_argument("--port",type=int,required=True); make.add_argument("--path",required=True); make.add_argument("--host",required=True); make.add_argument("--clients",required=True); make.add_argument("--public-domain",default=""); make.add_argument("--fingerprint",default="chrome"); make.add_argument("--output",required=True)
     compare=sub.add_parser("plan"); compare.add_argument("--desired",required=True); compare.add_argument("--actual",required=True)
     merge=sub.add_parser("merge-clients"); merge.add_argument("--desired",required=True); merge.add_argument("--actual",required=True); merge.add_argument("--output",required=True)
+    remark=sub.add_parser("set-remark"); remark.add_argument("--actual",required=True); remark.add_argument("--id",required=True); remark.add_argument("--remark",required=True); remark.add_argument("--output",required=True)
     args=parser.parse_args()
     if args.command=="build":
         Path(args.output).write_text(json.dumps(build(args),indent=2,sort_keys=True)+"\n",encoding="utf-8")
     elif args.command=="plan":
         print(json.dumps(plan(json.loads(Path(args.desired).read_text(encoding="utf-8")),json.loads(Path(args.actual).read_text(encoding="utf-8"))),separators=(",",":")))
-    else:
+    elif args.command=="merge-clients":
         desired=json.loads(Path(args.desired).read_text(encoding="utf-8")); actual=json.loads(Path(args.actual).read_text(encoding="utf-8"))
         Path(args.output).write_text(json.dumps(merge_external_clients(desired,actual),indent=2,sort_keys=True)+"\n",encoding="utf-8")
+    else:
+        actual=json.loads(Path(args.actual).read_text(encoding="utf-8"))
+        Path(args.output).write_text(json.dumps(update_remark(actual,args.id,args.remark),indent=2,sort_keys=True)+"\n",encoding="utf-8")
 
 
 if __name__=="__main__": main()

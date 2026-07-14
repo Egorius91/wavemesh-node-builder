@@ -56,7 +56,13 @@ def set_enabled(config,auto_id,enabled):
     return result
 def set_published(config,auto_id,published):
     result=copy.deepcopy(config); route,balancer=find_auto(result,auto_id)
-    if published and not (route.get("enabled",True) and balancer.get("enabled",True)): raise ValueError("disabled Auto Route cannot be published")
+    if published:
+        if not (route.get("enabled",True) and balancer.get("enabled",True)): raise ValueError("disabled Auto Route cannot be published")
+        if balancer.get("strategy")!="leastPing": raise ValueError("Auto Route must use leastPing before publication")
+        expected_tag=f"wm-balancer-{auto_id}"
+        if balancer.get("balancer_tag")!=expected_tag or route.get("routing",{}).get("balancer_tag")!=expected_tag: raise ValueError("Auto Route balancer binding is invalid")
+        available={item.get("xray",{}).get("outbound_tag") for item in result.get("exits",[]) if item.get("enabled",True)}
+        if not available.intersection(balancer.get("selector",[])): raise ValueError("Auto Route requires at least one enabled Exit")
     route.setdefault("presentation",{})["published"]=bool(published); return result
 def describe(config,auto_id):
     route,balancer=find_auto(config,auto_id); return {"route_id":route["id"],"inbound_id":route["entry"]["inbound_id"],"inbound_tag":route["entry"]["inbound_tag"],"balancer_tag":route["routing"]["balancer_tag"],"rule_tag":route["routing"]["rule_tag"],"strategy":balancer["strategy"],"selectors":balancer["selector"],"enabled":bool(route.get("enabled",True) and balancer.get("enabled",True)),"published":route.get("presentation",{}).get("published",False)}

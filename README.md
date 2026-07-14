@@ -158,6 +158,7 @@ wavemesh cascade status --json
 wavemesh cascade health [--exit-id EXIT_ID] [--json]
 wavemesh cascade verify-e2e [--json]
 wavemesh route list [--json]
+wavemesh routes public --json
 wavemesh route enable --route-id ROUTE_ID
 wavemesh route disable --route-id ROUTE_ID
 wavemesh route remove --route-id ROUTE_ID
@@ -170,7 +171,21 @@ wavemesh transaction recover --latest
 wavemesh repair --nginx
 wavemesh repair --ssl
 wavemesh repair --subscriptions
+wavemesh subscription validate-native [--sub-id ID --expected-profiles N]
+wavemesh subscription backend status
+wavemesh subscription backend switch xui-native|wavemesh-renderer --dry-run
+wavemesh subscription backend switch xui-native|wavemesh-renderer --apply
+wavemesh subscription backend rollback
 ```
+
+New installations use the native 3X-UI subscription service on
+`127.0.0.1:2096`. nginx publishes only the configured opaque subscription
+namespace; the local listener is never exposed directly. Existing installations
+keep their detected backend during config migration. The WaveMesh renderer stays
+available as an explicit fallback and backend changes are transactional.
+
+See [`docs/XUI_NATIVE_SUBSCRIPTIONS_MIGRATION.md`](docs/XUI_NATIVE_SUBSCRIPTIONS_MIGRATION.md)
+for migration, validation, rollback, and bot-integration notes.
 
 ## Current MVP status
 
@@ -187,6 +202,7 @@ Implemented:
 - 3X-UI database discovery and backup;
 - standalone, Entry, and Exit roles;
 - managed Entry-to-Exit VLESS/XHTTP cascade routes;
+- native 3X-UI subscriptions with a transactional WaveMesh renderer fallback;
 - private per-client multi-route subscriptions;
 - route lifecycle and forced Exit removal commands;
 - persisted `runtime.json` health state with three-check thresholds;
