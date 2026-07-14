@@ -8,6 +8,7 @@ WM_REPORT_JSON="/root/wavemesh-node-report.json"
 WM_SITE_DIR="/var/www/wavemesh-site"
 WM_SUB_DIR="/var/www/wavemesh-sub"
 WM_CERTBOT_DIR="/var/www/certbot"
+WM_CONFIG_TOOL="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/lib/config_json.py"
 
 DOMAIN=""
 EMAIL=""
@@ -30,6 +31,10 @@ PANEL_TOKEN=""
 CLIENT_UUIDS=""
 PEXELS_API_KEY="${PEXELS_API_KEY:-}"
 SITE_THEME="${SITE_THEME:-auto}"
+NODE_ROLE="standalone"
+NODE_ID=""
+NODE_COUNTRY=""
+NODE_CITY=""
 
 wm_banner() {
   cat <<'EOF'
@@ -42,7 +47,7 @@ EOF
 
 wm_info() { echo "ℹ  $*"; }
 wm_success() { echo "✓  $*"; }
-wm_warn() { echo "⚠  $*"; }
+wm_warn() { echo "⚠  $*" >&2; }
 wm_fail() { echo "✗  $*" >&2; exit 1; }
 
 wm_random_alnum() {
@@ -78,9 +83,13 @@ wm_parse_args() {
       --clients) CLIENT_COUNT="${2:-1}"; shift 2 ;;
       --pexels-key) PEXELS_API_KEY="${2:-}"; shift 2 ;;
       --site-theme) SITE_THEME="${2:-auto}"; shift 2 ;;
+      --role) NODE_ROLE="${2:-}"; shift 2 ;;
+      --node-id) NODE_ID="${2:-}"; shift 2 ;;
+      --country) NODE_COUNTRY="${2:-}"; shift 2 ;;
+      --city) NODE_CITY="${2:-}"; shift 2 ;;
       -h|--help)
         cat <<EOF
-Usage: sudo bash install.sh --domain example.com --email admin@example.com [--clients 1] [--pexels-key KEY] [--site-theme auto|logistics|architecture|coffee|energy|legalops|studio|wellness|education|finance|gardening]
+Usage: sudo bash install.sh [--role standalone|entry|exit] [--node-id ID] [--country CC] [--city TEXT] --domain example.com --email admin@example.com [--clients 1] [--pexels-key KEY] [--site-theme THEME]
 EOF
         exit 0
         ;;
@@ -90,10 +99,29 @@ EOF
 }
 
 wm_collect_inputs() {
+  case "$NODE_ROLE" in
+    standalone|entry|exit) ;;
+    *) wm_fail "--role must be standalone, entry, or exit" ;;
+  esac
+
   if [[ -z "$DOMAIN" ]]; then
     read -rp "Domain pointed to this VPS: " DOMAIN
   fi
   [[ -n "$DOMAIN" ]] || wm_fail "Domain is required"
+
+  if [[ -z "$NODE_ID" ]]; then
+    NODE_ID="$(printf '%s' "$DOMAIN" | tr '[:upper:]' '[:lower:]' | sed -E 's/[^a-z0-9]+/-/g; s/^-+|-+$//g' | cut -c1-48)"
+  fi
+  [[ "$NODE_ID" =~ ^[a-z0-9][a-z0-9-]{1,47}$ ]] || wm_fail "--node-id must match ^[a-z0-9][a-z0-9-]{1,47}$"
+  if [[ -n "$NODE_COUNTRY" && ! "$NODE_COUNTRY" =~ ^[A-Z]{2}$ ]]; then
+    wm_fail "--country must be a two-letter uppercase code"
+  fi
+  if [[ "$NODE_ROLE" != "standalone" ]]; then
+    if [[ -z "$NODE_COUNTRY" ]]; then read -rp "Node country code (for example DE): " NODE_COUNTRY; fi
+    if [[ -z "$NODE_CITY" ]]; then read -rp "Node city: " NODE_CITY; fi
+    [[ "$NODE_COUNTRY" =~ ^[A-Z]{2}$ ]] || wm_fail "--country is required for entry/exit and must match ^[A-Z]{2}$"
+    [[ -n "$NODE_CITY" ]] || wm_fail "--city is required for entry/exit"
+  fi
 
   if [[ -z "$EMAIL" ]]; then
     read -rp "Email for Let's Encrypt (optional): " EMAIL || true
@@ -167,7 +195,7 @@ wm_generate_random_values() {
   WEB_IDENTITY_NAME="${WEB_IDENTITY_NAME:-$(wm_random_company_name)}"
   PANEL_USERNAME="${PANEL_USERNAME:-$(wm_random_alnum 10)}"
   PANEL_PASSWORD="${PANEL_PASSWORD:-$(wm_random_alnum 18)}"
-  PANEL_TOKEN="${PANEL_TOKEN:-$(wm_random_alnum 32)}"
+  PANEL_TOKEN=""
 }
 
 wm_random_company_name() {
@@ -185,8 +213,9 @@ wm_write_config_json() {
   python3 - <<PY
 import json
 cfg = {
-  "version": 1,
-  "builder": {"name": "WaveMesh Node Builder", "version": "0.1.0", "installed_at": "$installed_at"},
+  "schema_version": 2,
+  "builder": {"name": "WaveMesh Node Builder", "version": "0.2.0", "installed_at": "$installed_at"},
+  "node": {"id": "$NODE_ID", "role": "$NODE_ROLE", "country": "$NODE_COUNTRY", "city": "$NODE_CITY"},
   "server": {"hostname": "$hostname", "public_ip": "$PUBLIC_IP", "domain": "$DOMAIN", "timezone": "$timezone"},
   "network": {
     "http_port": 80,
@@ -194,10 +223,13 @@ cfg = {
     "xhttp": {"listen": "127.0.0.1", "port": int("$XHTTP_LOCAL_PORT"), "path": "$XHTTP_PATH"},
     "subscription": {"path": "$SUB_PATH", "mode": "generated", "local_port": int("$SUB_LOCAL_PORT")}
   },
-  "panel": {"type": "3x-ui", "listen_port": int("$PANEL_PORT"), "path": "$PANEL_PATH", "username": "$PANEL_USERNAME", "password": "$PANEL_PASSWORD", "token": "$PANEL_TOKEN"},
+  "panel": {"type": "3x-ui", "listen_port": int("$PANEL_PORT"), "path": "$PANEL_PATH", "username": "$PANEL_USERNAME", "password": "$PANEL_PASSWORD", "api_auth": {"mode": "pending", "token_name": "wavemesh-node-builder", "token": ""}},
   "tls": {"provider": "letsencrypt", "email": "$EMAIL", "certificate_path": "/etc/letsencrypt/live/$DOMAIN/fullchain.pem", "key_path": "/etc/letsencrypt/live/$DOMAIN/privkey.pem"},
   "web_identity": {"company_name": "$WEB_IDENTITY_NAME", "theme": "$SITE_THEME", "site_path": "$WM_SITE_DIR"},
   "clients": [],
+  "exits": [],
+  "routes": [{"id": "route-standalone-default", "kind": "direct", "display_name": "Direct", "enabled": True, "sort_order": 0}] if "$NODE_ROLE" == "standalone" else [],
+  "relay_peers": [],
   "diagnostics": {"last_check": None, "status": "pending"}
 }
 with open("$WM_CONFIG_JSON", "w", encoding="utf-8") as f:
@@ -215,6 +247,10 @@ cfg=json.load(open("$WM_CONFIG_JSON", encoding="utf-8"))
 clients=cfg.get("clients", [])
 vals={
 "DOMAIN": cfg["server"]["domain"],
+"NODE_ROLE": cfg.get("node", {}).get("role", "standalone"),
+"NODE_ID": cfg.get("node", {}).get("id", ""),
+"NODE_COUNTRY": cfg.get("node", {}).get("country", ""),
+"NODE_CITY": cfg.get("node", {}).get("city", ""),
 "EMAIL": cfg["tls"].get("email", ""),
 "BRAND": "$BRAND",
 "PUBLIC_IP": cfg["server"].get("public_ip", ""),
@@ -232,8 +268,8 @@ vals={
 "SITE_THEME": cfg.get("web_identity", {}).get("theme", "auto"),
 "PANEL_USERNAME": cfg["panel"]["username"],
 "PANEL_PASSWORD": cfg["panel"]["password"],
-"PANEL_TOKEN": cfg["panel"].get("token", ""),
-"CLIENT_UUIDS": ",".join(c.get("uuid", "") for c in clients if c.get("uuid")),
+"PANEL_TOKEN": cfg["panel"].get("api_auth", {}).get("token", cfg["panel"].get("token", "")),
+"CLIENT_UUIDS": ",".join((c.get("uuid") or next((x.get("uuid", "") for x in c.get("credentials", []) if x.get("route_id") == "route-standalone-default"), "")) for c in clients if (c.get("uuid") or c.get("credentials"))),
 }
 for k,v in vals.items():
     print(f'{k}="{str(v).replace(chr(34), chr(92)+chr(34))}"')
@@ -241,9 +277,22 @@ PY
   chmod 600 "$WM_STATE_DIR/config.env"
 }
 
+wm_migrate_config_if_needed() {
+  [[ -f "$WM_CONFIG_JSON" ]] || return 0
+  python3 "$WM_CONFIG_TOOL" migrate "$WM_CONFIG_JSON" "$WM_STATE_DIR/backups"
+  chmod 600 "$WM_CONFIG_JSON"
+}
+
 wm_write_config_env() {
-  wm_write_config_json
+  if [[ -f "$WM_CONFIG_JSON" ]]; then
+    wm_migrate_config_if_needed
+  else
+    wm_write_config_json
+  fi
   wm_export_config_env_from_json
+  # Keep resumed/partial installs on the persisted ports, paths, and credentials.
+  # shellcheck disable=SC1091
+  source "$WM_STATE_DIR/config.env"
 }
 
 wm_config_json_set_clients_from_csv() {
@@ -253,7 +302,19 @@ import json
 path="$WM_CONFIG_JSON"
 cfg=json.load(open(path, encoding="utf-8"))
 uuids=[u for u in "$csv".split(',') if u]
-cfg["clients"]=[{"name": f"Client-{i+1}", "uuid": u, "enabled": True} for i,u in enumerate(uuids)]
+cfg["clients"]=[{
+    "id": f"client-{i+1}",
+    "name": f"Client-{i+1}",
+    "subscription_id": f"sub-client-{i+1}",
+    "uuid": u,
+    "enabled": True,
+    "credentials": [{
+        "route_id": "route-standalone-default",
+        "email": f"wm.client-{i+1}.route-standalone-default",
+        "uuid": u,
+        "enabled": True,
+    }],
+} for i,u in enumerate(uuids)]
 with open(path, "w", encoding="utf-8") as f:
     json.dump(cfg, f, indent=2, ensure_ascii=False)
     f.write("\n")
@@ -272,5 +333,11 @@ wm_load_config() {
 }
 
 wm_install_cli() {
-  install -m 0755 "$(pwd)/bin/wavemesh" /usr/local/bin/wavemesh 2>/dev/null || true
+  local project_dir
+  project_dir="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
+  mkdir -p /usr/local/lib/wavemesh/lib /usr/local/lib/wavemesh/commands
+  install -m 0755 "$project_dir/bin/wavemesh" /usr/local/bin/wavemesh
+  install -m 0644 "$project_dir/scripts/00_common.sh" /usr/local/lib/wavemesh/00_common.sh
+  install -m 0644 "$project_dir/scripts/lib/"*.sh "$project_dir/scripts/lib/"*.py /usr/local/lib/wavemesh/lib/
+  install -m 0644 "$project_dir/scripts/commands/"*.sh /usr/local/lib/wavemesh/commands/
 }

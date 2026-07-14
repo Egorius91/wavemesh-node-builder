@@ -5,6 +5,8 @@ WM_STATE_DIR="/etc/wavemesh-node"
 WM_REPORT_TXT="/root/wavemesh-node-report.txt"
 WM_REPORT_JSON="/root/wavemesh-node-report.json"
 WM_SUB_DIR="/var/www/wavemesh-sub"
+WM_LIB_DIR="${WAVEMESH_LIB_DIR:-/usr/local/lib/wavemesh}"
+if [[ ! -d "$WM_LIB_DIR" ]]; then WM_LIB_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/../scripts" && pwd)"; fi
 
 fail(){ echo "✗ $*" >&2; exit 1; }
 info(){ echo "ℹ $*"; }
@@ -42,14 +44,109 @@ validate_subscription(){
 }
 
 case "${1:-}" in
+  cascade)
+    shift
+    source "$WM_LIB_DIR/00_common.sh"
+    source "$WM_LIB_DIR/lib/transaction.sh"
+    source "$WM_LIB_DIR/lib/xui_api.sh"
+    source "$WM_LIB_DIR/lib/inbound_adapter.sh"
+    source "$WM_LIB_DIR/lib/xray_template.sh"
+    source "$WM_LIB_DIR/lib/nginx_renderer.sh"
+    source "$WM_LIB_DIR/lib/subscription_renderer.sh"
+    WM_CASCADE_TOOL="$WM_LIB_DIR/lib/cascade.py"
+    WM_RUNTIME_TOOL="$WM_LIB_DIR/lib/runtime_state.py"
+    source "$WM_LIB_DIR/commands/runtime.sh"
+    source "$WM_LIB_DIR/commands/cascade.sh"
+    wm_cascade_command "$@"
+    ;;
+  route)
+    shift
+    source "$WM_LIB_DIR/00_common.sh"
+    source "$WM_LIB_DIR/lib/transaction.sh"
+    source "$WM_LIB_DIR/lib/xui_api.sh"
+    source "$WM_LIB_DIR/lib/inbound_adapter.sh"
+    source "$WM_LIB_DIR/lib/xray_template.sh"
+    source "$WM_LIB_DIR/lib/nginx_renderer.sh"
+    source "$WM_LIB_DIR/lib/subscription_renderer.sh"
+    WM_RUNTIME_TOOL="$WM_LIB_DIR/lib/runtime_state.py"
+    source "$WM_LIB_DIR/commands/runtime.sh"
+    wm_route_command "$@"
+    ;;
+  reconcile)
+    shift
+    source "$WM_LIB_DIR/00_common.sh"
+    source "$WM_LIB_DIR/lib/transaction.sh"
+    source "$WM_LIB_DIR/lib/xui_api.sh"
+    source "$WM_LIB_DIR/lib/inbound_adapter.sh"
+    source "$WM_LIB_DIR/lib/xray_template.sh"
+    source "$WM_LIB_DIR/lib/nginx_renderer.sh"
+    source "$WM_LIB_DIR/lib/subscription_renderer.sh"
+    source "$WM_LIB_DIR/lib/subscription_presentation.sh"
+    WM_RUNTIME_TOOL="$WM_LIB_DIR/lib/runtime_state.py"
+    source "$WM_LIB_DIR/commands/runtime.sh"
+    wm_reconcile_command "$@"
+    ;;
+  subscription)
+    shift
+    source "$WM_LIB_DIR/00_common.sh"
+    source "$WM_LIB_DIR/lib/transaction.sh"
+    source "$WM_LIB_DIR/lib/nginx_renderer.sh"
+    source "$WM_LIB_DIR/lib/subscription_renderer.sh"
+    source "$WM_LIB_DIR/lib/subscription_presentation.sh"
+    source "$WM_LIB_DIR/commands/subscription.sh"
+    wm_subscription_command "$@"
+    ;;
+  exit)
+    shift
+    # shellcheck source=scripts/00_common.sh
+    source "$WM_LIB_DIR/00_common.sh"
+    source "$WM_LIB_DIR/lib/transaction.sh"
+    source "$WM_LIB_DIR/lib/xui_api.sh"
+    source "$WM_LIB_DIR/lib/inbound_adapter.sh"
+    source "$WM_LIB_DIR/lib/nginx_renderer.sh"
+    WM_EXIT_PEER_TOOL="$WM_LIB_DIR/lib/exit_peer.py"
+    source "$WM_LIB_DIR/commands/exit_peer.sh"
+    [[ "${1:-}" == "peer" ]] || wm_fail "Usage: wavemesh exit peer create|list|remove"
+    shift; wm_exit_peer_command "$@"
+    ;;
+  transaction)
+    shift
+    source "$WM_LIB_DIR/00_common.sh"
+    source "$WM_LIB_DIR/lib/xui_api.sh"
+    source "$WM_LIB_DIR/lib/xray_template.sh"
+    source "$WM_LIB_DIR/lib/nginx_renderer.sh"
+    source "$WM_LIB_DIR/lib/subscription_renderer.sh"
+    source "$WM_LIB_DIR/lib/transaction.sh"
+    wm_transaction_command "$@"
+    ;;
   show-report)
     [[ -f "$WM_REPORT_TXT" ]] && cat "$WM_REPORT_TXT" || fail "Report not found"
     ;;
   diagnostics)
     load_config
-    systemctl is-active --quiet nginx && ok "nginx active" || fail "nginx inactive"
-    [[ -f "/etc/letsencrypt/live/${DOMAIN}/fullchain.pem" ]] && ok "SSL certificate exists" || fail "SSL missing"
-    validate_subscription
+    case "${NODE_ROLE:-standalone}" in
+      entry)
+        "$0" cascade health
+        ;;
+      exit)
+        systemctl is-active --quiet nginx && ok "nginx active" || fail "nginx inactive"
+        systemctl is-active --quiet x-ui && ok "3X-UI active" || fail "3X-UI inactive"
+        [[ -f "/etc/letsencrypt/live/${DOMAIN}/fullchain.pem" ]] && ok "SSL certificate exists" || fail "SSL missing"
+        [[ -n "${PANEL_TOKEN:-}" ]] && ok "3X-UI bearer API token present" || fail "3X-UI bearer API token missing"
+        curl -fsS --max-time 5 "http://127.0.0.1:${PANEL_PORT}${PANEL_PATH}" >/dev/null 2>&1 \
+          && ok "3X-UI panel reachable on loopback" \
+          || fail "3X-UI panel is not reachable on loopback"
+        ok "Exit diagnostics OK; client subscription is not applicable"
+        ;;
+      standalone)
+        systemctl is-active --quiet nginx && ok "nginx active" || fail "nginx inactive"
+        [[ -f "/etc/letsencrypt/live/${DOMAIN}/fullchain.pem" ]] && ok "SSL certificate exists" || fail "SSL missing"
+        validate_subscription
+        ;;
+      *)
+        fail "Unsupported node role: ${NODE_ROLE}"
+        ;;
+    esac
     ;;
   validate-subscription)
     validate_subscription
@@ -68,6 +165,24 @@ Usage:
   wavemesh show-report
   wavemesh diagnostics
   wavemesh validate-subscription
+  wavemesh exit peer create --entry-id ID [--entry-ip IP] --display-name TEXT --output FILE
+  wavemesh exit peer list
+  wavemesh exit peer remove --entry-id ID
+  wavemesh cascade add-exit --manifest FILE [--display-name TEXT] [--sort-order N] [--dry-run]
+  wavemesh cascade list
+  wavemesh cascade status [--json]
+  wavemesh cascade health [--exit-id ID] [--json]
+  wavemesh cascade verify-e2e [--json]
+  wavemesh cascade remove-exit --exit-id ID [--force]
+  wavemesh route list [--json]
+  wavemesh route enable --route-id ID
+  wavemesh route disable --route-id ID
+  wavemesh route remove --route-id ID
+  wavemesh reconcile --dry-run|--apply
+  wavemesh subscription rebuild
+  wavemesh subscription validate
+  wavemesh transaction list [--json]
+  wavemesh transaction recover --id ID|--latest
   wavemesh repair --nginx
   wavemesh repair --ssl
   wavemesh repair --subscriptions

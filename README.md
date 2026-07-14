@@ -98,6 +98,8 @@ The script attempts non-interactive setup with generated panel credentials and p
 
 ```text
 /etc/wavemesh-node/config.env
+/etc/wavemesh-node/config.json
+/etc/wavemesh-node/runtime.json
 /etc/wavemesh-node/report.json
 /root/wavemesh-node-report.txt
 /root/wavemesh-node-report.json
@@ -152,6 +154,19 @@ After installation:
 wavemesh show-report
 wavemesh diagnostics
 wavemesh validate-subscription
+wavemesh cascade status --json
+wavemesh cascade health [--exit-id EXIT_ID] [--json]
+wavemesh cascade verify-e2e [--json]
+wavemesh route list [--json]
+wavemesh route enable --route-id ROUTE_ID
+wavemesh route disable --route-id ROUTE_ID
+wavemesh route remove --route-id ROUTE_ID
+wavemesh cascade remove-exit --exit-id EXIT_ID [--force]
+wavemesh reconcile --dry-run
+wavemesh reconcile --apply
+wavemesh transaction list [--json]
+wavemesh transaction recover --id TRANSACTION_ID
+wavemesh transaction recover --latest
 wavemesh repair --nginx
 wavemesh repair --ssl
 wavemesh repair --subscriptions
@@ -170,17 +185,33 @@ Implemented:
 - nginx/SSL templates;
 - configurable 3X-UI installation layer;
 - 3X-UI database discovery and backup;
-- fallback-generated subscription files;
+- standalone, Entry, and Exit roles;
+- managed Entry-to-Exit VLESS/XHTTP cascade routes;
+- private per-client multi-route subscriptions;
+- route lifecycle and forced Exit removal commands;
+- persisted `runtime.json` health state with three-check thresholds;
+- redacted desired/observed drift detection and managed reconciliation;
+- interruption-safe mutation transactions with explicit recovery and bounded retention;
+- redacted two-Exit E2E verification for route selection and subscription profiles;
+- GitHub Actions coverage for Python, Bash, adapter, transaction, and two-Exit E2E tests;
 - strict validation;
 - report generation;
 - CLI wrapper.
 
-Next technical layer:
+Every mutating command records an `in_progress` transaction under
+`/etc/wavemesh-node/transactions`. A failed command rolls back automatically. A
+process kill or reboot leaves the transaction discoverable and blocks later
+mutations until `wavemesh transaction recover --id ID` (or `--latest`) completes
+the restore and post-rollback checks. Terminal transactions and each backup
+family retain the newest 20 entries by default.
 
-- inspect real 3X-UI v3 database/API on a test VPS;
-- implement inbound creation adapter;
-- replace placeholder `scripts/07_xhttp_inbound.sh` with a version-specific implementation;
-- keep fallback-generated subscription as the canonical validation source until 3X-UI public subscription output is verified.
+Operator documentation:
+
+- [`docs/CASCADE_OPERATIONS.md`](docs/CASCADE_OPERATIONS.md)
+- [`docs/CASCADE_TROUBLESHOOTING.md`](docs/CASCADE_TROUBLESHOOTING.md)
+
+Phase 10 tooling and documentation are implemented. Final acceptance requires a
+live second Exit and client-side external-IP verification for both profiles.
 
 ## Legal note
 

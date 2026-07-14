@@ -150,3 +150,35 @@ Send:
 ```
 
 Do not share real panel passwords, tokens, private keys, or UUIDs publicly.
+
+## 8. Repository tests
+
+Run the deterministic two-Exit E2E test together with the unit and adapter suites:
+
+```bash
+python3 tests/e2e/test_multi_exit.py
+python3 tests/unit/test_subscription_renderer.py
+python3 tests/unit/test_runtime_state.py
+python3 tests/unit/test_xray_template.py
+bash tests/unit/test_transaction.sh
+bash tests/integration/test_xui_api.sh
+```
+
+The E2E fixture creates two independent Exit manifests, imports both into one
+Entry desired state, merges two Xray outbounds/rules, renders one subscription
+with two ordered profiles, rejects Exit secret leakage, and runs the same
+redacted verifier used on a live Entry.
+
+## 9. Live two-Exit acceptance
+
+Follow [`docs/CASCADE_OPERATIONS.md`](docs/CASCADE_OPERATIONS.md) to install and
+import two distinct Exits. After three health observations, run:
+
+```bash
+sudo wavemesh subscription validate
+sudo wavemesh cascade verify-e2e --json
+```
+
+Then connect a client to each profile separately and record only the profile
+name, observed country/ASN, timestamp, and pass/fail result. Never paste the
+subscription URL or decoded VLESS lines.

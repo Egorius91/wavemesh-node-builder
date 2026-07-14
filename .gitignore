@@ -1,0 +1,4 @@
+*.join.json
+*.manifest.secret.json
+__pycache__/
+*.pyc

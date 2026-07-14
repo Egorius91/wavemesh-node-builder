@@ -1,0 +1,4 @@
+* text=auto eol=lf
+*.sh text eol=lf
+bin/wavemesh text eol=lf
+install.sh text eol=lf

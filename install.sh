@@ -36,13 +36,25 @@ main() {
   wm_obtain_ssl
   wm_configure_nginx_https
 
-  wm_create_clients
   wm_install_3xui
   wm_configure_3xui_panel
-  wm_create_xhttp_inbound
-  wm_generate_fallback_subscription
-  wm_validate_subscription_output
-  wm_run_diagnostics
+  wm_xui_bootstrap_api_token || wm_fail "Could not establish verified 3X-UI bearer API access"
+  case "$NODE_ROLE" in
+    standalone)
+      wm_create_clients
+      wm_create_xhttp_inbound
+      wm_generate_fallback_subscription
+      wm_validate_subscription_output
+      wm_run_diagnostics
+      ;;
+    entry)
+      wm_create_clients
+      wm_info "Entry base installed; add Exit manifests with wavemesh cascade add-exit"
+      ;;
+    exit)
+      wm_info "Exit base installed; create relay peers with wavemesh exit peer create"
+      ;;
+  esac
   wm_write_reports
   wm_print_telegram_bot_connection_info
   wm_install_cli
