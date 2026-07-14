@@ -97,11 +97,7 @@ def inbound_payload(config, item):
             "id": credential["uuid"],
             "email": credential["email"],
             "enable": bool(client.get("enabled", True) and credential.get("enabled", True)),
-            "flow": "",
-            "limitIp": 0,
-            "totalGB": 0,
-            "expiryTime": 0,
-            "tgId": 0,
+            "flow": "", "limitIp": 0, "totalGB": 0, "expiryTime": 0, "tgId": 0,
             "subId": client.get("subscription_id", ""),
         })
     entry = item["entry"]
@@ -126,8 +122,7 @@ def inbound_payload(config, item):
 def outbound_payload(target, item):
     endpoint = target["endpoint"]
     return {
-        "tag": item["routing"]["outbound_tag"],
-        "protocol": "vless",
+        "tag": item["routing"]["outbound_tag"], "protocol": "vless",
         "settings": {"vnext": [{"address": endpoint["domain"], "port": endpoint["port"], "users": [{"id": endpoint["relay_uuid"], "encryption": "none"}]}]},
         "streamSettings": {
             "network": "xhttp", "security": "tls",
@@ -185,6 +180,15 @@ def normalize_inbound(value):
     }
 
 
+def inbound_structure_matches(actual, expected):
+    """Compare managed inbound fields while allowing unrelated extra clients."""
+    actual_normalized = normalize_inbound(actual)
+    expected_normalized = normalize_inbound(expected)
+    actual_clients = set(actual_normalized.pop("clients"))
+    expected_clients = set(expected_normalized.pop("clients"))
+    return actual_normalized == expected_normalized and expected_clients.issubset(actual_clients)
+
+
 MATCH_KEYS = {"domain", "ip", "port", "sourcePort", "localPort", "network", "source", "sourceIP", "user", "inboundTag", "protocol", "attrs"}
 
 
@@ -215,16 +219,9 @@ def evaluate(config, previous, inbounds_response, template, nginx_text, subscrip
     rules = template.get("routing", {}).get("rules", [])
     route_probes = {item.get("route_id"): item for item in probes.get("routes", [])}
     old_exits = (previous or {}).get("exits", {})
-    runtime = {
-        "observed_at": observed_at,
-        "node_status": "healthy",
-        "xui": probes.get("control", {}),
-        "exits": {},
-        "routes": {},
-    }
-    control_ok = all(value in (True, "active", "reachable", "running", "valid", "loopback") for value in runtime["xui"].values())
-    if not control_ok:
-        runtime["node_status"] = "unhealthy"
+    result = {"observed_at": observed_at, "node_status": "healthy", "xui": probes.get("control", {}), "exits": {}, "routes": {}}
+    if not all(value in (True, "active", "reachable", "running", "valid", "loopback") for value in result["xui"].values()):
+        result["node_status"] = "unhealthy"
     subscriptions = Path(subscription_dir)
     for item in config.get("routes", []):
         if item.get("kind") != "cascade":
@@ -236,7 +233,7 @@ def evaluate(config, previous, inbounds_response, template, nginx_text, subscrip
         inbound = actual_by_tag.get(entry["inbound_tag"])
         inbound_present = inbound is not None
         inbound_enabled = bool(inbound.get("enable", True)) if inbound else False
-        inbound_matches = inbound_present and normalize_inbound(inbound) == normalize_inbound(inbound_payload(config, item))
+        inbound_matches = inbound_present and inbound_structure_matches(inbound, inbound_payload(config, item))
         rule_index = next((index for index, rule in enumerate(rules) if rule.get("ruleTag") == routing["rule_tag"] and rule.get("outboundTag") == routing["outbound_tag"] and entry["inbound_tag"] in ([rule.get("inboundTag")] if isinstance(rule.get("inboundTag"), str) else rule.get("inboundTag", []))), None)
         catch_index = next((index for index, rule in enumerate(rules) if is_catch_all(rule)), len(rules))
         rule_present = rule_index is not None and rule_index < catch_index
@@ -249,8 +246,7 @@ def evaluate(config, previous, inbounds_response, template, nginx_text, subscrip
             credential = next((value for value in client.get("credentials", []) if value.get("route_id") == route_id), None)
             if not credential:
                 continue
-            sub_id = client.get("subscription_id", "")
-            target = subscriptions / "users" / f"{sub_id}.txt"
+            target = subscriptions / "users" / f"{client.get('subscription_id', '')}.txt"
             found = target.exists() and credential["uuid"] in target.read_text(encoding="utf-8")
             expected = enabled and client.get("enabled", True) and credential.get("enabled", True)
             if found != expected:
@@ -261,22 +257,11 @@ def evaluate(config, previous, inbounds_response, template, nginx_text, subscrip
         misconfigured = enabled and not structural
         old = old_exits.get(item.get("exit_id"), {})
         status, successes, failures = transition(old, success, enabled, misconfigured)
-        error = probe.get("error")
-        if misconfigured:
-            error = "managed state differs from desired configuration"
-        exit_state = {
-            "status": status,
-            "consecutive_successes": successes,
-            "consecutive_failures": failures,
-            "last_latency_ms": probe.get("latency_ms"),
-            "last_error": str(error)[:240] if error else None,
-            "last_success_at": observed_at if success else old.get("last_success_at"),
-        }
-        runtime["exits"][item["exit_id"]] = exit_state
-        runtime["routes"][route_id] = {
-            "status": status,
-            "enabled": enabled,
-            "exit_id": item["exit_id"],
+        error = "managed state differs from desired configuration" if misconfigured else probe.get("error")
+        exit_state = {"status": status, "consecutive_successes": successes, "consecutive_failures": failures, "last_latency_ms": probe.get("latency_ms"), "last_error": str(error)[:240] if error else None, "last_success_at": observed_at if success else old.get("last_success_at")}
+        result["exits"][item["exit_id"]] = exit_state
+        result["routes"][route_id] = {
+            "status": status, "enabled": enabled, "exit_id": item["exit_id"],
             "inbound": "present" if inbound_matches else ("drifted" if inbound_present else "missing"),
             "inbound_enabled": inbound_enabled,
             "outbound": "present" if outbound_matches else ("drifted" if outbound_present else "missing"),
@@ -286,10 +271,10 @@ def evaluate(config, previous, inbounds_response, template, nginx_text, subscrip
             "subscription_profile": ("present" if enabled else "absent") if profile_matches else "drifted",
         }
         if status in ("unhealthy", "misconfigured"):
-            runtime["node_status"] = "unhealthy"
-        elif status == "unknown" and runtime["node_status"] == "healthy":
-            runtime["node_status"] = "unknown"
-    return runtime
+            result["node_status"] = "unhealthy"
+        elif status == "unknown" and result["node_status"] == "healthy":
+            result["node_status"] = "unknown"
+    return result
 
 
 def drift_plan(config, runtime):
@@ -325,12 +310,10 @@ def sync_runtime(config, runtime):
         state["exit_id"] = item.get("exit_id")
         if not state["enabled"]:
             state["status"] = "disabled"
-            exit_state = result.setdefault("exits", {}).setdefault(item["exit_id"], {})
-            exit_state.update({"status": "disabled", "consecutive_successes": 0, "consecutive_failures": 0, "last_error": None})
+            result.setdefault("exits", {}).setdefault(item["exit_id"], {}).update({"status": "disabled", "consecutive_successes": 0, "consecutive_failures": 0, "last_error": None})
         elif previous_enabled is False or state.get("status") == "disabled":
             state["status"] = "unknown"
-            exit_state = result.setdefault("exits", {}).setdefault(item["exit_id"], {})
-            exit_state.update({"status": "unknown", "consecutive_successes": 0, "consecutive_failures": 0})
+            result.setdefault("exits", {}).setdefault(item["exit_id"], {}).update({"status": "unknown", "consecutive_successes": 0, "consecutive_failures": 0})
     return result
 
 
@@ -340,16 +323,7 @@ def render_status(config, runtime, as_json=False):
     for item in sorted((value for value in config.get("routes", []) if value.get("kind") == "cascade"), key=lambda value: (value.get("sort_order", 0), value["id"])):
         state = runtime.get("routes", {}).get(item["id"], {})
         exit_state = runtime.get("exits", {}).get(item.get("exit_id"), {})
-        rows.append({
-            "route_id": item["id"],
-            "display_name": item.get("display_name") or exits.get(item.get("exit_id"), {}).get("display_name", item["id"]),
-            "exit_id": item.get("exit_id"),
-            "enabled": item.get("enabled", True),
-            "status": state.get("status", "unknown" if item.get("enabled", True) else "disabled"),
-            "latency_ms": exit_state.get("last_latency_ms"),
-            "outbound": item.get("routing", {}).get("outbound_tag"),
-            "last_check": runtime.get("observed_at"),
-        })
+        rows.append({"route_id": item["id"], "display_name": item.get("display_name") or exits.get(item.get("exit_id"), {}).get("display_name", item["id"]), "exit_id": item.get("exit_id"), "enabled": item.get("enabled", True), "status": state.get("status", "unknown" if item.get("enabled", True) else "disabled"), "latency_ms": exit_state.get("last_latency_ms"), "outbound": item.get("routing", {}).get("outbound_tag"), "last_check": runtime.get("observed_at")})
     if as_json:
         return json.dumps({"node_status": runtime.get("node_status", "unknown"), "observed_at": runtime.get("observed_at"), "routes": rows}, indent=2, ensure_ascii=False)
     if not rows:
