@@ -51,10 +51,11 @@ wm_cascade_add_exit() {
 wm_cascade_command() {
   case "${1:-}" in
     add-exit) shift; wm_cascade_add_exit "$@";;
+    auto) shift; wm_auto_command "$@";;
     list|status) shift; wm_runtime_status "$@";;
     health) shift; wm_runtime_health "$@";;
     verify-e2e) shift; wm_cascade_verify_e2e "$@";;
     remove-exit) shift; wm_cascade_remove_exit "$@";;
-    *) wm_fail "Usage: wavemesh cascade add-exit --manifest FILE | list | status [--json] | health [--exit-id ID] [--json] | verify-e2e [--json] | remove-exit --exit-id ID [--force]";;
+    *) wm_fail "Usage: wavemesh cascade add-exit --manifest FILE | auto create|status | list | status [--json] | health [--exit-id ID] [--json] | verify-e2e [--json] | remove-exit --exit-id ID [--force]";;
   esac
 }
