@@ -27,7 +27,6 @@ wm_cascade_add_exit() {
   [[ "$state" == "new" ]] || wm_fail "Exit id already exists with different credentials; rotate explicitly instead of overwriting"
   exit_id="$(python3 -c 'import json,sys; print(json.load(open(sys.argv[1],encoding="utf-8"))["exit"]["id"])' "$manifest")"
   if (( dry_run == 1 )); then wm_info "Plan: validate ${exit_id}, create route inbound/outbound/rule, render nginx, commit desired state"; return 0; fi
-
   wm_transaction_begin "cascade-add-exit"; transaction="$WM_ACTIVE_TRANSACTION"
   port="$(wm_random_port 21000 21999)"; path="/api/$(wm_random_alnum 2)/$(wm_random_alnum 18)/"; candidate="$transaction/config.candidate.json"; clients="$transaction/clients.json"; outbound="$transaction/outbound.json"; desired="$transaction/inbound.json"; xray_before="$transaction/xray.before.json"
   local prepare_args=(--config "$WM_CONFIG_JSON" --manifest "$manifest" --candidate "$candidate" --clients "$clients" --outbound "$outbound" --path "$path" --port "$port" --sort-order "$sort_order"); [[ -n "$display_name" ]] && prepare_args+=(--display-name "$display_name")
@@ -56,6 +55,6 @@ wm_cascade_command() {
     health) shift; wm_runtime_health "$@";;
     verify-e2e) shift; wm_cascade_verify_e2e "$@";;
     remove-exit) shift; wm_cascade_remove_exit "$@";;
-    *) wm_fail "Usage: wavemesh cascade add-exit --manifest FILE | auto create|status | list | status [--json] | health [--exit-id ID] [--json] | verify-e2e [--json] | remove-exit --exit-id ID [--force]";;
+    *) wm_fail "Usage: wavemesh cascade add-exit --manifest FILE | auto create|status|health|enable|disable|override | list | status [--json] | health [--exit-id ID] [--json] | verify-e2e [--json] | remove-exit --exit-id ID [--force]";;
   esac
 }
