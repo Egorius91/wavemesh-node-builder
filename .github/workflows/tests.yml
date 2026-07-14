@@ -18,22 +18,12 @@ jobs:
           python-version: "3.12"
       - name: Python unit and E2E tests
         run: |
-          set -o pipefail
-          {
-            python3 -m compileall -q scripts tests
-            for test in tests/unit/test_*.py; do
-              echo "RUN $test"
-              python3 "$test"
-            done
-            echo "RUN tests/e2e/test_multi_exit.py"
-            python3 tests/e2e/test_multi_exit.py
-          } 2>&1 | tee python-tests.log
-      - name: Upload Python test log
-        if: always()
-        uses: actions/upload-artifact@v4
-        with:
-          name: python-test-log
-          path: python-tests.log
+          set -Eeuo pipefail
+          python3 -m compileall -q scripts tests
+          for test in tests/unit/test_*.py; do
+            python3 "$test"
+          done
+          python3 tests/e2e/test_multi_exit.py
       - name: Bash and adapter tests
         run: |
           set -Eeuo pipefail
