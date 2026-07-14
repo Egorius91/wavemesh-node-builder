@@ -26,7 +26,12 @@ def render(config):
         if path in seen: raise ValueError(f"managed path collision: {path}")
         seen.add(path); blocks.append(render_location(path,inbound["local_port"],peer.get("allowed_entry_ips",[])))
     for route in sorted(config.get("routes",[]),key=lambda x:(x.get("sort_order",0),x["id"])):
-        if route.get("kind")!="cascade" or not route.get("enabled",True): continue
+        if not route.get("enabled",True): continue
+        kind=route.get("kind")
+        if kind=="cascade": publish=True
+        elif kind=="auto": publish=route.get("presentation",{}).get("published",False)
+        else: publish=False
+        if not publish: continue
         entry=route["entry"]; path=entry["public_path"]
         if path in seen: raise ValueError(f"managed path collision: {path}")
         seen.add(path); blocks.append(render_location(path,entry["local_port"],[]))

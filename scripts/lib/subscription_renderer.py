@@ -30,9 +30,11 @@ def render(cfg,output_dir):
         if not client.get("enabled",True): continue
         profiles=[]
         credentials={x["route_id"]:x for x in client.get("credentials",[]) if x.get("enabled",True)}
-        ordered=sorted((r for r in routes.values() if r.get("kind")=="cascade" and r.get("exit_id") in exits and r["id"] in credentials),key=lambda r:(r.get("sort_order",0),r.get("display_name",""),r["id"]))
+        ordered=sorted((r for r in routes.values() if ((r.get("kind")=="cascade" and r.get("exit_id") in exits) or (r.get("kind")=="auto" and r.get("presentation",{}).get("published",False))) and r["id"] in credentials),key=lambda r:(r.get("sort_order",0),r.get("display_name",""),r["id"]))
         for route in ordered:
-            credential=credentials[route["id"]]; path=route["entry"]["public_path"]; name=route.get("display_name") or exits[route["exit_id"]].get("display_name") or route["id"]
+            credential=credentials[route["id"]]; path=route["entry"]["public_path"]
+            if route.get("kind")=="cascade": name=route.get("display_name") or exits[route["exit_id"]].get("display_name") or route["id"]
+            else: name=route.get("display_name") or route["id"]
             query=urllib.parse.urlencode({"encryption":"none","security":"tls","type":"xhttp","host":domain,"sni":domain,"fp":"randomized","path":path,"mode":"stream-one"})
             profiles.append(f"vless://{credential['uuid']}@{domain}:443?{query}#{urllib.parse.quote(name,safe='')}")
         content="\n".join(profiles)+("\n" if profiles else "")

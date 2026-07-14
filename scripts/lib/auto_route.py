@@ -1,175 +1,76 @@
 #!/usr/bin/env python3
 """Build and mutate persistent WaveMesh Auto Route desired state."""
-
-import argparse
-import copy
-import json
-import os
-import tempfile
-import uuid
+import argparse, copy, json, os, tempfile, uuid
 from pathlib import Path
 
-
-def load(path):
-    return json.loads(Path(path).read_text(encoding="utf-8"))
-
-
-def atomic(path, data):
-    target = Path(path)
-    target.parent.mkdir(parents=True, exist_ok=True)
-    fd, temporary = tempfile.mkstemp(prefix=f".{target.name}.", dir=target.parent)
+def load(path): return json.loads(Path(path).read_text(encoding="utf-8"))
+def atomic(path,data):
+    target=Path(path); target.parent.mkdir(parents=True,exist_ok=True); fd,tmp=tempfile.mkstemp(prefix=f".{target.name}.",dir=target.parent)
     try:
-        with os.fdopen(fd, "w", encoding="utf-8") as handle:
-            json.dump(data, handle, indent=2, ensure_ascii=False, sort_keys=True)
-            handle.write("\n")
-            handle.flush()
-            os.fsync(handle.fileno())
-        os.chmod(temporary, 0o600)
-        os.replace(temporary, target)
+        with os.fdopen(fd,"w",encoding="utf-8") as h: json.dump(data,h,indent=2,ensure_ascii=False,sort_keys=True); h.write("\n"); h.flush(); os.fsync(h.fileno())
+        os.chmod(tmp,0o600); os.replace(tmp,target)
     finally:
-        if os.path.exists(temporary):
-            os.unlink(temporary)
-
-
+        if os.path.exists(tmp): os.unlink(tmp)
 def validate_id(value):
-    if not value or len(value) > 32 or not value.replace("-", "").isalnum() or value.lower() != value:
-        raise ValueError("Auto Route id must contain lowercase letters, digits, and hyphens")
-
-
-def enabled_exit_tags(config, requested):
-    exits = {item["id"]: item for item in config.get("exits", []) if item.get("enabled", True)}
-    if requested:
-        missing = [value for value in requested if value not in exits]
-        if missing:
-            raise ValueError(f"unknown or disabled Exit ids: {', '.join(missing)}")
-        chosen = requested
-    else:
-        chosen = [item["id"] for item in config.get("exits", []) if item.get("enabled", True)]
-    selectors = []
+    if not value or len(value)>32 or not value.replace("-","").isalnum() or value.lower()!=value: raise ValueError("Auto Route id must contain lowercase letters, digits, and hyphens")
+def enabled_exit_tags(config,requested):
+    exits={i["id"]:i for i in config.get("exits",[]) if i.get("enabled",True)}; chosen=requested or [i["id"] for i in config.get("exits",[]) if i.get("enabled",True)]
+    missing=[v for v in chosen if v not in exits]
+    if missing: raise ValueError(f"unknown or disabled Exit ids: {', '.join(missing)}")
+    selectors=[]
     for exit_id in chosen:
-        tag = exits[exit_id].get("xray", {}).get("outbound_tag")
-        if not tag or not tag.startswith("wm-exit-"):
-            raise ValueError(f"Exit has no managed outbound tag: {exit_id}")
+        tag=exits[exit_id].get("xray",{}).get("outbound_tag")
+        if not tag or not tag.startswith("wm-exit-"): raise ValueError(f"Exit has no managed outbound tag: {exit_id}")
         selectors.append(tag)
-    selectors = list(dict.fromkeys(selectors))
-    if not selectors:
-        raise ValueError("Auto Route requires at least one enabled Exit")
+    selectors=list(dict.fromkeys(selectors))
+    if not selectors: raise ValueError("Auto Route requires at least one enabled Exit")
     return selectors
-
-
-def find_auto(config, auto_id):
-    route_id = f"route-auto-{auto_id}"
-    route = next((item for item in config.get("routes", []) if item.get("id") == route_id and item.get("kind") == "auto"), None)
-    balancer = next((item for item in config.get("balancers", []) if item.get("id") == auto_id), None)
-    if not route or not balancer:
-        raise ValueError(f"Auto Route not found: {auto_id}")
-    return route, balancer
-
-
-def prepare(config, auto_id, display_name, requested_exits, local_port, public_path, sort_order):
-    if config.get("node", {}).get("role") != "entry":
-        raise ValueError("Auto Route requires node.role=entry")
+def find_auto(config,auto_id):
+    route=next((i for i in config.get("routes",[]) if i.get("id")==f"route-auto-{auto_id}" and i.get("kind")=="auto"),None); balancer=next((i for i in config.get("balancers",[]) if i.get("id")==auto_id),None)
+    if not route or not balancer: raise ValueError(f"Auto Route not found: {auto_id}")
+    return route,balancer
+def prepare(config,auto_id,display_name,requested_exits,local_port,public_path,sort_order):
+    if config.get("node",{}).get("role")!="entry": raise ValueError("Auto Route requires node.role=entry")
     validate_id(auto_id)
-    if any(route.get("id") == f"route-auto-{auto_id}" for route in config.get("routes", [])):
-        raise ValueError(f"Auto Route already exists: {auto_id}")
-    if any(item.get("id") == auto_id for item in config.get("balancers", [])):
-        raise ValueError(f"Auto balancer already exists: {auto_id}")
-    if not (21000 <= int(local_port) <= 21999):
-        raise ValueError("Auto Route local port must be in 21000..21999")
-    if not public_path.startswith("/api/") or not public_path.endswith("/") or len(public_path) < 16:
-        raise ValueError("invalid Auto Route public path")
-
-    result = copy.deepcopy(config)
-    selectors = enabled_exit_tags(result, requested_exits)
-    route_id = f"route-auto-{auto_id}"
-    inbound_tag = f"wm-route-auto-{auto_id}"
-    balancer_tag = f"wm-balancer-{auto_id}"
-    rule_tag = f"wm-rule-auto-{auto_id}"
-    observatory_tag = f"wm-observatory-{auto_id}"
-
-    used = {credential.get("uuid") for client in result.get("clients", []) for credential in client.get("credentials", [])}
-    inbound_clients = []
-    for client in result.get("clients", []):
-        value = str(uuid.uuid4())
-        while value in used:
-            value = str(uuid.uuid4())
-        used.add(value)
-        email = f"wm.{client['id']}.{route_id}"
-        credential = {"route_id": route_id, "email": email, "uuid": value, "enabled": True}
-        client.setdefault("credentials", []).append(credential)
-        inbound_clients.append({"id": value, "email": email, "enable": bool(client.get("enabled", True)), "flow": "", "limitIp": 0, "totalGB": 0, "expiryTime": 0, "tgId": 0, "subId": client.get("subscription_id", "")})
-    if not inbound_clients:
-        raise ValueError("Entry has no clients")
-
-    result.setdefault("balancers", []).append({"id": auto_id, "display_name": display_name, "enabled": True, "strategy": "leastPing", "selector": selectors, "balancer_tag": balancer_tag, "observatory_tag": observatory_tag})
-    result.setdefault("routes", []).append({
-        "id": route_id, "kind": "auto", "display_name": display_name, "enabled": True, "sort_order": int(sort_order), "balancer_id": auto_id,
-        "entry": {"listen": "127.0.0.1", "local_port": int(local_port), "public_path": public_path, "inbound_id": None, "inbound_tag": inbound_tag, "xhttp_mode": "stream-one"},
-        "routing": {"rule_tag": rule_tag, "balancer_tag": balancer_tag}, "presentation": {"published": False},
-    })
-    return result, inbound_clients
-
-
-def finalize(config, route_id, inbound_id):
-    result = copy.deepcopy(config)
-    route = next((item for item in result.get("routes", []) if item.get("id") == route_id and item.get("kind") == "auto"), None)
-    if not route:
-        raise ValueError(f"Auto Route not found: {route_id}")
-    route["entry"]["inbound_id"] = int(inbound_id)
+    if any(r.get("id")==f"route-auto-{auto_id}" for r in config.get("routes",[])): raise ValueError(f"Auto Route already exists: {auto_id}")
+    if not 21000<=int(local_port)<=21999: raise ValueError("Auto Route local port must be in 21000..21999")
+    result=copy.deepcopy(config); selectors=enabled_exit_tags(result,requested_exits); route_id=f"route-auto-{auto_id}"; inbound_tag=f"wm-route-auto-{auto_id}"; balancer_tag=f"wm-balancer-{auto_id}"; rule_tag=f"wm-rule-auto-{auto_id}"
+    used={c.get("uuid") for client in result.get("clients",[]) for c in client.get("credentials",[])}; inbound_clients=[]
+    for client in result.get("clients",[]):
+        value=str(uuid.uuid4())
+        while value in used: value=str(uuid.uuid4())
+        used.add(value); email=f"wm.{client['id']}.{route_id}"; client.setdefault("credentials",[]).append({"route_id":route_id,"email":email,"uuid":value,"enabled":True}); inbound_clients.append({"id":value,"email":email,"enable":bool(client.get("enabled",True)),"flow":"","limitIp":0,"totalGB":0,"expiryTime":0,"tgId":0,"subId":client.get("subscription_id","")})
+    if not inbound_clients: raise ValueError("Entry has no clients")
+    result.setdefault("balancers",[]).append({"id":auto_id,"display_name":display_name,"enabled":True,"strategy":"leastPing","selector":selectors,"balancer_tag":balancer_tag,"observatory_tag":f"wm-observatory-{auto_id}"})
+    result.setdefault("routes",[]).append({"id":route_id,"kind":"auto","display_name":display_name,"enabled":True,"sort_order":int(sort_order),"balancer_id":auto_id,"entry":{"listen":"127.0.0.1","local_port":int(local_port),"public_path":public_path,"inbound_id":None,"inbound_tag":inbound_tag,"xhttp_mode":"stream-one"},"routing":{"rule_tag":rule_tag,"balancer_tag":balancer_tag},"presentation":{"published":False}})
+    return result,inbound_clients
+def finalize(config,route_id,inbound_id):
+    result=copy.deepcopy(config); route=next((i for i in result.get("routes",[]) if i.get("id")==route_id and i.get("kind")=="auto"),None)
+    if not route: raise ValueError(f"Auto Route not found: {route_id}")
+    route["entry"]["inbound_id"]=int(inbound_id); return result
+def set_enabled(config,auto_id,enabled):
+    result=copy.deepcopy(config); route,balancer=find_auto(result,auto_id); route["enabled"]=bool(enabled); balancer["enabled"]=bool(enabled)
+    for client in result.get("clients",[]):
+        for credential in client.get("credentials",[]):
+            if credential.get("route_id")==route["id"]: credential["enabled"]=bool(enabled)
     return result
-
-
-def set_enabled(config, auto_id, enabled):
-    result = copy.deepcopy(config)
-    route, balancer = find_auto(result, auto_id)
-    route["enabled"] = bool(enabled)
-    balancer["enabled"] = bool(enabled)
-    for client in result.get("clients", []):
-        for credential in client.get("credentials", []):
-            if credential.get("route_id") == route["id"]:
-                credential["enabled"] = bool(enabled)
-    return result
-
-
-def describe(config, auto_id):
-    route, balancer = find_auto(config, auto_id)
-    return {
-        "route_id": route["id"],
-        "inbound_id": route["entry"]["inbound_id"],
-        "inbound_tag": route["entry"]["inbound_tag"],
-        "balancer_tag": route["routing"]["balancer_tag"],
-        "rule_tag": route["routing"]["rule_tag"],
-        "strategy": balancer["strategy"],
-        "selectors": balancer["selector"],
-        "enabled": bool(route.get("enabled", True) and balancer.get("enabled", True)),
-    }
-
-
+def set_published(config,auto_id,published):
+    result=copy.deepcopy(config); route,balancer=find_auto(result,auto_id)
+    if published and not (route.get("enabled",True) and balancer.get("enabled",True)): raise ValueError("disabled Auto Route cannot be published")
+    route.setdefault("presentation",{})["published"]=bool(published); return result
+def describe(config,auto_id):
+    route,balancer=find_auto(config,auto_id); return {"route_id":route["id"],"inbound_id":route["entry"]["inbound_id"],"inbound_tag":route["entry"]["inbound_tag"],"balancer_tag":route["routing"]["balancer_tag"],"rule_tag":route["routing"]["rule_tag"],"strategy":balancer["strategy"],"selectors":balancer["selector"],"enabled":bool(route.get("enabled",True) and balancer.get("enabled",True)),"published":route.get("presentation",{}).get("published",False)}
 def main():
-    parser = argparse.ArgumentParser()
-    sub = parser.add_subparsers(dest="command", required=True)
-    build = sub.add_parser("prepare")
-    build.add_argument("--config", required=True); build.add_argument("--candidate", required=True); build.add_argument("--clients", required=True)
-    build.add_argument("--id", required=True); build.add_argument("--display-name", required=True); build.add_argument("--exit-ids", default="")
-    build.add_argument("--port", type=int, required=True); build.add_argument("--path", required=True); build.add_argument("--sort-order", type=int, default=50)
-    finish = sub.add_parser("finalize")
-    finish.add_argument("--candidate", required=True); finish.add_argument("--route-id", required=True); finish.add_argument("--inbound-id", type=int, required=True)
-    toggle = sub.add_parser("set-enabled")
-    toggle.add_argument("--config", required=True); toggle.add_argument("--output", required=True); toggle.add_argument("--id", required=True); toggle.add_argument("--enabled", choices=("true", "false"), required=True)
-    describe_parser = sub.add_parser("describe")
-    describe_parser.add_argument("--config", required=True); describe_parser.add_argument("--id", required=True)
-    args = parser.parse_args()
-    if args.command == "prepare":
-        requested = [value.strip() for value in args.exit_ids.split(",") if value.strip()]
-        candidate, clients = prepare(load(args.config), args.id, args.display_name, requested, args.port, args.path, args.sort_order)
-        atomic(args.candidate, candidate); atomic(args.clients, clients)
-    elif args.command == "finalize":
-        atomic(args.candidate, finalize(load(args.candidate), args.route_id, args.inbound_id))
-    elif args.command == "set-enabled":
-        atomic(args.output, set_enabled(load(args.config), args.id, args.enabled == "true"))
-    else:
-        print(json.dumps(describe(load(args.config), args.id), ensure_ascii=False))
-
-
-if __name__ == "__main__":
-    main()
+    p=argparse.ArgumentParser(); s=p.add_subparsers(dest="command",required=True)
+    b=s.add_parser("prepare"); [b.add_argument(x,required=True) for x in ("--config","--candidate","--clients","--id","--display-name","--port","--path")]; b.add_argument("--exit-ids",default=""); b.add_argument("--sort-order",type=int,default=50)
+    f=s.add_parser("finalize"); f.add_argument("--candidate",required=True); f.add_argument("--route-id",required=True); f.add_argument("--inbound-id",type=int,required=True)
+    t=s.add_parser("set-enabled"); t.add_argument("--config",required=True); t.add_argument("--output",required=True); t.add_argument("--id",required=True); t.add_argument("--enabled",choices=("true","false"),required=True)
+    q=s.add_parser("set-published"); q.add_argument("--config",required=True); q.add_argument("--output",required=True); q.add_argument("--id",required=True); q.add_argument("--published",choices=("true","false"),required=True)
+    d=s.add_parser("describe"); d.add_argument("--config",required=True); d.add_argument("--id",required=True); a=p.parse_args()
+    if a.command=="prepare":
+        candidate,clients=prepare(load(a.config),a.id,a.display_name,[v.strip() for v in a.exit_ids.split(",") if v.strip()],int(a.port),a.path,a.sort_order); atomic(a.candidate,candidate); atomic(a.clients,clients)
+    elif a.command=="finalize": atomic(a.candidate,finalize(load(a.candidate),a.route_id,a.inbound_id))
+    elif a.command=="set-enabled": atomic(a.output,set_enabled(load(a.config),a.id,a.enabled=="true"))
+    elif a.command=="set-published": atomic(a.output,set_published(load(a.config),a.id,a.published=="true"))
+    else: print(json.dumps(describe(load(a.config),a.id),ensure_ascii=False))
+if __name__=="__main__": main()
