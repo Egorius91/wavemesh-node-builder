@@ -7,6 +7,8 @@ from pathlib import Path
 
 MATCH_KEYS = {"domain", "ip", "port", "sourcePort", "localPort", "network", "source", "sourceIP", "user", "inboundTag", "protocol", "attrs"}
 XRAY_API_PORT = 62789
+AUTO_PROBE_URL = "https://www.google.com/generate_204"
+AUTO_PROBE_INTERVAL = "30s"
 
 
 def read_json(path):
@@ -54,6 +56,11 @@ def ensure_xray_api(template):
     return template
 
 
+def insert_before_catch_all(rules, rule):
+    catch_index = next((index for index, item in enumerate(rules) if is_catch_all(item)), len(rules))
+    rules.insert(catch_index, rule)
+
+
 def merge(template, outbound, inbound_tag, outbound_tag, rule_tag):
     if not outbound_tag.startswith("wm-exit-") or outbound.get("tag") != outbound_tag:
         raise ValueError("managed outbound tag mismatch")
@@ -69,11 +76,50 @@ def merge(template, outbound, inbound_tag, outbound_tag, rule_tag):
     routing = result.setdefault("routing", {})
     rules = routing.setdefault("rules", [])
     rules[:] = [item for item in rules if item.get("ruleTag") != rule_tag and not (item.get("inboundTag") == [inbound_tag] and item.get("outboundTag") == outbound_tag)]
-    rule = {"type": "field", "inboundTag": [inbound_tag], "outboundTag": outbound_tag, "ruleTag": rule_tag}
-    catch_index = next((index for index, item in enumerate(rules) if is_catch_all(item)), len(rules))
-    rules.insert(catch_index, rule)
+    insert_before_catch_all(rules, {"type": "field", "inboundTag": [inbound_tag], "outboundTag": outbound_tag, "ruleTag": rule_tag})
 
     ensure_unique(outbounds, "tag", "outbound tags")
+    ensure_unique(rules, "ruleTag", "routing rule tags")
+    return result
+
+
+def merge_balancer(template, selectors, inbound_tag, balancer_tag, rule_tag, strategy="leastPing"):
+    selectors = list(dict.fromkeys(selectors))
+    if not selectors:
+        raise ValueError("Auto Route selector must contain at least one Exit outbound")
+    if any(not tag.startswith("wm-exit-") for tag in selectors):
+        raise ValueError("Auto Route selectors must use wm-exit- outbound tags")
+    if not inbound_tag.startswith("wm-route-auto-"):
+        raise ValueError("Auto Route inbound tag must use wm-route-auto- prefix")
+    if not balancer_tag.startswith("wm-balancer-") or not rule_tag.startswith("wm-rule-auto-"):
+        raise ValueError("Auto Route balancer and rule tags must use managed prefixes")
+    if strategy != "leastPing":
+        raise ValueError("only leastPing is supported for Auto Route")
+
+    result = json.loads(json.dumps(template))
+    ensure_xray_api(result)
+    available = {item.get("tag") for item in result.get("outbounds", [])}
+    missing = [tag for tag in selectors if tag not in available]
+    if missing:
+        raise ValueError(f"Auto Route selector references missing outbounds: {', '.join(missing)}")
+
+    routing = result.setdefault("routing", {})
+    rules = routing.setdefault("rules", [])
+    balancers = routing.setdefault("balancers", [])
+    rules[:] = [item for item in rules if item.get("ruleTag") != rule_tag and item.get("inboundTag") != [inbound_tag]]
+    balancers[:] = [item for item in balancers if item.get("tag") != balancer_tag]
+    balancers.append({"tag": balancer_tag, "selector": selectors, "strategy": {"type": strategy}})
+    insert_before_catch_all(rules, {"type": "field", "inboundTag": [inbound_tag], "balancerTag": balancer_tag, "ruleTag": rule_tag})
+
+    observatory = result.setdefault("observatory", {})
+    observatory.update({
+        "subjectSelector": selectors,
+        "probeURL": AUTO_PROBE_URL,
+        "probeInterval": AUTO_PROBE_INTERVAL,
+        "enableConcurrency": True,
+    })
+
+    ensure_unique(balancers, "tag", "balancer tags")
     ensure_unique(rules, "ruleTag", "routing rule tags")
     return result
 
@@ -83,6 +129,22 @@ def remove(template, inbound_tag, outbound_tag, rule_tag):
     result["outbounds"] = [item for item in result.get("outbounds", []) if item.get("tag") != outbound_tag]
     routing = result.setdefault("routing", {})
     routing["rules"] = [item for item in routing.get("rules", []) if item.get("ruleTag") != rule_tag and not (item.get("inboundTag") == [inbound_tag] and item.get("outboundTag") == outbound_tag)]
+    return result
+
+
+def remove_balancer(template, inbound_tag, balancer_tag, rule_tag):
+    result = json.loads(json.dumps(template))
+    routing = result.setdefault("routing", {})
+    routing["rules"] = [item for item in routing.get("rules", []) if item.get("ruleTag") != rule_tag and not (item.get("inboundTag") == [inbound_tag] and item.get("balancerTag") == balancer_tag)]
+    routing["balancers"] = [item for item in routing.get("balancers", []) if item.get("tag") != balancer_tag]
+    remaining_selectors = []
+    for balancer in routing.get("balancers", []):
+        remaining_selectors.extend(balancer.get("selector", []))
+    if remaining_selectors:
+        observatory = result.setdefault("observatory", {})
+        observatory["subjectSelector"] = list(dict.fromkeys(remaining_selectors))
+    else:
+        result.pop("observatory", None)
     return result
 
 
@@ -99,12 +161,34 @@ def main():
         child.add_argument("--outbound-tag", required=True)
         child.add_argument("--rule-tag", required=True)
         child.add_argument("--output", required=True)
+
+    merge_balancer_parser = sub.add_parser("merge-balancer")
+    merge_balancer_parser.add_argument("--template", required=True)
+    merge_balancer_parser.add_argument("--selectors", required=True, help="Comma-separated exact managed outbound tags")
+    merge_balancer_parser.add_argument("--inbound-tag", required=True)
+    merge_balancer_parser.add_argument("--balancer-tag", required=True)
+    merge_balancer_parser.add_argument("--rule-tag", required=True)
+    merge_balancer_parser.add_argument("--strategy", default="leastPing")
+    merge_balancer_parser.add_argument("--output", required=True)
+
+    remove_balancer_parser = sub.add_parser("remove-balancer")
+    remove_balancer_parser.add_argument("--template", required=True)
+    remove_balancer_parser.add_argument("--inbound-tag", required=True)
+    remove_balancer_parser.add_argument("--balancer-tag", required=True)
+    remove_balancer_parser.add_argument("--rule-tag", required=True)
+    remove_balancer_parser.add_argument("--output", required=True)
+
     args = parser.parse_args()
     template = read_json(args.template)
     if args.command == "merge":
         result = merge(template, read_json(args.outbound), args.inbound_tag, args.outbound_tag, args.rule_tag)
-    else:
+    elif args.command == "remove":
         result = remove(template, args.inbound_tag, args.outbound_tag, args.rule_tag)
+    elif args.command == "merge-balancer":
+        selectors = [item.strip() for item in args.selectors.split(",") if item.strip()]
+        result = merge_balancer(template, selectors, args.inbound_tag, args.balancer_tag, args.rule_tag, args.strategy)
+    else:
+        result = remove_balancer(template, args.inbound_tag, args.balancer_tag, args.rule_tag)
     Path(args.output).write_text(json.dumps(result, indent=2, sort_keys=True) + "\n", encoding="utf-8")
 
 

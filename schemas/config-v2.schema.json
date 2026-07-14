@@ -9,7 +9,50 @@
     "server": {"type": "object", "required": ["domain"], "properties": {"domain": {"type": "string", "minLength": 1}}},
     "network": {"type": "object", "required": ["public_port", "subscription"]},
     "panel": {"type": "object", "required": ["listen_port", "path", "username", "password", "api_auth"]},
-    "clients": {"type": "array"}, "exits": {"type": "array"}, "routes": {"type": "array"}, "relay_peers": {"type": "array"}, "migrations": {"type": "array"}
+    "clients": {"type": "array"},
+    "exits": {"type": "array"},
+    "routes": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "required": ["id", "kind", "display_name", "enabled", "entry", "routing"],
+        "properties": {
+          "id": {"$ref": "#/$defs/id"},
+          "kind": {"enum": ["cascade", "auto"]},
+          "display_name": {"type": "string", "minLength": 1, "maxLength": 128},
+          "enabled": {"type": "boolean"},
+          "entry": {"type": "object"},
+          "routing": {"type": "object"}
+        }
+      }
+    },
+    "balancers": {
+      "type": "array",
+      "default": [],
+      "items": {
+        "type": "object",
+        "required": ["id", "display_name", "enabled", "strategy", "selector", "balancer_tag", "observatory_tag"],
+        "properties": {
+          "id": {"$ref": "#/$defs/id"},
+          "display_name": {"type": "string", "minLength": 1, "maxLength": 128},
+          "enabled": {"type": "boolean"},
+          "strategy": {"const": "leastPing"},
+          "selector": {
+            "type": "array",
+            "minItems": 1,
+            "uniqueItems": true,
+            "items": {"type": "string", "pattern": "^wm-exit-[a-z0-9-]+$"}
+          },
+          "balancer_tag": {"type": "string", "pattern": "^wm-balancer-[a-z0-9-]+$"},
+          "observatory_tag": {"type": "string", "pattern": "^wm-observatory-[a-z0-9-]+$"}
+        }
+      }
+    },
+    "relay_peers": {"type": "array"},
+    "migrations": {"type": "array"}
   },
-  "$defs": {"id": {"type": "string", "pattern": "^[a-z0-9][a-z0-9-]{1,47}$"}, "path": {"type": "string", "minLength": 12, "maxLength": 128, "pattern": "^/(?!.*(?:\\.\\.|%2[fF]|\\s)).*/$"}}
+  "$defs": {
+    "id": {"type": "string", "pattern": "^[a-z0-9][a-z0-9-]{1,47}$"},
+    "path": {"type": "string", "minLength": 12, "maxLength": 128, "pattern": "^/(?!.*(?:\\.\\.|%2[fF]|\\s)).*/$"}
+  }
 }
