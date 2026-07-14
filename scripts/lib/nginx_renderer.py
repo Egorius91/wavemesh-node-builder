@@ -14,7 +14,12 @@ def normalize_path(value):
     return value
 def configured_subscription_base(config):
     value=config.get("network",{}).get("subscription",{}).get("path","")
-    return normalize_path(value) if value else None
+    if not value:
+        return None
+    value=normalize_path(value)
+    if value.startswith("/sub/"):
+        return None
+    return value
 def client_subscription_paths(config):
     base=configured_subscription_base(config)
     result=[]
