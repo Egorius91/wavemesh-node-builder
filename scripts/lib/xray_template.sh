@@ -57,28 +57,32 @@ wm_xray_route_test() {
 wm_xray_apply_managed_route() {
   local outbound_file="$1" inbound_tag="$2" outbound_tag="$3" rule_tag="$4"
   local transaction_dir original candidate owns_transaction=0
-  if [[ -n "${WM_ACTIVE_TRANSACTION:-}" ]]; then
-    transaction_dir="$WM_ACTIVE_TRANSACTION"
-  else
-    owns_transaction=1
-    transaction_dir="$WM_STATE_DIR/transactions/$(date -u +%Y%m%dT%H%M%SZ)-xray-$$"
-    mkdir -p "$transaction_dir"
-    chmod 700 "$WM_STATE_DIR/transactions" "$transaction_dir"
-  fi
+  if [[ -n "${WM_ACTIVE_TRANSACTION:-}" ]]; then transaction_dir="$WM_ACTIVE_TRANSACTION"; else owns_transaction=1; transaction_dir="$WM_STATE_DIR/transactions/$(date -u +%Y%m%dT%H%M%SZ)-xray-$$"; mkdir -p "$transaction_dir"; chmod 700 "$WM_STATE_DIR/transactions" "$transaction_dir"; fi
   mkdir -p "$WM_STATE_DIR/backups"
   original="$transaction_dir/original.json"; candidate="$transaction_dir/candidate.json"
-
   wm_xray_get_template "$original" || return 1
   cp "$original" "$WM_STATE_DIR/backups/xray.$(date -u +%Y%m%dT%H%M%SZ).json"
   python3 "$WM_XRAY_TEMPLATE_TOOL" merge --template "$original" --outbound "$outbound_file" --inbound-tag "$inbound_tag" --outbound-tag "$outbound_tag" --rule-tag "$rule_tag" --output "$candidate" || return 1
   wm_xray_test_outbound "$outbound_file" "$candidate" || return 1
-  if ! wm_xray_apply_template "$candidate"; then
-    wm_warn "Xray candidate apply failed; restoring previous template"
-    wm_xray_apply_template "$original" || wm_warn "Automatic Xray rollback failed; restore $original manually"
-    return 1
-  fi
-  if ! wm_xray_route_test "$inbound_tag" "$outbound_tag"; then
-    wm_warn "Xray routeTest failed; restoring previous template"
+  if ! wm_xray_apply_template "$candidate"; then wm_warn "Xray candidate apply failed; restoring previous template"; wm_xray_apply_template "$original" || wm_warn "Automatic Xray rollback failed; restore $original manually"; return 1; fi
+  if ! wm_xray_route_test "$inbound_tag" "$outbound_tag"; then wm_warn "Xray routeTest failed; restoring previous template"; wm_xray_apply_template "$original" || wm_warn "Automatic Xray rollback failed; restore $original manually"; return 1; fi
+  if (( owns_transaction == 1 )); then printf '%s\n' '{"status":"committed"}' > "$transaction_dir/status.json"; fi
+  chmod 600 "$transaction_dir"/*.json
+}
+
+wm_xray_apply_managed_balancer() {
+  local selectors="$1" inbound_tag="$2" balancer_tag="$3" rule_tag="$4" strategy="${5:-leastPing}"
+  local transaction_dir original candidate readback owns_transaction=0
+  if [[ -n "${WM_ACTIVE_TRANSACTION:-}" ]]; then transaction_dir="$WM_ACTIVE_TRANSACTION"; else owns_transaction=1; transaction_dir="$WM_STATE_DIR/transactions/$(date -u +%Y%m%dT%H%M%SZ)-auto-$$"; mkdir -p "$transaction_dir"; chmod 700 "$WM_STATE_DIR/transactions" "$transaction_dir"; fi
+  mkdir -p "$WM_STATE_DIR/backups"
+  original="$transaction_dir/auto-xray.before.json"; candidate="$transaction_dir/auto-xray.candidate.json"; readback="$transaction_dir/auto-xray.readback.json"
+  wm_xray_get_template "$original" || return 1
+  cp "$original" "$WM_STATE_DIR/backups/xray.$(date -u +%Y%m%dT%H%M%SZ).json"
+  python3 "$WM_XRAY_TEMPLATE_TOOL" merge-balancer --template "$original" --selectors "$selectors" --inbound-tag "$inbound_tag" --balancer-tag "$balancer_tag" --rule-tag "$rule_tag" --strategy "$strategy" --output "$candidate" || return 1
+  if ! wm_xray_apply_template "$candidate"; then wm_warn "Auto Route Xray apply failed; restoring previous template"; wm_xray_apply_template "$original" || wm_warn "Automatic Xray rollback failed; restore $original manually"; return 1; fi
+  wm_xray_get_template "$readback" || { wm_xray_apply_template "$original" || true; return 1; }
+  if ! python3 "$WM_XRAY_TEMPLATE_TOOL" verify-balancer --template "$readback" --selectors "$selectors" --inbound-tag "$inbound_tag" --balancer-tag "$balancer_tag" --rule-tag "$rule_tag" --strategy "$strategy"; then
+    wm_warn "Auto Route read-back verification failed; restoring previous template"
     wm_xray_apply_template "$original" || wm_warn "Automatic Xray rollback failed; restore $original manually"
     return 1
   fi
