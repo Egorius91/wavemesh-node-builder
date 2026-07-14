@@ -124,6 +124,31 @@ def merge_balancer(template, selectors, inbound_tag, balancer_tag, rule_tag, str
     return result
 
 
+def verify_balancer(template, selectors, inbound_tag, balancer_tag, rule_tag, strategy="leastPing"):
+    selectors = list(dict.fromkeys(selectors))
+    routing = template.get("routing", {})
+    balancers = [item for item in routing.get("balancers", []) if item.get("tag") == balancer_tag]
+    if len(balancers) != 1:
+        raise ValueError("managed Auto Route balancer missing or duplicated")
+    balancer = balancers[0]
+    if balancer.get("selector") != selectors or balancer.get("strategy") != {"type": strategy}:
+        raise ValueError("managed Auto Route balancer differs from desired state")
+    rules = [item for item in routing.get("rules", []) if item.get("ruleTag") == rule_tag]
+    if len(rules) != 1:
+        raise ValueError("managed Auto Route routing rule missing or duplicated")
+    rule = rules[0]
+    if rule.get("inboundTag") != [inbound_tag] or rule.get("balancerTag") != balancer_tag or "outboundTag" in rule:
+        raise ValueError("managed Auto Route routing rule differs from desired state")
+    catch_index = next((index for index, item in enumerate(routing.get("rules", [])) if is_catch_all(item)), len(routing.get("rules", [])))
+    rule_index = routing.get("rules", []).index(rule)
+    if rule_index >= catch_index:
+        raise ValueError("managed Auto Route routing rule is shadowed by catch-all")
+    observatory = template.get("observatory", {})
+    if observatory.get("subjectSelector") != selectors:
+        raise ValueError("Auto Route observatory selectors differ from desired state")
+    return True
+
+
 def remove(template, inbound_tag, outbound_tag, rule_tag):
     result = json.loads(json.dumps(template))
     result["outbounds"] = [item for item in result.get("outbounds", []) if item.get("tag") != outbound_tag]
@@ -171,6 +196,14 @@ def main():
     merge_balancer_parser.add_argument("--strategy", default="leastPing")
     merge_balancer_parser.add_argument("--output", required=True)
 
+    verify_parser = sub.add_parser("verify-balancer")
+    verify_parser.add_argument("--template", required=True)
+    verify_parser.add_argument("--selectors", required=True)
+    verify_parser.add_argument("--inbound-tag", required=True)
+    verify_parser.add_argument("--balancer-tag", required=True)
+    verify_parser.add_argument("--rule-tag", required=True)
+    verify_parser.add_argument("--strategy", default="leastPing")
+
     remove_balancer_parser = sub.add_parser("remove-balancer")
     remove_balancer_parser.add_argument("--template", required=True)
     remove_balancer_parser.add_argument("--inbound-tag", required=True)
@@ -187,6 +220,10 @@ def main():
     elif args.command == "merge-balancer":
         selectors = [item.strip() for item in args.selectors.split(",") if item.strip()]
         result = merge_balancer(template, selectors, args.inbound_tag, args.balancer_tag, args.rule_tag, args.strategy)
+    elif args.command == "verify-balancer":
+        selectors = [item.strip() for item in args.selectors.split(",") if item.strip()]
+        verify_balancer(template, selectors, args.inbound_tag, args.balancer_tag, args.rule_tag, args.strategy)
+        return
     else:
         result = remove_balancer(template, args.inbound_tag, args.balancer_tag, args.rule_tag)
     Path(args.output).write_text(json.dumps(result, indent=2, sort_keys=True) + "\n", encoding="utf-8")
