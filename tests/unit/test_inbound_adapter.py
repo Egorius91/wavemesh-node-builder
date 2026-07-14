@@ -6,24 +6,27 @@ with tempfile.TemporaryDirectory() as name:
     desired=Path(name)/"desired.json"
     subprocess.run([sys.executable,str(tool),"build","--tag","wm-route-de-fra-1","--remark","RU -> Germany","--port","21001","--path","/api/de/example-path/","--host","entry.example.com","--clients",str(clients),"--public-domain","entry.example.com","--output",str(desired)],check=True)
     data=json.loads(desired.read_text()); assert data["listen"]=="127.0.0.1"; assert data["streamSettings"]["xhttpSettings"]["mode"]=="stream-one"
-    assert data["tag"]=="wm-route-de-fra-1" and data["remark"]=="wm-route-de-fra-1"
+    assert data["tag"]=="wm-route-de-fra-1" and data["remark"]=="RU -> Germany"
     assert data["streamSettings"]["externalProxy"][0]["remark"]=="RU -> Germany"
     client=data["settings"]["clients"][0]; assert client["tgId"] == 0 and isinstance(client["tgId"], int)
     empty=Path(name)/"empty.json"; empty.write_text('{"success":true,"obj":[]}')
     plan=json.loads(subprocess.check_output([sys.executable,str(tool),"plan","--desired",str(desired),"--actual",str(empty)])); assert plan["action"]=="add"
     actual=Path(name)/"actual.json"; clone=dict(data); clone["id"]=12; actual.write_text(json.dumps({"success":True,"obj":[clone]}))
     plan=json.loads(subprocess.check_output([sys.executable,str(tool),"plan","--desired",str(desired),"--actual",str(actual)])); assert plan=={"action":"noop","id":12}
+    clone["remark"]="wm-route-de-fra-1"
     clone["streamSettings"]["externalProxy"][0]["remark"]="wm-route-de-fra-1"; actual.write_text(json.dumps({"success":True,"obj":[clone]}))
     plan=json.loads(subprocess.check_output([sys.executable,str(tool),"plan","--desired",str(desired),"--actual",str(actual)])); assert plan=={"action":"update","id":12}
     bot_client={"id":"bot-uuid","email":"user_EgoriusLutius_f026d","subId":"bot-sub-id","enable":True,"tgId":0}
     stale_managed={"id":"stale-uuid","email":"wm.stale.client","subId":"stale-sub-id","enable":True}
     clone=json.loads(desired.read_text()); clone["id"]=12; clone["settings"]["clients"] += [bot_client,stale_managed]
+    clone["remark"]="wm-route-de-fra-1"
     clone["streamSettings"]["externalProxy"][0]["remark"]="wm-route-de-fra-1"
     actual.write_text(json.dumps({"success":True,"obj":[clone]}))
     merged=Path(name)/"merged.json"
     subprocess.run([sys.executable,str(tool),"merge-clients","--desired",str(desired),"--actual",str(actual),"--output",str(merged)],check=True)
     merged_data=json.loads(merged.read_text()); emails=[client["email"] for client in merged_data["settings"]["clients"]]
     assert "user_EgoriusLutius_f026d" in emails and "wm.stale.client" not in emails
+    assert merged_data["remark"]=="RU -> Germany"
     assert merged_data["streamSettings"]["externalProxy"][0]["remark"]=="RU -> Germany"
     plan=json.loads(subprocess.check_output([sys.executable,str(tool),"plan","--desired",str(merged),"--actual",str(actual)])); assert plan=={"action":"update","id":12}
     updated=dict(merged_data); updated["id"]=12; actual.write_text(json.dumps({"success":True,"obj":[updated]}))

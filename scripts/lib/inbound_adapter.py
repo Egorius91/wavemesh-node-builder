@@ -16,7 +16,7 @@ def build(args):
     clients=json.loads(Path(args.clients).read_text(encoding="utf-8"))
     public_name=args.remark or args.tag
     payload={
-        "up":0,"down":0,"total":0,"remark":args.tag,"tag":args.tag,"enable":True,"expiryTime":0,
+        "up":0,"down":0,"total":0,"remark":public_name,"tag":args.tag,"enable":True,"expiryTime":0,
         "listen":"127.0.0.1","port":args.port,"protocol":"vless",
         "settings":{"clients":clients,"decryption":"none","fallbacks":[]},
         "streamSettings":{"network":"xhttp","security":"none","xhttpSettings":{"path":args.path,"host":args.host,"mode":"stream-one"}},
