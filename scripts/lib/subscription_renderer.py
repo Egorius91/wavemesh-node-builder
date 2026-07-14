@@ -14,10 +14,14 @@ def secure_subscription_id(value,used):
     while True:
         value="sub-"+secrets.token_urlsafe(18)
         if value not in used: used.add(value); return value
-def normalized_base_path(cfg):
-    value=str(cfg.get("network",{}).get("subscription",{}).get("path","") or "/sub/")
+def configured_opaque_base_path(cfg):
+    value=str(cfg.get("network",{}).get("subscription",{}).get("path","") or "")
+    if not value:
+        return None
     if not value.startswith("/"): value="/"+value
     if not value.endswith("/"): value+="/"
+    if value.startswith("/sub/"):
+        return None
     return value
 def forbidden_values(cfg):
     values={"127.0.0.1","localhost",str(cfg.get("server",{}).get("public_ip","")),str(cfg.get("panel",{}).get("listen_port","")),str(cfg.get("network",{}).get("xhttp",{}).get("port",""))}
@@ -29,7 +33,7 @@ def forbidden_values(cfg):
 def render(cfg,output_dir):
     if cfg.get("node",{}).get("role") not in ("entry","standalone"): raise ValueError("subscriptions are only generated on entry/standalone nodes")
     domain=cfg["server"]["domain"]; routes={x["id"]:x for x in cfg.get("routes",[]) if x.get("enabled",True)}; exits={x["id"]:x for x in cfg.get("exits",[]) if x.get("enabled",True)}; used=set(); metadata=[]
-    base_path=normalized_base_path(cfg)
+    base_path=configured_opaque_base_path(cfg)
     output_dir=Path(output_dir); users_dir=output_dir/"users"; users_dir.mkdir(parents=True,exist_ok=True)
     for client in cfg.get("clients",[]):
         client["subscription_id"]=secure_subscription_id(client.get("subscription_id",""),used)
@@ -47,7 +51,10 @@ def render(cfg,output_dir):
         for forbidden in forbidden_values(cfg):
             if forbidden in content: raise ValueError("subscription contains a forbidden internal or Exit value")
         target=users_dir/f"{client['subscription_id']}.txt"; target.write_text(content,encoding="utf-8"); os.chmod(target,0o644)
-        public_path=base_path if not metadata else f"{base_path.rstrip('/')}/{client['subscription_id']}/"
+        if base_path:
+            public_path=base_path if not metadata else f"{base_path.rstrip('/')}/{client['subscription_id']}/"
+        else:
+            public_path=f"/sub/{client['subscription_id']}/"
         metadata.append({"client_id":client["id"],"subscription_id":client["subscription_id"],"path":public_path,"profiles":len(profiles)})
     first=(users_dir/f"{metadata[0]['subscription_id']}.txt").read_text(encoding="utf-8") if metadata else ""; (output_dir/"sub.txt").write_text(first,encoding="utf-8"); os.chmod(output_dir/"sub.txt",0o644)
     return metadata
