@@ -12,13 +12,19 @@ def normalize_path(value):
     if not value.endswith("/"): value+="/"
     validate_path(value)
     return value
+def configured_subscription_base(config):
+    value=config.get("network",{}).get("subscription",{}).get("path","")
+    return normalize_path(value) if value else None
 def client_subscription_paths(config):
-    base=normalize_path(config.get("network",{}).get("subscription",{}).get("path",""))
+    base=configured_subscription_base(config)
     result=[]
     for client in sorted(config.get("clients",[]),key=lambda x:x.get("id","")):
         sub_id=client.get("subscription_id","")
         if not client.get("enabled",True) or not SUB_ID_RE.fullmatch(sub_id): continue
-        path=base if not result else f"{base.rstrip('/')}/{sub_id}/"
+        if base:
+            path=base if not result else f"{base.rstrip('/')}/{sub_id}/"
+        else:
+            path=f"/sub/{sub_id}/"
         validate_path(path)
         result.append((client,sub_id,path))
     return result
@@ -29,12 +35,13 @@ def render_location(path,port,allowed_ips):
     lines += [f"    proxy_pass http://127.0.0.1:{int(port)};","    proxy_http_version 1.1;","    proxy_set_header Host $host;","    proxy_set_header X-Forwarded-Proto https;","    proxy_set_header X-Forwarded-Host $host;","    proxy_set_header X-Forwarded-Port 443;","    proxy_redirect off;","    proxy_buffering off;","    proxy_request_buffering off;","}"]
     return "\n".join(lines)
 def render(config):
-    subscription_path=normalize_path(config.get("network",{}).get("subscription",{}).get("path",""))
+    subscription_path=configured_subscription_base(config)
     seen={config.get("panel",{}).get("path"),config.get("network",{}).get("xhttp",{}).get("path")}; blocks=[]
-    for client,sub_id,path in client_subscription_paths(config):
+    subscription_paths=client_subscription_paths(config)
+    for client,sub_id,path in subscription_paths:
         if path in seen: raise ValueError(f"managed path collision: {path}")
         seen.add(path); blocks.append("\n".join([f"location = {path} {{","    root /var/www/wavemesh-sub/users;",f"    try_files /{sub_id}.txt =404;","    default_type text/plain;",'    add_header Cache-Control "no-store" always;','    add_header Profile-Title "base64:V2F2ZU1lc2hWUE4=" always;',"}"]))
-    if not any(path == subscription_path for _,_,path in client_subscription_paths(config)):
+    if subscription_path and not any(path == subscription_path for _,_,path in subscription_paths):
         seen.add(subscription_path)
     for peer in sorted(config.get("relay_peers",[]),key=lambda x:x["id"]):
         if not peer.get("enabled",True): continue
