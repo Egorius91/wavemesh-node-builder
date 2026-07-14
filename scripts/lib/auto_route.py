@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Build persistent WaveMesh Auto Route desired state without public exposure."""
+"""Build and mutate persistent WaveMesh Auto Route desired state."""
 
 import argparse
 import copy
@@ -57,6 +57,15 @@ def enabled_exit_tags(config, requested):
     return selectors
 
 
+def find_auto(config, auto_id):
+    route_id = f"route-auto-{auto_id}"
+    route = next((item for item in config.get("routes", []) if item.get("id") == route_id and item.get("kind") == "auto"), None)
+    balancer = next((item for item in config.get("balancers", []) if item.get("id") == auto_id), None)
+    if not route or not balancer:
+        raise ValueError(f"Auto Route not found: {auto_id}")
+    return route, balancer
+
+
 def prepare(config, auto_id, display_name, requested_exits, local_port, public_path, sort_order):
     if config.get("node", {}).get("role") != "entry":
         raise ValueError("Auto Route requires node.role=entry")
@@ -78,11 +87,7 @@ def prepare(config, auto_id, display_name, requested_exits, local_port, public_p
     rule_tag = f"wm-rule-auto-{auto_id}"
     observatory_tag = f"wm-observatory-{auto_id}"
 
-    used = {
-        credential.get("uuid")
-        for client in result.get("clients", [])
-        for credential in client.get("credentials", [])
-    }
+    used = {credential.get("uuid") for client in result.get("clients", []) for credential in client.get("credentials", [])}
     inbound_clients = []
     for client in result.get("clients", []):
         value = str(uuid.uuid4())
@@ -90,56 +95,17 @@ def prepare(config, auto_id, display_name, requested_exits, local_port, public_p
             value = str(uuid.uuid4())
         used.add(value)
         email = f"wm.{client['id']}.{route_id}"
-        credential = {
-            "route_id": route_id,
-            "email": email,
-            "uuid": value,
-            "enabled": True,
-        }
+        credential = {"route_id": route_id, "email": email, "uuid": value, "enabled": True}
         client.setdefault("credentials", []).append(credential)
-        inbound_clients.append({
-            "id": value,
-            "email": email,
-            "enable": bool(client.get("enabled", True)),
-            "flow": "",
-            "limitIp": 0,
-            "totalGB": 0,
-            "expiryTime": 0,
-            "tgId": 0,
-            "subId": client.get("subscription_id", ""),
-        })
+        inbound_clients.append({"id": value, "email": email, "enable": bool(client.get("enabled", True)), "flow": "", "limitIp": 0, "totalGB": 0, "expiryTime": 0, "tgId": 0, "subId": client.get("subscription_id", "")})
     if not inbound_clients:
         raise ValueError("Entry has no clients")
 
-    result.setdefault("balancers", []).append({
-        "id": auto_id,
-        "display_name": display_name,
-        "enabled": True,
-        "strategy": "leastPing",
-        "selector": selectors,
-        "balancer_tag": balancer_tag,
-        "observatory_tag": observatory_tag,
-    })
+    result.setdefault("balancers", []).append({"id": auto_id, "display_name": display_name, "enabled": True, "strategy": "leastPing", "selector": selectors, "balancer_tag": balancer_tag, "observatory_tag": observatory_tag})
     result.setdefault("routes", []).append({
-        "id": route_id,
-        "kind": "auto",
-        "display_name": display_name,
-        "enabled": True,
-        "sort_order": int(sort_order),
-        "balancer_id": auto_id,
-        "entry": {
-            "listen": "127.0.0.1",
-            "local_port": int(local_port),
-            "public_path": public_path,
-            "inbound_id": None,
-            "inbound_tag": inbound_tag,
-            "xhttp_mode": "stream-one",
-        },
-        "routing": {
-            "rule_tag": rule_tag,
-            "balancer_tag": balancer_tag,
-        },
-        "presentation": {"published": False},
+        "id": route_id, "kind": "auto", "display_name": display_name, "enabled": True, "sort_order": int(sort_order), "balancer_id": auto_id,
+        "entry": {"listen": "127.0.0.1", "local_port": int(local_port), "public_path": public_path, "inbound_id": None, "inbound_tag": inbound_tag, "xhttp_mode": "stream-one"},
+        "routing": {"rule_tag": rule_tag, "balancer_tag": balancer_tag}, "presentation": {"published": False},
     })
     return result, inbound_clients
 
@@ -153,31 +119,56 @@ def finalize(config, route_id, inbound_id):
     return result
 
 
+def set_enabled(config, auto_id, enabled):
+    result = copy.deepcopy(config)
+    route, balancer = find_auto(result, auto_id)
+    route["enabled"] = bool(enabled)
+    balancer["enabled"] = bool(enabled)
+    for client in result.get("clients", []):
+        for credential in client.get("credentials", []):
+            if credential.get("route_id") == route["id"]:
+                credential["enabled"] = bool(enabled)
+    return result
+
+
+def describe(config, auto_id):
+    route, balancer = find_auto(config, auto_id)
+    return {
+        "route_id": route["id"],
+        "inbound_id": route["entry"]["inbound_id"],
+        "inbound_tag": route["entry"]["inbound_tag"],
+        "balancer_tag": route["routing"]["balancer_tag"],
+        "rule_tag": route["routing"]["rule_tag"],
+        "strategy": balancer["strategy"],
+        "selectors": balancer["selector"],
+        "enabled": bool(route.get("enabled", True) and balancer.get("enabled", True)),
+    }
+
+
 def main():
     parser = argparse.ArgumentParser()
     sub = parser.add_subparsers(dest="command", required=True)
     build = sub.add_parser("prepare")
-    build.add_argument("--config", required=True)
-    build.add_argument("--candidate", required=True)
-    build.add_argument("--clients", required=True)
-    build.add_argument("--id", required=True)
-    build.add_argument("--display-name", required=True)
-    build.add_argument("--exit-ids", default="")
-    build.add_argument("--port", type=int, required=True)
-    build.add_argument("--path", required=True)
-    build.add_argument("--sort-order", type=int, default=50)
+    build.add_argument("--config", required=True); build.add_argument("--candidate", required=True); build.add_argument("--clients", required=True)
+    build.add_argument("--id", required=True); build.add_argument("--display-name", required=True); build.add_argument("--exit-ids", default="")
+    build.add_argument("--port", type=int, required=True); build.add_argument("--path", required=True); build.add_argument("--sort-order", type=int, default=50)
     finish = sub.add_parser("finalize")
-    finish.add_argument("--candidate", required=True)
-    finish.add_argument("--route-id", required=True)
-    finish.add_argument("--inbound-id", type=int, required=True)
+    finish.add_argument("--candidate", required=True); finish.add_argument("--route-id", required=True); finish.add_argument("--inbound-id", type=int, required=True)
+    toggle = sub.add_parser("set-enabled")
+    toggle.add_argument("--config", required=True); toggle.add_argument("--output", required=True); toggle.add_argument("--id", required=True); toggle.add_argument("--enabled", choices=("true", "false"), required=True)
+    describe_parser = sub.add_parser("describe")
+    describe_parser.add_argument("--config", required=True); describe_parser.add_argument("--id", required=True)
     args = parser.parse_args()
     if args.command == "prepare":
         requested = [value.strip() for value in args.exit_ids.split(",") if value.strip()]
         candidate, clients = prepare(load(args.config), args.id, args.display_name, requested, args.port, args.path, args.sort_order)
-        atomic(args.candidate, candidate)
-        atomic(args.clients, clients)
-    else:
+        atomic(args.candidate, candidate); atomic(args.clients, clients)
+    elif args.command == "finalize":
         atomic(args.candidate, finalize(load(args.candidate), args.route_id, args.inbound_id))
+    elif args.command == "set-enabled":
+        atomic(args.output, set_enabled(load(args.config), args.id, args.enabled == "true"))
+    else:
+        print(json.dumps(describe(load(args.config), args.id), ensure_ascii=False))
 
 
 if __name__ == "__main__":
