@@ -1,0 +1,21 @@
+[Unit]
+Description=WaveMesh route health monitor
+After=network-online.target nginx.service x-ui.service
+Wants=network-online.target
+
+[Service]
+Type=oneshot
+ExecStart=/usr/local/bin/wavemesh monitor run
+User=root
+Group=root
+Nice=10
+IOSchedulingClass=best-effort
+IOSchedulingPriority=7
+NoNewPrivileges=true
+PrivateTmp=true
+ProtectHome=true
+ProtectSystem=full
+ReadWritePaths=/etc/wavemesh-node /var/lib/wavemesh-node /var/log/wavemesh-node
+
+[Install]
+WantedBy=multi-user.target
