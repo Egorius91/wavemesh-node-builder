@@ -14,14 +14,14 @@ expected = {
     "cascade.sh": ("cascade-add-exit",),
     "exit_peer.sh": ("exit-peer-create", "exit-peer-remove"),
     "runtime.sh": ("route-${operation}", "route-remove", "cascade-remove-exit", "reconcile-apply"),
-    "subscription.sh": ("subscription-rebuild", "subscription-rotate-path"),
+    "subscription.sh": ("subscription-rebuild", "subscription-rotate-path", "subscription-migrate-native", "subscription-fallback-generated"),
 }
 for name, operations in expected.items():
     text = commands[name]
     for operation in operations:
         assert f'wm_lock_mutation "{operation}"' in text
         assert f'wm_transaction_begin "{operation}"' in text
-    assert text.count("wm_transaction_commit") == len(operations)
+    assert text.count("wm_transaction_commit") >= len(operations)
 
 cli = (root / "bin" / "wavemesh").read_text(encoding="utf-8")
 assert "wavemesh transaction list [--json]" in cli

@@ -61,6 +61,9 @@ def migrate_v1(config, backup_path):
     config["clients"] = clients
     config.setdefault("exits", [])
     config.setdefault("relay_peers", [])
+    subscription = config.setdefault("network", {}).setdefault("subscription", {})
+    subscription["mode"] = "generated"
+    subscription["backend"] = "generated"
     config.setdefault("routes", [{"id": "route-standalone-default", "kind": "direct", "display_name": "Direct", "enabled": True, "sort_order": 0}])
     config.setdefault("migrations", []).append({"from": 1, "to": 2, "applied_at": utc_now(), "backup": str(backup_path)})
     config.setdefault("builder", {})["version"] = "0.2.0"
@@ -72,6 +75,13 @@ def migrate(path, backup_dir):
     config = json.loads(path.read_text(encoding="utf-8"))
     version = config.get("schema_version", config.get("version", 1))
     if version == 2:
+        subscription = config.setdefault("network", {}).setdefault("subscription", {})
+        backend = subscription.get("backend") or subscription.get("mode") or "generated"
+        changed = subscription.get("backend") != backend or subscription.get("mode") != backend
+        subscription["backend"] = backend
+        subscription["mode"] = backend
+        if changed:
+            atomic_write(path, config)
         return
     if version != 1:
         raise SystemExit(f"unsupported config schema version: {version}")

@@ -42,7 +42,7 @@ Transport:           VLESS + XHTTP + TLS via nginx
 XHTTP public path:   ${XHTTP_PATH}
 XHTTP local listen:  127.0.0.1:${XHTTP_LOCAL_PORT}
 Subscription URL:    ${subscription_url}
-Subscription mode:   fallback-generated static file
+Subscription mode:   ${SUB_BACKEND}
 
 Important:
 - Public client links must use ${DOMAIN}:443.
@@ -72,7 +72,7 @@ EOF
   "xhttp_path": "${XHTTP_PATH}",
   "xhttp_local_port": "${XHTTP_LOCAL_PORT}",
   "subscription_url": "${subscription_url}",
-  "subscription_mode": "fallback-generated",
+  "subscription_mode": "${SUB_BACKEND}",
   "fingerprint": "${FINGERPRINT}",
   "validation_status": "ok"
 }

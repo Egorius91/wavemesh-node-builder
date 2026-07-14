@@ -104,11 +104,21 @@ wm_runtime_prepare_subscriptions() {
   WM_RUNTIME_METADATA="$transaction/subscriptions.json"
   WM_RUNTIME_SUB_BACKUP="$transaction/subscriptions.before"
   mkdir -p "$WM_RUNTIME_PREPARED" "$WM_RUNTIME_SUB_BACKUP"
-  wm_subscription_prepare "$source" "$WM_RUNTIME_CANDIDATE" "$WM_RUNTIME_PREPARED" "$WM_RUNTIME_METADATA"
+  if [[ "$(wm_subscription_backend "$source")" == "xui-native" ]]; then
+    cp "$source" "$WM_RUNTIME_CANDIDATE"
+    printf '[]\n' > "$WM_RUNTIME_METADATA"
+  else
+    wm_subscription_prepare "$source" "$WM_RUNTIME_CANDIDATE" "$WM_RUNTIME_PREPARED" "$WM_RUNTIME_METADATA"
+  fi
 }
 
 wm_runtime_apply_public_state() {
   local transaction="$1"
+  if [[ "$(wm_subscription_backend "$WM_RUNTIME_CANDIDATE")" == "xui-native" ]]; then
+    wm_nginx_apply_desired "$WM_RUNTIME_CANDIDATE" "$transaction" || return 1
+    wm_native_validate_public "$WM_RUNTIME_CANDIDATE" || return 1
+    return 0
+  fi
   wm_subscription_install_files "$WM_RUNTIME_PREPARED" "$WM_RUNTIME_SUB_BACKUP"
   wm_nginx_apply_desired "$WM_RUNTIME_CANDIDATE" "$transaction" || return 1
   wm_subscription_validate_public "$WM_RUNTIME_METADATA" || return 1
@@ -232,13 +242,17 @@ PY
 }
 
 wm_reconcile_command() {
-  local mode="${1:---dry-run}" transaction candidate route_id enabled inbound_file outbound_file inbound_tag outbound_tag rule_tag reconciled_id updated_candidate
+  local mode="${1:---dry-run}" transaction candidate route_id enabled inbound_file outbound_file inbound_tag outbound_tag rule_tag reconciled_id updated_candidate balancer_tag selectors
   [[ "$mode" == "--dry-run" || "$mode" == "--apply" ]] || wm_fail "Usage: wavemesh reconcile --dry-run|--apply"
   wm_runtime_health --json >/dev/null
   if [[ "$mode" == "--dry-run" ]]; then python3 "$WM_RUNTIME_TOOL" plan --config "$WM_CONFIG_JSON" --runtime "$WM_RUNTIME_JSON"; return; fi
   wm_lock_mutation "reconcile-apply"; wm_load_config; wm_require_entry_role
-  wm_apply_subscription_presentation || wm_fail "Could not apply subscription presentation settings"
   wm_transaction_begin "reconcile-apply"; transaction="$WM_ACTIVE_TRANSACTION"; candidate="$transaction/config.candidate.json"; cp "$WM_CONFIG_JSON" "$candidate"
+  if [[ "$(wm_subscription_backend "$WM_CONFIG_JSON")" == "xui-native" ]]; then
+    wm_native_apply_settings "$WM_CONFIG_JSON" || wm_fail "Could not apply native subscription settings"
+  else
+    wm_apply_subscription_presentation || wm_fail "Could not apply subscription presentation settings"
+  fi
   while IFS=$'\t' read -r route_id enabled inbound_tag outbound_tag rule_tag; do
     inbound_file="$transaction/${route_id}.inbound.json"; outbound_file="$transaction/${route_id}.outbound.json"
     python3 "$WM_RUNTIME_TOOL" artifacts --config "$candidate" --route-id "$route_id" --inbound "$inbound_file" --outbound "$outbound_file" || wm_fail "Could not build reconcile artifacts"
@@ -257,6 +271,27 @@ wm_reconcile_command() {
 import json,sys
 for r in json.load(open(sys.argv[1],encoding="utf-8")).get("routes",[]):
     if r.get("kind")=="cascade": print("\t".join((r["id"],str(r.get("enabled",True)).lower(),r["entry"]["inbound_tag"],r["routing"]["outbound_tag"],r["routing"]["rule_tag"])))
+PY
+)
+  while IFS=$'\t' read -r route_id enabled inbound_tag balancer_tag rule_tag selectors; do
+    [[ -n "$route_id" ]] || continue
+    inbound_file="$transaction/${route_id}.inbound.json"
+    python3 "$WM_RUNTIME_TOOL" inbound-artifact --config "$candidate" --route-id "$route_id" --output "$inbound_file" || wm_fail "Could not build Auto Route reconcile artifact"
+    reconciled_id="$(wm_inbound_reconcile "$inbound_file")" || wm_fail "Could not reconcile Auto Route inbound for ${route_id}"
+    wm_inbound_set_enabled "$reconciled_id" "$enabled" || wm_fail "Could not set Auto Route inbound state for ${route_id}"
+    if [[ "$enabled" == "true" ]]; then
+      wm_xray_apply_managed_balancer "$selectors" "$inbound_tag" "$balancer_tag" "$rule_tag" leastPing || wm_fail "Could not reconcile Auto Route balancer for ${route_id}"
+    else
+      wm_xray_remove_managed_balancer "$inbound_tag" "$balancer_tag" "$rule_tag" || wm_fail "Could not keep disabled Auto Route removed for ${route_id}"
+    fi
+  done < <(python3 - "$candidate" <<'PY'
+import json,sys
+cfg=json.load(open(sys.argv[1],encoding="utf-8")); balancers={x.get("id"):x for x in cfg.get("balancers",[])}
+for route in cfg.get("routes",[]):
+    if route.get("kind")!="auto": continue
+    balancer=balancers.get(route.get("balancer_id"),{})
+    enabled=bool(route.get("enabled",True) and balancer.get("enabled",True))
+    print("\t".join((route["id"],str(enabled).lower(),route["entry"]["inbound_tag"],route["routing"]["balancer_tag"],route["routing"]["rule_tag"],",".join(balancer.get("selector",[])))))
 PY
 )
   wm_runtime_prepare_subscriptions "$candidate" "$transaction" || wm_fail "Could not rebuild subscriptions"

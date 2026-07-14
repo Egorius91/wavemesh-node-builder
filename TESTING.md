@@ -58,7 +58,7 @@ After the installer completes:
 
 ```text
 https://test.example.com/              -> Web Identity website
-https://test.example.com/sub/<random>/ -> public subscription URL
+https://test.example.com/<opaque>/<opaque>/<subId> -> native 3X-UI subscription URL
 ```
 
 Internally:
@@ -97,6 +97,7 @@ XHTTP local port
 sudo wavemesh show-report
 sudo wavemesh diagnostics
 sudo wavemesh validate-subscription
+sudo wavemesh subscription capabilities --json
 ```
 
 Also check the canonical config:

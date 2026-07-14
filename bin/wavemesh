@@ -13,24 +13,26 @@ info(){ echo "ℹ $*"; }
 ok(){ echo "✓ $*"; }
 load_config(){ [[ -f "$WM_STATE_DIR/config.env" ]] || fail "Missing $WM_STATE_DIR/config.env"; source "$WM_STATE_DIR/config.env"; }
 validate_subscription(){
-  load_config; local content public_content source_url; source_url="https://${DOMAIN}${SUB_PATH}"; content="$(cat "$WM_SUB_DIR/sub.txt" 2>/dev/null || true)"
+  load_config
+  if [[ "${SUB_BACKEND:-generated}" == "xui-native" ]]; then "$0" subscription validate; return; fi
+  local content public_content source_url; source_url="https://${DOMAIN}${SUB_PATH}"; content="$(cat "$WM_SUB_DIR/sub.txt" 2>/dev/null || true)"
   [[ -n "$content" ]] || fail "Subscription file is empty"; [[ "$content" == *"vless://"* ]] || fail "No vless links found"; grep -q "@${DOMAIN}:443" <<< "$content" || fail "Missing ${DOMAIN}:443"; grep -q "type=xhttp" <<< "$content" || fail "Missing type=xhttp"; grep -q "mode=stream-one" <<< "$content" || fail "Missing mode=stream-one"; grep -q "security=tls" <<< "$content" || fail "Missing security=tls"; grep -q "sni=${DOMAIN}" <<< "$content" || fail "Missing sni=${DOMAIN}"; grep -q "host=${DOMAIN}" <<< "$content" || fail "Missing host=${DOMAIN}"
   for bad in 127.0.0.1 localhost "$PUBLIC_IP" "$XHTTP_LOCAL_PORT" "$PANEL_PORT"; do [[ -z "$bad" ]] && continue; grep -q "$bad" <<< "$content" && fail "Subscription leaks forbidden value: $bad"; done
   public_content="$(curl -fsSk --max-time 10 "$source_url" 2>/dev/null || true)"; [[ -n "$public_content" ]] || fail "Public subscription URL is not reachable: $source_url"; [[ "$public_content" == "$content" ]] || fail "Public subscription content does not match generated file"; ok "Subscription OK: $source_url"
 }
 case "${1:-}" in
   cascade)
-    shift; source "$WM_LIB_DIR/00_common.sh"; source "$WM_LIB_DIR/lib/transaction.sh"; source "$WM_LIB_DIR/lib/xui_api.sh"; source "$WM_LIB_DIR/lib/inbound_adapter.sh"; source "$WM_LIB_DIR/lib/xray_template.sh"; source "$WM_LIB_DIR/lib/nginx_renderer.sh"; source "$WM_LIB_DIR/lib/subscription_renderer.sh"; WM_CASCADE_TOOL="$WM_LIB_DIR/lib/cascade.py"; WM_AUTO_TOOL="$WM_LIB_DIR/lib/auto_route.py"; WM_RUNTIME_TOOL="$WM_LIB_DIR/lib/runtime_state.py"; source "$WM_LIB_DIR/commands/runtime.sh"; source "$WM_LIB_DIR/commands/auto.sh"; source "$WM_LIB_DIR/commands/cascade.sh"; wm_cascade_command "$@" ;;
+    shift; source "$WM_LIB_DIR/00_common.sh"; source "$WM_LIB_DIR/lib/transaction.sh"; source "$WM_LIB_DIR/lib/xui_api.sh"; source "$WM_LIB_DIR/lib/inbound_adapter.sh"; source "$WM_LIB_DIR/lib/xray_template.sh"; source "$WM_LIB_DIR/lib/nginx_renderer.sh"; source "$WM_LIB_DIR/lib/subscription_renderer.sh"; source "$WM_LIB_DIR/lib/native_subscription.sh"; WM_CASCADE_TOOL="$WM_LIB_DIR/lib/cascade.py"; WM_AUTO_TOOL="$WM_LIB_DIR/lib/auto_route.py"; WM_RUNTIME_TOOL="$WM_LIB_DIR/lib/runtime_state.py"; source "$WM_LIB_DIR/commands/runtime.sh"; source "$WM_LIB_DIR/commands/auto.sh"; source "$WM_LIB_DIR/commands/cascade.sh"; wm_cascade_command "$@" ;;
   route)
-    shift; source "$WM_LIB_DIR/00_common.sh"; source "$WM_LIB_DIR/lib/transaction.sh"; source "$WM_LIB_DIR/lib/xui_api.sh"; source "$WM_LIB_DIR/lib/inbound_adapter.sh"; source "$WM_LIB_DIR/lib/xray_template.sh"; source "$WM_LIB_DIR/lib/nginx_renderer.sh"; source "$WM_LIB_DIR/lib/subscription_renderer.sh"; WM_RUNTIME_TOOL="$WM_LIB_DIR/lib/runtime_state.py"; source "$WM_LIB_DIR/commands/runtime.sh"; wm_route_command "$@" ;;
+    shift; source "$WM_LIB_DIR/00_common.sh"; source "$WM_LIB_DIR/lib/transaction.sh"; source "$WM_LIB_DIR/lib/xui_api.sh"; source "$WM_LIB_DIR/lib/inbound_adapter.sh"; source "$WM_LIB_DIR/lib/xray_template.sh"; source "$WM_LIB_DIR/lib/nginx_renderer.sh"; source "$WM_LIB_DIR/lib/subscription_renderer.sh"; source "$WM_LIB_DIR/lib/native_subscription.sh"; WM_RUNTIME_TOOL="$WM_LIB_DIR/lib/runtime_state.py"; source "$WM_LIB_DIR/commands/runtime.sh"; wm_route_command "$@" ;;
   reconcile)
-    shift; source "$WM_LIB_DIR/00_common.sh"; source "$WM_LIB_DIR/lib/transaction.sh"; source "$WM_LIB_DIR/lib/xui_api.sh"; source "$WM_LIB_DIR/lib/inbound_adapter.sh"; source "$WM_LIB_DIR/lib/xray_template.sh"; source "$WM_LIB_DIR/lib/nginx_renderer.sh"; source "$WM_LIB_DIR/lib/subscription_renderer.sh"; source "$WM_LIB_DIR/lib/subscription_presentation.sh"; WM_RUNTIME_TOOL="$WM_LIB_DIR/lib/runtime_state.py"; source "$WM_LIB_DIR/commands/runtime.sh"; wm_reconcile_command "$@" ;;
+    shift; source "$WM_LIB_DIR/00_common.sh"; source "$WM_LIB_DIR/lib/transaction.sh"; source "$WM_LIB_DIR/lib/xui_api.sh"; source "$WM_LIB_DIR/lib/inbound_adapter.sh"; source "$WM_LIB_DIR/lib/xray_template.sh"; source "$WM_LIB_DIR/lib/nginx_renderer.sh"; source "$WM_LIB_DIR/lib/subscription_renderer.sh"; source "$WM_LIB_DIR/lib/native_subscription.sh"; source "$WM_LIB_DIR/lib/subscription_presentation.sh"; WM_RUNTIME_TOOL="$WM_LIB_DIR/lib/runtime_state.py"; source "$WM_LIB_DIR/commands/runtime.sh"; wm_reconcile_command "$@" ;;
   subscription)
-    shift; source "$WM_LIB_DIR/00_common.sh"; source "$WM_LIB_DIR/lib/transaction.sh"; source "$WM_LIB_DIR/lib/nginx_renderer.sh"; source "$WM_LIB_DIR/lib/subscription_renderer.sh"; source "$WM_LIB_DIR/lib/subscription_presentation.sh"; source "$WM_LIB_DIR/commands/subscription.sh"; wm_subscription_command "$@" ;;
+    shift; source "$WM_LIB_DIR/00_common.sh"; source "$WM_LIB_DIR/lib/transaction.sh"; source "$WM_LIB_DIR/lib/xui_api.sh"; source "$WM_LIB_DIR/lib/nginx_renderer.sh"; source "$WM_LIB_DIR/lib/subscription_renderer.sh"; source "$WM_LIB_DIR/lib/native_subscription.sh"; source "$WM_LIB_DIR/lib/subscription_presentation.sh"; source "$WM_LIB_DIR/commands/subscription.sh"; wm_subscription_command "$@" ;;
   exit)
     shift; source "$WM_LIB_DIR/00_common.sh"; source "$WM_LIB_DIR/lib/transaction.sh"; source "$WM_LIB_DIR/lib/xui_api.sh"; source "$WM_LIB_DIR/lib/inbound_adapter.sh"; source "$WM_LIB_DIR/lib/nginx_renderer.sh"; WM_EXIT_PEER_TOOL="$WM_LIB_DIR/lib/exit_peer.py"; source "$WM_LIB_DIR/commands/exit_peer.sh"; [[ "${1:-}" == "peer" ]] || wm_fail "Usage: wavemesh exit peer create|list|remove"; shift; wm_exit_peer_command "$@" ;;
   transaction)
-    shift; source "$WM_LIB_DIR/00_common.sh"; source "$WM_LIB_DIR/lib/xui_api.sh"; source "$WM_LIB_DIR/lib/xray_template.sh"; source "$WM_LIB_DIR/lib/nginx_renderer.sh"; source "$WM_LIB_DIR/lib/subscription_renderer.sh"; source "$WM_LIB_DIR/lib/transaction.sh"; wm_transaction_command "$@" ;;
+    shift; source "$WM_LIB_DIR/00_common.sh"; source "$WM_LIB_DIR/lib/xui_api.sh"; source "$WM_LIB_DIR/lib/xray_template.sh"; source "$WM_LIB_DIR/lib/nginx_renderer.sh"; source "$WM_LIB_DIR/lib/subscription_renderer.sh"; source "$WM_LIB_DIR/lib/native_subscription.sh"; source "$WM_LIB_DIR/lib/transaction.sh"; wm_transaction_command "$@" ;;
   show-report) [[ -f "$WM_REPORT_TXT" ]] && cat "$WM_REPORT_TXT" || fail "Report not found" ;;
   diagnostics)
     load_config; case "${NODE_ROLE:-standalone}" in entry) "$0" cascade health ;; exit) systemctl is-active --quiet nginx && ok "nginx active" || fail "nginx inactive"; systemctl is-active --quiet x-ui && ok "3X-UI active" || fail "3X-UI inactive"; [[ -f "/etc/letsencrypt/live/${DOMAIN}/fullchain.pem" ]] && ok "SSL certificate exists" || fail "SSL missing"; [[ -n "${PANEL_TOKEN:-}" ]] && ok "3X-UI bearer API token present" || fail "3X-UI bearer API token missing"; curl -fsS --max-time 5 "http://127.0.0.1:${PANEL_PORT}${PANEL_PATH}" >/dev/null 2>&1 && ok "3X-UI panel reachable on loopback" || fail "3X-UI panel is not reachable on loopback"; ok "Exit diagnostics OK; client subscription is not applicable" ;; standalone) systemctl is-active --quiet nginx && ok "nginx active" || fail "nginx inactive"; [[ -f "/etc/letsencrypt/live/${DOMAIN}/fullchain.pem" ]] && ok "SSL certificate exists" || fail "SSL missing"; validate_subscription ;; *) fail "Unsupported node role: ${NODE_ROLE}" ;; esac ;;
@@ -66,6 +68,9 @@ Usage:
   wavemesh reconcile --dry-run|--apply
   wavemesh subscription rebuild
   wavemesh subscription validate
+  wavemesh subscription capabilities --json
+  wavemesh subscription migrate-native --dry-run|--apply
+  wavemesh subscription fallback-generated --dry-run|--apply
   wavemesh subscription rotate-path --dry-run|--apply [--path PATH]
   wavemesh transaction list [--json]
   wavemesh transaction recover --id ID|--latest

@@ -1,5 +1,9 @@
 # 3X-UI API mode
 
+> Historical design note: the generated subscription backend described below
+> is retained only for rollback. New nodes use the native backend documented in
+> `NATIVE_SUBSCRIPTIONS.md`.
+
 WaveMesh Node Builder uses 3X-UI API as the primary write method.
 
 3X-UI officially provides a RESTful API with in-panel Swagger documentation, and the installer supports unattended installation with `XUI_NONINTERACTIVE=1` and writes install results to `/etc/x-ui/install-result.env`.

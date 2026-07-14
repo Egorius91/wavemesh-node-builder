@@ -1,5 +1,8 @@
 # 3X-UI adapter plan
 
+> Historical implementation plan. Subscription publication has moved to the
+> native backend described in `NATIVE_SUBSCRIPTIONS.md`.
+
 This document defines the next implementation layer for `scripts/07_xhttp_inbound.sh`.
 
 ## Why an adapter is needed

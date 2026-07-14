@@ -14,15 +14,31 @@ wm_xui_api_get() {
 }
 
 wm_build_xhttp_inbound_payload() {
-  DOMAIN="$DOMAIN" FINGERPRINT="$FINGERPRINT" FIRST_CLIENT_UUID="$FIRST_CLIENT_UUID" XHTTP_LOCAL_PORT="$XHTTP_LOCAL_PORT" XHTTP_PATH="$XHTTP_PATH" NODE_NAME="$NODE_NAME" python3 - <<'PY'
+  DOMAIN="$DOMAIN" FINGERPRINT="$FINGERPRINT" WM_CONFIG_JSON="$WM_CONFIG_JSON" XHTTP_LOCAL_PORT="$XHTTP_LOCAL_PORT" XHTTP_PATH="$XHTTP_PATH" NODE_NAME="$NODE_NAME" python3 - <<'PY'
 import json
 import os
 
 port = int(os.environ['XHTTP_LOCAL_PORT'])
 path = os.environ['XHTTP_PATH']
 domain = os.environ['DOMAIN']
-client_id = os.environ['FIRST_CLIENT_UUID']
-email = os.environ['NODE_NAME'] + '-1'
+config = json.load(open(os.environ['WM_CONFIG_JSON'], encoding='utf-8'))
+clients = []
+for index, item in enumerate(config.get('clients', []), start=1):
+  credential = next((value for value in item.get('credentials', []) if value.get('route_id') == 'route-standalone-default'), {})
+  client_id = item.get('uuid') or credential.get('uuid')
+  if not client_id:
+    continue
+  clients.append({
+    'id': client_id,
+    'flow': '',
+    'email': credential.get('email') or f"wm.{item.get('id') or index}.route-standalone-default",
+    'limitIp': 0,
+    'totalGB': 0,
+    'expiryTime': 0,
+    'enable': bool(item.get('enabled', True) and credential.get('enabled', True)),
+    'tgId': 0,
+    'subId': item.get('subscription_id', ''),
+  })
 payload = {
   'up': 0,
   'down': 0,
@@ -34,17 +50,7 @@ payload = {
   'port': port,
   'protocol': 'vless',
   'settings': {
-    'clients': [{
-      'id': client_id,
-      'flow': '',
-      'email': email,
-      'limitIp': 0,
-      'totalGB': 0,
-      'expiryTime': 0,
-      'enable': True,
-      'tgId': 0,
-      'subId': ''
-    }],
+    'clients': clients,
     'decryption': 'none',
     'fallbacks': []
   },
