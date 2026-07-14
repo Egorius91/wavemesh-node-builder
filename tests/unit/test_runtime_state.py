@@ -58,8 +58,32 @@ with tempfile.TemporaryDirectory() as name:
     assert desired_inbound["settings"]["clients"][0]["tgId"] == 0
     assert desired_outbound["tag"] == "wm-exit-de-fra-1"
     assert desired_outbound["streamSettings"]["tlsSettings"]["allowInsecure"] is False
+
+    exact = copy.deepcopy(desired_inbound)
+    assert runtime.inbound_structure_matches(exact, desired_inbound)
+
+    with_extra_client = copy.deepcopy(desired_inbound)
+    with_extra_client["settings"]["clients"].append({
+        "id": "00000000-0000-0000-0000-000000000099",
+        "email": "bot-managed-client",
+        "enable": True,
+    })
+    assert runtime.inbound_structure_matches(with_extra_client, desired_inbound)
+
+    missing_managed = copy.deepcopy(desired_inbound)
+    missing_managed["settings"]["clients"] = []
+    assert not runtime.inbound_structure_matches(missing_managed, desired_inbound)
+
+    mismatched_managed = copy.deepcopy(desired_inbound)
+    mismatched_managed["settings"]["clients"][0]["enable"] = False
+    assert not runtime.inbound_structure_matches(mismatched_managed, desired_inbound)
+
+    changed_structure = copy.deepcopy(with_extra_client)
+    changed_structure["streamSettings"]["xhttpSettings"]["path"] = "/wrong/"
+    assert not runtime.inbound_structure_matches(changed_structure, desired_inbound)
+
     (subs / "sub-runtime-example-1234.txt").write_text("vless://00000000-0000-0000-0000-000000000010@ru-entry.example.com:443\n", encoding="utf-8")
-    actual_inbounds = {"obj": [{**desired_inbound, "id": 12}]}
+    actual_inbounds = {"obj": [{**with_extra_client, "id": 12}]}
     template = {"outbounds": [desired_outbound], "routing": {"rules": [{"ruleTag": "wm-rule-de-fra-1", "inboundTag": ["wm-route-de-fra-1"], "outboundTag": "wm-exit-de-fra-1"}]}}
     probes = {"control": {"service": "active", "api": "reachable", "xray": "running", "panel_bind": "loopback", "bearer": "valid", "nginx": "active", "tls": "valid"}, "routes": [{"route_id": "route-de-fra-1", "route_test": True, "test_outbound": True, "latency_ms": 82, "route_test_outbound": "wm-exit-de-fra-1"}]}
     state = {}
