@@ -137,17 +137,31 @@ def validate_subscriptions(config, exits, routes, directory):
     return clients, total_profiles
 
 
+def runtime_route_map(runtime):
+    observed = runtime.get("routes", {})
+    if isinstance(observed, dict):
+        return observed
+    if isinstance(observed, list):
+        return {
+            item.get("route_id"): item
+            for item in observed
+            if isinstance(item, dict) and item.get("route_id")
+        }
+    fail("runtime routes must be an object or array")
+
+
 def validate_runtime(runtime, routes):
     if runtime.get("node_status") != "healthy":
         fail("Entry runtime is not healthy")
-    observed = runtime.get("routes", {})
+    observed = runtime_route_map(runtime)
     result = []
     for route in routes:
         state = observed.get(route["id"], {})
         outbound = route.get("routing", {}).get("outbound_tag")
         if state.get("status") != "healthy":
             fail("one or more cascade routes are not healthy")
-        if state.get("route_test_outbound") != outbound:
+        selected = state.get("route_test_outbound", state.get("outbound"))
+        if selected != outbound:
             fail("routeTest did not select the expected managed outbound")
         result.append(
             {
@@ -183,6 +197,7 @@ def verify(config_path, runtime_path, subscriptions):
     return {
         "node_status": "healthy",
         "exit_count": len({item["exit_id"] for item in manual_routes}),
+        "route_count": len(manual_routes),
         "manual_route_count": len(manual_routes),
         "auto_route_count": len(auto_routes),
         "published_route_count": len(published_routes),
