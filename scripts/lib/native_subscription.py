@@ -178,7 +178,7 @@ def expected_client_profiles(config, subscription_id):
         if not route.get("enabled", True) or route.get("id") not in credentials:
             continue
         kind = route.get("kind")
-        if kind == "direct" and config.get("node", {}).get("role") == "standalone":
+        if kind == "direct":
             count += 1
         elif kind == "cascade" and route.get("exit_id") in exits:
             count += 1

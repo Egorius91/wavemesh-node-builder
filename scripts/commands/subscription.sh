@@ -143,6 +143,12 @@ wm_subscription_migrate_native_command() {
     python3 "$WM_NATIVE_SUBSCRIPTION_TOOL" client-plan --config "$candidate" --clients "$clients_plan" --output-config "$reconciled_plan" --actions "$actions_plan" || wm_fail "Builder clients cannot be mapped safely to native clients"
     action_count="$(python3 -c 'import json,sys; print(len(json.load(open(sys.argv[1]))))' "$actions_plan")"
     wm_info "Builder client subId updates required: ${action_count}"
+    if (( action_count == 0 )); then
+      wm_native_validate_profile_counts "$reconciled_plan" || wm_fail "Clients API profiles do not match canonical published routes"
+      wm_success "Clients API profile counts match canonical published routes"
+    else
+      wm_warn "Profile count validation is deferred until missing subId values are applied transactionally"
+    fi
     wm_native_capabilities_json "$WM_CONFIG_JSON"
     rm -rf "$transaction"
     return

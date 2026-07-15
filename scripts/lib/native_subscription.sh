@@ -104,6 +104,32 @@ wm_native_require_capabilities() {
   printf '%s' "$report" | python3 -c 'import json,sys; raise SystemExit(0 if json.load(sys.stdin).get("ready") else 1)' || { wm_warn "3X-UI native subscription capabilities are incomplete"; return 1; }
 }
 
+wm_native_validate_profile_counts() {
+  local config="${1:-$WM_CONFIG_JSON}" sub_id links expected_api expected_config checked=0
+  while IFS= read -r sub_id; do
+    [[ -n "$sub_id" ]] || continue
+    links="$(mktemp)"
+    wm_xui_request_success GET "/panel/api/clients/subLinks/${sub_id}" none > "$links" || { rm -f "$links"; return 1; }
+    expected_api="$(python3 - "$links" <<'PY'
+import json,sys
+obj=json.load(open(sys.argv[1],encoding="utf-8")).get("obj",[])
+print(len(obj) if isinstance(obj,list) else -1)
+PY
+)"
+    expected_config="$(python3 "$WM_NATIVE_SUBSCRIPTION_TOOL" expected-profiles --config "$config" --subscription-id "$sub_id")" || { rm -f "$links"; return 1; }
+    rm -f "$links"
+    (( expected_config > 0 )) || { wm_warn "Canonical config has no published profiles for an enabled builder client"; return 1; }
+    [[ "$expected_api" == "$expected_config" ]] || { wm_warn "Clients API profile count differs from canonical published routes: ${expected_api} != ${expected_config}"; return 1; }
+    checked=$((checked+1))
+  done < <(python3 - "$config" <<'PY'
+import json,sys
+for client in json.load(open(sys.argv[1],encoding="utf-8")).get("clients",[]):
+    if client.get("enabled",True) and client.get("subscription_id"): print(client["subscription_id"])
+PY
+)
+  (( checked > 0 )) || wm_warn "No builder-managed clients are available for profile count validation"
+}
+
 wm_native_validate_public() {
   local config="${1:-$WM_CONFIG_JSON}" sub_id content links expected expected_config path forbidden validated=0
   wm_native_require_capabilities "$config" || return 1

@@ -57,6 +57,10 @@ profile_config["clients"][0]["credentials"] = [
 assert native.expected_client_profiles(profile_config, profile_config["clients"][0]["subscription_id"]) == 1
 profile_config["routes"][1]["presentation"]["published"] = True
 assert native.expected_client_profiles(profile_config, profile_config["clients"][0]["subscription_id"]) == 2
+profile_config["routes"].append({"id": "route-manual", "kind": "direct", "enabled": True})
+profile_config["clients"][0]["credentials"].append({"route_id": "route-manual", "enabled": True})
+profile_config["node"]["role"] = "entry"
+assert native.expected_client_profiles(profile_config, profile_config["clients"][0]["subscription_id"]) == 3
 
 with tempfile.TemporaryDirectory() as name:
     source = Path(name) / "config.json"; output = Path(name) / "nginx.conf"
