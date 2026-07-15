@@ -20,6 +20,12 @@ config["network"]["subscription"].update(
 )
 config["clients"][0]["uuid"] = "00000000-0000-0000-0000-000000000001"
 
+legacy_config = json.loads(json.dumps(config))
+legacy_config["network"]["subscription"].update({"backend": "generated", "mode": "generated", "local_port": 33854})
+migrated_config = native.set_backend(legacy_config, "xui-native")
+assert migrated_config["network"]["subscription"]["local_port"] == 2096
+assert legacy_config["network"]["subscription"]["local_port"] == 33854
+
 settings = native.native_settings({"webPort": 2053}, config)
 assert settings["webPort"] == 2053
 assert settings["subEnable"] is True

@@ -88,11 +88,12 @@ result={
  "custom_renderer_locations":os.environ["CUSTOM_LOCATIONS"]=="true",
  "sub_enable":str(settings.get("subEnable","")).lower()=="true",
  "sub_listen":settings.get("subListen"), "sub_port":int(settings.get("subPort") or 0),
+ "local_port_matches":int(settings.get("subPort") or 0)==int(expected.get("local_port") or 2096),
  "sub_path_matches":settings.get("subPath")==expected.get("path"),
  "public_inbounds":len(view["public"]), "hidden_inbounds":len(view["hidden"]),
  "rejected_enabled_inbounds":len(view["rejected"]),
 }
-result["ready"]=all((result.get("clients_api"),result.get("settings_api"),result.get("inbounds_api"),result["native_listener_loopback"],result["sub_enable"],result["sub_listen"]=="127.0.0.1",result["sub_port"]==2096,result["sub_path_matches"],not result["custom_renderer_locations"]))
+result["ready"]=all((result.get("clients_api"),result.get("settings_api"),result.get("inbounds_api"),result["native_listener_loopback"],result["sub_enable"],result["sub_listen"]=="127.0.0.1",result["sub_port"]==2096,result["local_port_matches"],result["sub_path_matches"],not result["custom_renderer_locations"]))
 print(json.dumps(result,indent=2,ensure_ascii=False,sort_keys=True))
 PY
   rm -f "$openapi" "$settings_response" "$settings" "$inbounds"
@@ -114,6 +115,7 @@ required = (
     report.get("sub_enable"),
     report.get("sub_listen") == "127.0.0.1",
     report.get("sub_port") == 2096,
+    report.get("local_port_matches"),
     report.get("sub_path_matches"),
     allow_custom_renderer or not report.get("custom_renderer_locations"),
 )

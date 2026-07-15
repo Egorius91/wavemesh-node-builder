@@ -50,7 +50,10 @@ def set_backend(config, value, path=None):
     subscription["backend"] = value
     subscription["mode"] = value
     subscription["path"] = normalized_path(path or subscription.get("path"))
-    subscription.setdefault("local_port", 2096)
+    if value == "xui-native":
+        subscription["local_port"] = 2096
+    else:
+        subscription.setdefault("local_port", 2096)
     return result
 
 

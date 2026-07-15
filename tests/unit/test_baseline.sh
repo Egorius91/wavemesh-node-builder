@@ -56,7 +56,7 @@ wm_nginx_apply_native_rotation_candidate "$tmp/native.json" "$tmp/transaction" "
 source "$ROOT_DIR/scripts/lib/native_subscription.sh"
 wm_native_capabilities_json() {
   cat <<'JSON'
-{"clients_api":true,"settings_api":true,"inbounds_api":true,"native_listener_loopback":true,"sub_enable":true,"sub_listen":"127.0.0.1","sub_port":2096,"sub_path_matches":true,"custom_renderer_locations":true,"ready":false}
+{"clients_api":true,"settings_api":true,"inbounds_api":true,"native_listener_loopback":true,"sub_enable":true,"sub_listen":"127.0.0.1","sub_port":2096,"local_port_matches":true,"sub_path_matches":true,"custom_renderer_locations":true,"ready":false}
 JSON
 }
 wm_native_require_capabilities "$tmp/native.json" true
