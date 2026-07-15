@@ -1,6 +1,8 @@
 import copy
 import importlib.util
 import json
+import subprocess
+import sys
 import tempfile
 from pathlib import Path
 
@@ -106,5 +108,26 @@ with tempfile.TemporaryDirectory() as name:
     assert misplaced["routes"]["route-de-fra-1"]["routing_rule"] == "missing"
     synced = runtime.sync_runtime(disabled, state)
     assert synced["routes"]["route-de-fra-1"]["status"] == "disabled"
+
+    auto_config = copy.deepcopy(config)
+    auto_config["routes"] = [{
+        "id": "route-auto-auto-europe", "kind": "auto", "display_name": "Auto Europe",
+        "enabled": True, "presentation": {"published": True},
+        "entry": {"listen": "127.0.0.1", "local_port": 21102, "public_path": "/api/auto/runtime/", "inbound_tag": "wm-route-auto-auto-europe"},
+        "routing": {"rule_tag": "wm-rule-auto-auto-europe", "balancer_tag": "wm-balancer-auto-europe"},
+    }]
+    auto_config["clients"][0]["credentials"] = [{
+        "route_id": "route-auto-auto-europe", "email": "wm.client-1.route-auto-auto-europe",
+        "uuid": "00000000-0000-4000-8000-000000000011", "enabled": True,
+    }]
+    auto_source = temp / "auto-config.json"; auto_inbound = temp / "auto-inbound.json"
+    auto_source.write_text(json.dumps(auto_config), encoding="utf-8")
+    subprocess.run([
+        sys.executable, str(tool), "inbound-artifact", "--config", str(auto_source),
+        "--route-id", "route-auto-auto-europe", "--output", str(auto_inbound),
+    ], check=True)
+    rendered_auto = json.loads(auto_inbound.read_text(encoding="utf-8"))
+    assert rendered_auto["tag"] == "wm-route-auto-auto-europe"
+    assert rendered_auto["settings"]["clients"][0]["subId"] == "sub-runtime-example-1234"
 
 print("runtime state tests: OK")

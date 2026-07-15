@@ -45,6 +45,13 @@ def route(config, route_id):
     return found
 
 
+def auto_route(config, route_id):
+    found = next((item for item in config.get("routes", []) if item.get("id") == route_id), None)
+    if not found or found.get("kind") != "auto":
+        raise ValueError(f"Auto Route not found: {route_id}")
+    return found
+
+
 def exit_for_route(config, item):
     found = next((value for value in config.get("exits", []) if value.get("id") == item.get("exit_id")), None)
     if not found:
@@ -378,7 +385,7 @@ def main():
         write_artifacts(load(args.config), args.route_id, args.inbound, args.outbound)
     elif args.command == "inbound-artifact":
         config = load(args.config)
-        atomic(args.output, inbound_payload(config, route(config, args.route_id)))
+        atomic(args.output, inbound_payload(config, auto_route(config, args.route_id)))
     elif args.command == "set-inbound-id":
         atomic(args.output, set_inbound_id(load(args.config), args.route_id, args.inbound_id))
     elif args.command == "evaluate":
