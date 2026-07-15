@@ -46,4 +46,18 @@ wm_nginx_apply_desired "$tmp/native.json" "$tmp/transaction"
 wm_nginx_apply_native_migration_candidate "$tmp/generated.json" "$tmp/native.json" "$tmp/transaction"
 wm_nginx_apply_native_rotation_candidate "$tmp/native.json" "$tmp/transaction" "/old-native-path/" "/new-native-path/"
 
+# Native URL validation runs once while generated and native nginx locations
+# intentionally coexist. Final validation must still reject that state.
+source "$ROOT_DIR/scripts/lib/native_subscription.sh"
+wm_native_capabilities_json() {
+  cat <<'JSON'
+{"clients_api":true,"settings_api":true,"inbounds_api":true,"native_listener_loopback":true,"sub_enable":true,"sub_listen":"127.0.0.1","sub_port":2096,"sub_path_matches":true,"custom_renderer_locations":true,"ready":false}
+JSON
+}
+wm_native_require_capabilities "$tmp/native.json" true
+if wm_native_require_capabilities "$tmp/native.json" false; then
+  echo "strict native capabilities unexpectedly accepted generated renderer coexistence" >&2
+  exit 1
+fi
+
 echo "baseline tests: OK"

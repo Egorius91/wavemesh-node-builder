@@ -162,7 +162,7 @@ wm_subscription_migrate_native_command() {
   candidate="$reconciled"
   wm_native_apply_settings "$candidate" || wm_fail "Could not apply native 3X-UI settings"
   wm_nginx_apply_native_migration_candidate "$WM_CONFIG_JSON" "$candidate" "$transaction" || wm_fail "nginx rejected generated/native coexistence configuration"
-  wm_native_validate_public "$candidate" || wm_fail "Native public subscription validation failed; transaction will roll back"
+  wm_native_validate_public "$candidate" true || wm_fail "Native public subscription validation failed; transaction will roll back"
   wm_nginx_apply_desired "$candidate" "$transaction" || wm_fail "nginx could not disable generated renderer locations"
   wm_native_validate_public "$candidate" || wm_fail "Native subscription failed after generated renderer removal"
   wm_atomic_install_json "$candidate" "$WM_CONFIG_JSON"; wm_export_config_env_from_json

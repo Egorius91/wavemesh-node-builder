@@ -99,9 +99,26 @@ PY
 }
 
 wm_native_require_capabilities() {
-  local report
-  report="$(wm_native_capabilities_json "$1")" || return 1
-  printf '%s' "$report" | python3 -c 'import json,sys; raise SystemExit(0 if json.load(sys.stdin).get("ready") else 1)' || { wm_warn "3X-UI native subscription capabilities are incomplete"; return 1; }
+  local config="${1:-$WM_CONFIG_JSON}" allow_custom_renderer="${2:-false}" report
+  report="$(wm_native_capabilities_json "$config")" || return 1
+  printf '%s' "$report" | python3 -c '
+import json, sys
+
+report = json.load(sys.stdin)
+allow_custom_renderer = sys.argv[1].lower() == "true"
+required = (
+    report.get("clients_api"),
+    report.get("settings_api"),
+    report.get("inbounds_api"),
+    report.get("native_listener_loopback"),
+    report.get("sub_enable"),
+    report.get("sub_listen") == "127.0.0.1",
+    report.get("sub_port") == 2096,
+    report.get("sub_path_matches"),
+    allow_custom_renderer or not report.get("custom_renderer_locations"),
+)
+raise SystemExit(0 if all(required) else 1)
+' "$allow_custom_renderer" || { wm_warn "3X-UI native subscription capabilities are incomplete"; return 1; }
 }
 
 wm_native_validate_profile_counts() {
@@ -131,8 +148,8 @@ PY
 }
 
 wm_native_validate_public() {
-  local config="${1:-$WM_CONFIG_JSON}" sub_id content links expected expected_config path forbidden validated=0
-  wm_native_require_capabilities "$config" || return 1
+  local config="${1:-$WM_CONFIG_JSON}" allow_custom_renderer="${2:-false}" sub_id content links expected expected_config path forbidden validated=0
+  wm_native_require_capabilities "$config" "$allow_custom_renderer" || return 1
   forbidden="127.0.0.1,localhost,$PUBLIC_IP,$PANEL_PORT,$XHTTP_LOCAL_PORT,2096"
   while IFS= read -r sub_id; do
     [[ -n "$sub_id" ]] || continue
