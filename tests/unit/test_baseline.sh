@@ -25,4 +25,25 @@ for file in "$ROOT_DIR/install.sh" "$ROOT_DIR/bin/wavemesh" "$ROOT_DIR"/scripts/
   bash -n "$file"
 done
 
+tmp="$(mktemp -d)"
+trap 'rm -rf "$tmp"' EXIT
+mkdir -p "$tmp/transaction"
+cat > "$tmp/native.json" <<'JSON'
+{"server":{"domain":"entry.example.com"},"network":{"xhttp":{"path":"/api/public-path/"},"subscription":{"path":"/new-native-path/","backend":"xui-native","mode":"xui-native","local_port":2096}},"panel":{"path":"/panel-path/"},"clients":[],"routes":[],"relay_peers":[]}
+JSON
+cat > "$tmp/generated.json" <<'JSON'
+{"server":{"domain":"entry.example.com"},"network":{"xhttp":{"path":"/api/public-path/"},"subscription":{"path":"/legacy-generated-path/","backend":"generated","mode":"generated","local_port":2096}},"panel":{"path":"/panel-path/"},"clients":[],"routes":[],"relay_peers":[]}
+JSON
+
+# Exercise every nginx helper under nounset; declarations must not reference
+# another local from the same statement before Bash assigns it.
+source "$ROOT_DIR/scripts/lib/nginx_renderer.sh"
+WM_NGINX_MANAGED_CONF="$tmp/managed.conf"
+nginx() { return 0; }
+systemctl() { return 0; }
+wm_warn() { return 0; }
+wm_nginx_apply_desired "$tmp/native.json" "$tmp/transaction"
+wm_nginx_apply_native_migration_candidate "$tmp/generated.json" "$tmp/native.json" "$tmp/transaction"
+wm_nginx_apply_native_rotation_candidate "$tmp/native.json" "$tmp/transaction" "/old-native-path/" "/new-native-path/"
+
 echo "baseline tests: OK"
