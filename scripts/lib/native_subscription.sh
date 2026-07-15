@@ -147,6 +147,17 @@ PY
   (( checked > 0 )) || wm_warn "No builder-managed clients are available for profile count validation"
 }
 
+wm_native_fetch_public() {
+  local url="$1" output="$2" attempt
+  for attempt in $(seq 1 10); do
+    if curl -fsSk --max-time 10 -H 'Accept: text/plain' "$url" -o "$output"; then
+      return 0
+    fi
+    (( attempt < 10 )) && sleep 1
+  done
+  return 1
+}
+
 wm_native_validate_public() {
   local config="${1:-$WM_CONFIG_JSON}" allow_custom_renderer="${2:-false}" sub_id content links expected expected_config path forbidden validated=0
   wm_native_require_capabilities "$config" "$allow_custom_renderer" || return 1
@@ -169,7 +180,7 @@ import json,sys
 cfg=json.load(open(sys.argv[1],encoding="utf-8")); print(cfg["network"]["subscription"]["path"]+sys.argv[2])
 PY
 )"
-    curl -fsSk --max-time 10 -H 'Accept: text/plain' "https://${DOMAIN}${path}" -o "$content" || { rm -f "$links" "$content"; wm_warn "Native public subscription URL is unreachable"; return 1; }
+    wm_native_fetch_public "https://${DOMAIN}${path}" "$content" || { rm -f "$links" "$content"; wm_warn "Native public subscription URL is unreachable after readiness retries"; return 1; }
     python3 "$WM_NATIVE_SUBSCRIPTION_TOOL" validate-content --content "$content" --domain "$DOMAIN" --forbidden "$forbidden" --expected-profiles "$expected" >/dev/null || { rm -f "$links" "$content"; return 1; }
     rm -f "$links" "$content"; validated=$((validated+1))
   done < <(python3 - "$config" <<'PY'

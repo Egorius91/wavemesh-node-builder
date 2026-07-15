@@ -60,4 +60,20 @@ if wm_native_require_capabilities "$tmp/native.json" false; then
   exit 1
 fi
 
+curl_attempts=0
+curl() {
+  local output="" previous="" argument
+  curl_attempts=$((curl_attempts+1))
+  for argument in "$@"; do
+    if [[ "$previous" == "-o" ]]; then output="$argument"; break; fi
+    previous="$argument"
+  done
+  (( curl_attempts >= 3 )) || return 22
+  printf 'native subscription payload\n' > "$output"
+}
+sleep() { return 0; }
+wm_native_fetch_public "https://entry.example.com/new-native-path/client-id" "$tmp/native.payload"
+[[ "$curl_attempts" == "3" ]] || { echo "native readiness retry count differs from expectation" >&2; exit 1; }
+grep -Fq 'native subscription payload' "$tmp/native.payload"
+
 echo "baseline tests: OK"
