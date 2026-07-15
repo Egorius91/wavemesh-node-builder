@@ -81,17 +81,19 @@ with tempfile.TemporaryDirectory() as name:
     assert f"proxy_pass http://127.0.0.1:2096{config['network']['subscription']['path']};" in alias_rendered
 
     generated_config = json.loads(json.dumps(config))
-    generated_config["network"]["subscription"].update({"backend": "generated", "mode": "generated"})
+    generated_config["network"]["subscription"].update({"backend": "generated", "mode": "generated", "local_port": 33854})
     generated_config["clients"][0]["subscription_id"] = "generated-client-1234"
     generated_source = Path(name) / "generated.json"; migration_output = Path(name) / "nginx-migration.conf"
     generated_source.write_text(json.dumps(generated_config))
     subprocess.run([
         sys.executable, str(nginx), "--config", str(generated_source), "--output", str(migration_output),
-        "--additional-native-path", "/new-native-path/",
+        "--additional-native-path", "/new-native-path/", "--additional-native-port", "2096",
     ], check=True)
     migration_rendered = migration_output.read_text()
     assert "root /var/www/wavemesh-sub/users;" in migration_rendered
     assert "location /new-native-path/" in migration_rendered
+    assert "proxy_pass http://127.0.0.1:2096;" in migration_rendered
+    assert "proxy_pass http://127.0.0.1:33854;" not in migration_rendered
 
     clients = Path(name) / "clients.json"; reconciled = Path(name) / "reconciled.json"; actions = Path(name) / "actions.json"
     clients.write_text(json.dumps({"obj": [{"uuid": config["clients"][0]["uuid"], "email": "wm.client", "subId": "", "enable": True}]}))

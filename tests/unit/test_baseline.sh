@@ -32,7 +32,7 @@ cat > "$tmp/native.json" <<'JSON'
 {"server":{"domain":"entry.example.com"},"network":{"xhttp":{"path":"/api/public-path/"},"subscription":{"path":"/new-native-path/","backend":"xui-native","mode":"xui-native","local_port":2096}},"panel":{"path":"/panel-path/"},"clients":[],"routes":[],"relay_peers":[]}
 JSON
 cat > "$tmp/generated.json" <<'JSON'
-{"server":{"domain":"entry.example.com"},"network":{"xhttp":{"path":"/api/public-path/"},"subscription":{"path":"/legacy-generated-path/","backend":"generated","mode":"generated","local_port":2096}},"panel":{"path":"/panel-path/"},"clients":[],"routes":[],"relay_peers":[]}
+{"server":{"domain":"entry.example.com"},"network":{"xhttp":{"path":"/api/public-path/"},"subscription":{"path":"/legacy-generated-path/","backend":"generated","mode":"generated","local_port":33854}},"panel":{"path":"/panel-path/"},"clients":[],"routes":[],"relay_peers":[]}
 JSON
 
 # Exercise every nginx helper under nounset; declarations must not reference
@@ -44,6 +44,11 @@ systemctl() { return 0; }
 wm_warn() { return 0; }
 wm_nginx_apply_desired "$tmp/native.json" "$tmp/transaction"
 wm_nginx_apply_native_migration_candidate "$tmp/generated.json" "$tmp/native.json" "$tmp/transaction"
+grep -Fq 'proxy_pass http://127.0.0.1:2096;' "$WM_NGINX_MANAGED_CONF"
+if grep -Fq 'proxy_pass http://127.0.0.1:33854;' "$WM_NGINX_MANAGED_CONF"; then
+  echo "native migration location inherited the generated renderer port" >&2
+  exit 1
+fi
 wm_nginx_apply_native_rotation_candidate "$tmp/native.json" "$tmp/transaction" "/old-native-path/" "/new-native-path/"
 
 # Native URL validation runs once while generated and native nginx locations

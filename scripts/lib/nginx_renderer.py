@@ -45,7 +45,7 @@ def render_location(path,port,allowed_ips):
 def render_native_alias(path,target,port):
     validate_path(path); target=normalize_path(target)
     return "\n".join([f"location {path} {{",f"    proxy_pass http://127.0.0.1:{int(port)}{target};","    proxy_http_version 1.1;","    proxy_set_header Host $host;","    proxy_set_header X-Forwarded-Proto https;","    proxy_set_header X-Forwarded-Host $host;","    proxy_set_header X-Forwarded-Port 443;","    proxy_redirect off;","    proxy_buffering off;","    proxy_request_buffering off;","}"])
-def render(config,additional_native_path=None,native_alias=None):
+def render(config,additional_native_path=None,native_alias=None,additional_native_port=None):
     subscription_path=configured_subscription_base(config)
     seen={config.get("panel",{}).get("path"),config.get("network",{}).get("xhttp",{}).get("path")}; blocks=[]
     subscription_paths=[]
@@ -65,7 +65,8 @@ def render(config,additional_native_path=None,native_alias=None):
     if additional_native_path:
         additional_native_path=normalize_path(additional_native_path)
         if additional_native_path in seen: raise ValueError(f"managed path collision: {additional_native_path}")
-        seen.add(additional_native_path); blocks.append(render_location(additional_native_path,native_port,[]))
+        port=native_port if additional_native_port is None else int(additional_native_port)
+        seen.add(additional_native_path); blocks.append(render_location(additional_native_path,port,[]))
     if native_alias:
         alias_from,alias_to=native_alias
         alias_from=normalize_path(alias_from); alias_to=normalize_path(alias_to)
@@ -88,8 +89,9 @@ def render(config,additional_native_path=None,native_alias=None):
         seen.add(path); blocks.append(render_location(path,entry["local_port"],[]))
     return "\n\n".join(blocks)+(chr(10) if blocks else "")
 def main():
-    p=argparse.ArgumentParser(); p.add_argument("--config",required=True); p.add_argument("--output",required=True); p.add_argument("--additional-native-path"); p.add_argument("--native-alias-from"); p.add_argument("--native-alias-to"); a=p.parse_args()
+    p=argparse.ArgumentParser(); p.add_argument("--config",required=True); p.add_argument("--output",required=True); p.add_argument("--additional-native-path"); p.add_argument("--additional-native-port",type=int); p.add_argument("--native-alias-from"); p.add_argument("--native-alias-to"); a=p.parse_args()
+    if a.additional_native_port is not None and not a.additional_native_path: p.error("--additional-native-port requires --additional-native-path")
     if bool(a.native_alias_from) != bool(a.native_alias_to): p.error("--native-alias-from and --native-alias-to must be used together")
     alias=(a.native_alias_from,a.native_alias_to) if a.native_alias_from else None
-    Path(a.output).write_text(render(json.loads(Path(a.config).read_text(encoding="utf-8")),a.additional_native_path,alias),encoding="utf-8")
+    Path(a.output).write_text(render(json.loads(Path(a.config).read_text(encoding="utf-8")),a.additional_native_path,alias,a.additional_native_port),encoding="utf-8")
 if __name__=="__main__": main()

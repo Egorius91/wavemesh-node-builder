@@ -21,10 +21,11 @@ wm_nginx_apply_desired() {
   wm_nginx_install_candidate "$candidate" "$transaction_dir"
 }
 wm_nginx_apply_native_migration_candidate() {
-  local old_config new_config transaction_dir candidate new_path
+  local old_config new_config transaction_dir candidate new_path new_port
   old_config="$1"; new_config="$2"; transaction_dir="$3"; candidate="$transaction_dir/nginx.native-migration.conf"
   new_path="$(python3 -c 'import json,sys; print(json.load(open(sys.argv[1],encoding="utf-8"))["network"]["subscription"]["path"])' "$new_config")" || return 1
-  python3 "$WM_NGINX_RENDERER" --config "$old_config" --output "$candidate" --additional-native-path "$new_path" || return 1
+  new_port="$(python3 -c 'import json,sys; print(json.load(open(sys.argv[1],encoding="utf-8"))["network"]["subscription"].get("local_port",2096))' "$new_config")" || return 1
+  python3 "$WM_NGINX_RENDERER" --config "$old_config" --output "$candidate" --additional-native-path "$new_path" --additional-native-port "$new_port" || return 1
   wm_nginx_install_candidate "$candidate" "$transaction_dir"
 }
 wm_nginx_apply_native_rotation_candidate() {
