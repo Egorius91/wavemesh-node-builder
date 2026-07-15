@@ -93,6 +93,14 @@ with tempfile.TemporaryDirectory() as name:
         state = runtime.evaluate(config, state, actual_inbounds, template, "location /api/de/runtime-route/ { proxy_pass http://127.0.0.1:21001; }", temp / "subscriptions", probes)
         assert state["exits"]["de-fra-1"]["status"] == expected
     assert state["node_status"] == "healthy" and runtime.drift_plan(config, state) == []
+    failed_probes = copy.deepcopy(probes)
+    failed_probes["routes"][0]["test_outbound"] = False
+    failed_probes["routes"][0]["error"] = "testOutbound failed"
+    failed_state = state
+    for expected in ("healthy", "healthy", "unhealthy"):
+        failed_state = runtime.evaluate(config, failed_state, actual_inbounds, template, "location /api/de/runtime-route/ { proxy_pass http://127.0.0.1:21001; }", temp / "subscriptions", failed_probes)
+        assert failed_state["exits"]["de-fra-1"]["status"] == expected
+    assert failed_state["node_status"] == "unhealthy"
     drifted = runtime.evaluate(config, state, {"obj": []}, template, "", temp / "subscriptions", probes)
     assert drifted["routes"]["route-de-fra-1"]["status"] == "misconfigured"
     plan = runtime.drift_plan(config, drifted)

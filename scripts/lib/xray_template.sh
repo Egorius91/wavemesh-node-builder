@@ -16,14 +16,29 @@ wm_xray_get_template() {
 }
 
 wm_xray_test_outbound() {
-  local outbound_file="$1" all_file="$2" outbound all payload
+  local outbound_file="$1" all_file="$2" outbound all payload response_file result rc error
   outbound="$(cat "$outbound_file")"; all="$(python3 - "$all_file" <<'PY'
 import json,sys
 print(json.dumps(json.load(open(sys.argv[1],encoding="utf-8")).get("outbounds",[]),separators=(",",":")))
 PY
 )"
   payload="$(wm_form_field outbound "$outbound")&$(wm_form_field allOutbounds "$all")&mode=tcp"
-  wm_xui_request_success POST /panel/api/xray/testOutbound form "$payload" >/dev/null
+  response_file="$(mktemp)"
+  if ! wm_xui_request_success POST /panel/api/xray/testOutbound form "$payload" > "$response_file"; then
+    rm -f "$response_file"
+    return 1
+  fi
+  if result="$(python3 "$WM_XRAY_RESPONSE_TOOL" --kind test-outbound --response "$response_file" 2>/dev/null)"; then
+    rc=0
+  else
+    rc=$?
+  fi
+  rm -f "$response_file"
+  if (( rc != 0 )); then
+    error="$(printf '%s' "$result" | python3 -c 'import json,sys; print((json.load(sys.stdin).get("error") or "unsupported testOutbound result")[:200])' 2>/dev/null || printf 'unsupported testOutbound result')"
+    wm_warn "3X-UI outbound data-plane probe failed: ${error}"
+    return 1
+  fi
 }
 
 wm_xray_apply_template() {

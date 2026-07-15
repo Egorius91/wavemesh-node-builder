@@ -47,6 +47,10 @@ Compare results with the Exit provider address used when the manifest was create
 
 Symptoms: Exit import or health cannot complete the outbound probe.
 
+Health requires the inner TCP probe result returned in `obj.success`; an HTTP
+200 response with a top-level `success=true` only means that 3X-UI processed
+the API request. It does not prove that the Exit endpoint is reachable.
+
 On the Entry:
 
 ```bash
