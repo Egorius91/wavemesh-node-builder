@@ -63,6 +63,10 @@ assert module.extract_test_outbound(reachable) == {"success": True, "delay": 87,
 assert module.extract_test_outbound(unreachable) == {"success": False, "delay": 5001, "error": "dial tcp: i/o timeout"}
 assert module.extract_test_outbound(inconsistent)["success"] is False
 assert module.extract_test_outbound({"success": True, "obj": 42}) == {"success": True, "delay": 42, "error": None}
+assert module.extract_test_outbound({
+    "success": True,
+    "obj": {"success": True, "delay": 243, "mode": "real", "httpStatus": 204},
+}) == {"success": True, "delay": 243, "error": None}
 
 for invalid in ({"obj": None}, {"obj": "[]"}, {"obj": {"xraySetting": "[]"}}, {"obj": {"xraySetting": {"xraySetting": None}}}):
     try:

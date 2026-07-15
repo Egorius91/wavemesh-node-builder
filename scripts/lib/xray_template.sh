@@ -22,7 +22,10 @@ import json,sys
 print(json.dumps(json.load(open(sys.argv[1],encoding="utf-8")).get("outbounds",[]),separators=(",",":")))
 PY
 )"
-  payload="$(wm_form_field outbound "$outbound")&$(wm_form_field allOutbounds "$all")&mode=tcp"
+  # A real HTTP probe exercises the complete VLESS/XHTTP/TLS chain. 3X-UI's
+  # direct TCP extractor does not recognize the standard VLESS settings.vnext
+  # shape used by WaveMesh and would return "No testable endpoint".
+  payload="$(wm_form_field outbound "$outbound")&$(wm_form_field allOutbounds "$all")&mode=real"
   response_file="$(mktemp)"
   if ! wm_xui_request_success POST /panel/api/xray/testOutbound form "$payload" > "$response_file"; then
     rm -f "$response_file"
