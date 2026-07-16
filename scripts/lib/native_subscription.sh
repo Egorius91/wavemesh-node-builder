@@ -50,7 +50,7 @@ PY
   CONFIG="$config" python3 - "$readback" <<'PY' || { rm -f "$response" "$current" "$payload" "$readback"; return 1; }
 import json,os,sys
 cfg=json.load(open(os.environ["CONFIG"],encoding="utf-8")); data=json.load(open(sys.argv[1],encoding="utf-8")).get("obj",{})
-expected={"subEnable":True,"subListen":"127.0.0.1","subPort":2096,"subPath":cfg["network"]["subscription"]["path"],"subDomain":cfg["server"]["domain"]}
+expected={"subEnable":True,"subListen":"127.0.0.1","subPort":2096,"subPath":cfg["network"]["subscription"]["path"],"subDomain":cfg["server"]["domain"],"remarkTemplate":"{{INBOUND}}"}
 for key,value in expected.items():
     actual=data.get(key)
     if str(actual).lower()!=str(value).lower(): raise SystemExit(f"3X-UI setting read-back mismatch: {key}")
@@ -90,10 +90,11 @@ result={
  "sub_listen":settings.get("subListen"), "sub_port":int(settings.get("subPort") or 0),
  "local_port_matches":int(settings.get("subPort") or 0)==int(expected.get("local_port") or 2096),
  "sub_path_matches":settings.get("subPath")==expected.get("path"),
+ "remark_template_matches":settings.get("remarkTemplate")=="{{INBOUND}}",
  "public_inbounds":len(view["public"]), "hidden_inbounds":len(view["hidden"]),
  "rejected_enabled_inbounds":len(view["rejected"]),
 }
-result["ready"]=all((result.get("clients_api"),result.get("settings_api"),result.get("inbounds_api"),result["native_listener_loopback"],result["sub_enable"],result["sub_listen"]=="127.0.0.1",result["sub_port"]==2096,result["local_port_matches"],result["sub_path_matches"],not result["custom_renderer_locations"]))
+result["ready"]=all((result.get("clients_api"),result.get("settings_api"),result.get("inbounds_api"),result["native_listener_loopback"],result["sub_enable"],result["sub_listen"]=="127.0.0.1",result["sub_port"]==2096,result["local_port_matches"],result["sub_path_matches"],result["remark_template_matches"],not result["custom_renderer_locations"]))
 print(json.dumps(result,indent=2,ensure_ascii=False,sort_keys=True))
 PY
   rm -f "$openapi" "$settings_response" "$settings" "$inbounds"
@@ -117,6 +118,7 @@ required = (
     report.get("sub_port") == 2096,
     report.get("local_port_matches"),
     report.get("sub_path_matches"),
+    report.get("remark_template_matches"),
     allow_custom_renderer or not report.get("custom_renderer_locations"),
 )
 raise SystemExit(0 if all(required) else 1)

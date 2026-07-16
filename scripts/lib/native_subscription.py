@@ -59,6 +59,9 @@ def set_backend(config, value, path=None):
 
 def native_settings(current, config):
     result = copy.deepcopy(current)
+    # Current 3X-UI uses remarkTemplate. Its default appends EMAIL, which
+    # exposes WaveMesh's technical route identity in client-visible names.
+    result.pop("remarkModel", None)
     path = normalized_path(config["network"]["subscription"]["path"])
     domain = config["server"]["domain"]
     result.update(
@@ -72,7 +75,7 @@ def native_settings(current, config):
             "subDomain": domain,
             "subURI": f"https://{domain}{path}",
             "subShowInfo": False,
-            "remarkModel": "-o",
+            "remarkTemplate": "{{INBOUND}}",
         }
     )
     return result

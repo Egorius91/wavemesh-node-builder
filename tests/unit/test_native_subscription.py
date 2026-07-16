@@ -31,6 +31,8 @@ assert settings["webPort"] == 2053
 assert settings["subEnable"] is True
 assert settings["subListen"] == "127.0.0.1"
 assert settings["subPath"] == config["network"]["subscription"]["path"]
+assert settings["remarkTemplate"] == "{{INBOUND}}"
+assert "remarkModel" not in settings
 
 openapi = {"paths": {path: {} for path in (
     "/panel/api/clients/list", "/panel/api/clients/subLinks/{subId}",
