@@ -25,7 +25,7 @@ with tempfile.TemporaryDirectory() as name:
     merged=Path(name)/"merged.json"
     subprocess.run([sys.executable,str(tool),"merge-clients","--desired",str(desired),"--actual",str(actual),"--output",str(merged)],check=True)
     merged_data=json.loads(merged.read_text()); emails=[client["email"] for client in merged_data["settings"]["clients"]]
-    assert "user_EgoriusLutius_f026d" in emails and "wm.stale.client" not in emails
+    assert "user_EgoriusLutius_f026d" in emails and "wm.stale.client" in emails
     assert merged_data["remark"]=="RU -> Germany"
     assert merged_data["streamSettings"]["externalProxy"][0]["remark"]=="RU -> Germany"
     plan=json.loads(subprocess.check_output([sys.executable,str(tool),"plan","--desired",str(merged),"--actual",str(actual)])); assert plan=={"action":"update","id":12}
@@ -34,4 +34,8 @@ with tempfile.TemporaryDirectory() as name:
     clone=json.loads(desired.read_text()); clone["id"]=12
     clone["port"]=21002; actual.write_text(json.dumps({"success":True,"obj":[clone]}))
     plan=json.loads(subprocess.check_output([sys.executable,str(tool),"plan","--desired",str(desired),"--actual",str(actual)])); assert plan=={"action":"update","id":12}
+    hidden=json.loads(desired.read_text()); hidden["remark"]="--!wm-route-de-fra-1"; hidden["settings"]["clients"]=[]
+    hidden_path=Path(name)/"hidden.json"; hidden_path.write_text(json.dumps(hidden))
+    subprocess.run([sys.executable,str(tool),"merge-clients","--desired",str(hidden_path),"--actual",str(actual),"--output",str(merged)],check=True)
+    assert json.loads(merged.read_text())["settings"]["clients"] == []
 print("inbound adapter tests: OK")

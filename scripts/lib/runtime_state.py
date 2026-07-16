@@ -45,6 +45,13 @@ def route(config, route_id):
     return found
 
 
+def auto_route(config, route_id):
+    found = next((item for item in config.get("routes", []) if item.get("id") == route_id), None)
+    if not found or found.get("kind") != "auto":
+        raise ValueError(f"Auto Route not found: {route_id}")
+    return found
+
+
 def exit_for_route(config, item):
     found = next((value for value in config.get("exits", []) if value.get("id") == item.get("exit_id")), None)
     if not found:
@@ -88,8 +95,9 @@ def mutate(config, operation, target, force=False):
 
 
 def inbound_payload(config, item):
+    published = item.get("kind") != "auto" or item.get("presentation", {}).get("published", False)
     clients = []
-    for client in config.get("clients", []):
+    for client in config.get("clients", []) if published else []:
         credential = next((value for value in client.get("credentials", []) if value.get("route_id") == item["id"]), None)
         if not credential:
             continue
@@ -104,8 +112,9 @@ def inbound_payload(config, item):
     domain = config["server"]["domain"]
     tag = entry["inbound_tag"]
     public_name = item.get("display_name") or tag
+    inbound_remark = public_name if published else f"--!{tag}"
     return {
-        "up": 0, "down": 0, "total": 0, "remark": tag, "tag": tag,
+        "up": 0, "down": 0, "total": 0, "remark": inbound_remark, "tag": tag,
         "enable": bool(item.get("enabled", True)), "expiryTime": 0,
         "listen": "127.0.0.1", "port": entry["local_port"], "protocol": "vless",
         "settings": {"clients": clients, "decryption": "none", "fallbacks": []},
@@ -223,6 +232,8 @@ def evaluate(config, previous, inbounds_response, template, nginx_text, subscrip
     if not all(value in (True, "active", "reachable", "running", "valid", "loopback") for value in result["xui"].values()):
         result["node_status"] = "unhealthy"
     subscriptions = Path(subscription_dir)
+    subscription_config = config.get("network", {}).get("subscription", {})
+    subscription_backend = subscription_config.get("backend") or subscription_config.get("mode") or "generated"
     for item in config.get("routes", []):
         if item.get("kind") != "cascade":
             continue
@@ -242,12 +253,19 @@ def evaluate(config, previous, inbounds_response, template, nginx_text, subscrip
         outbound_matches = outbound_present and actual_outbound == outbound_payload(exit_for_route(config, item), item)
         nginx_present = entry["public_path"] in nginx_text and f"proxy_pass http://127.0.0.1:{entry['local_port']};" in nginx_text
         profile_matches = True
+        native_clients = as_object(inbound.get("settings") if inbound else {}).get("clients", []) if subscription_backend == "xui-native" else []
         for client in config.get("clients", []):
             credential = next((value for value in client.get("credentials", []) if value.get("route_id") == route_id), None)
             if not credential:
                 continue
-            target = subscriptions / "users" / f"{client.get('subscription_id', '')}.txt"
-            found = target.exists() and credential["uuid"] in target.read_text(encoding="utf-8")
+            if subscription_backend == "xui-native":
+                found = any(
+                    value.get("id") == credential["uuid"] and value.get("subId") == client.get("subscription_id", "")
+                    for value in native_clients if isinstance(value, dict)
+                )
+            else:
+                target = subscriptions / "users" / f"{client.get('subscription_id', '')}.txt"
+                found = target.exists() and credential["uuid"] in target.read_text(encoding="utf-8")
             expected = enabled and client.get("enabled", True) and credential.get("enabled", True)
             if found != expected:
                 profile_matches = False
@@ -344,6 +362,8 @@ def main():
     mutation.add_argument("--target", required=True); mutation.add_argument("--force", action="store_true"); mutation.add_argument("--affected")
     artifacts = sub.add_parser("artifacts")
     artifacts.add_argument("--config", required=True); artifacts.add_argument("--route-id", required=True); artifacts.add_argument("--inbound", required=True); artifacts.add_argument("--outbound", required=True)
+    inbound_artifact = sub.add_parser("inbound-artifact")
+    inbound_artifact.add_argument("--config", required=True); inbound_artifact.add_argument("--route-id", required=True); inbound_artifact.add_argument("--output", required=True)
     inbound_id = sub.add_parser("set-inbound-id")
     inbound_id.add_argument("--config", required=True); inbound_id.add_argument("--output", required=True); inbound_id.add_argument("--route-id", required=True); inbound_id.add_argument("--inbound-id", type=int, required=True)
     assess = sub.add_parser("evaluate")
@@ -363,6 +383,9 @@ def main():
             atomic(args.affected, affected)
     elif args.command == "artifacts":
         write_artifacts(load(args.config), args.route_id, args.inbound, args.outbound)
+    elif args.command == "inbound-artifact":
+        config = load(args.config)
+        atomic(args.output, inbound_payload(config, auto_route(config, args.route_id)))
     elif args.command == "set-inbound-id":
         atomic(args.output, set_inbound_id(load(args.config), args.route_id, args.inbound_id))
     elif args.command == "evaluate":

@@ -8,6 +8,28 @@ wm_cascade_verify_e2e() {
   local output_json=0
   while [[ $# -gt 0 ]]; do case "$1" in --json) output_json=1; shift;; *) wm_fail "Usage: wavemesh cascade verify-e2e [--json]";; esac; done
   wm_load_config; wm_require_entry_role
+  if [[ "$(wm_subscription_backend "$WM_CONFIG_JSON")" == "xui-native" ]]; then
+    local health
+    health="$(mktemp)"
+    wm_runtime_health --json > "$health" || { rm -f "$health"; wm_fail "Managed route health verification failed"; }
+    python3 - "$health" <<'PY' || { rm -f "$health"; wm_fail "One or more enabled routes are unhealthy"; }
+import json,sys
+data=json.load(open(sys.argv[1],encoding="utf-8"))
+bad=[item for item in data.get("routes",[]) if item.get("status") not in ("healthy","disabled")]
+if bad: raise SystemExit(1)
+PY
+    wm_native_validate_public "$WM_CONFIG_JSON" || { rm -f "$health"; wm_fail "Native subscription E2E validation failed"; }
+    if (( output_json == 1 )); then
+      HEALTH="$health" python3 - <<'PY'
+import json,os
+data=json.load(open(os.environ["HEALTH"],encoding="utf-8")); print(json.dumps({"backend":"xui-native","status":"ok","routes":data.get("routes",[])},indent=2,ensure_ascii=False))
+PY
+    else
+      wm_success "Native subscription and managed route E2E checks passed"
+    fi
+    rm -f "$health"
+    return
+  fi
   local args=(--config "$WM_CONFIG_JSON" --runtime "$WM_RUNTIME_JSON" --subscriptions "$WM_SUB_DIR")
   if (( output_json == 1 )); then args+=(--json); fi
   python3 "$WM_E2E_CHECK_TOOL" "${args[@]}"
@@ -38,12 +60,9 @@ wm_cascade_add_exit() {
   inbound_id="$(wm_inbound_reconcile "$desired")" || wm_fail "Could not create and verify route inbound"
   python3 "$WM_CASCADE_TOOL" finalize --candidate "$candidate" --route-id "$route_id" --inbound-id "$inbound_id" || wm_fail "Could not finalize Entry desired state"
   wm_xray_apply_managed_route "$outbound" "$inbound_tag" "$outbound_tag" "$rule_tag" || wm_fail "Could not apply and verify Exit outbound routing"
-  prepared_subs="$transaction/subscriptions"; sub_metadata="$transaction/subscriptions.json"; sub_backup="$transaction/subscriptions.before"; subscription_candidate="$transaction/config.subscription.json"; mkdir -p "$prepared_subs" "$sub_backup"
-  wm_subscription_prepare "$candidate" "$subscription_candidate" "$prepared_subs" "$sub_metadata" || wm_fail "Could not render route subscriptions"
-  candidate="$subscription_candidate"; wm_subscription_install_files "$prepared_subs" "$sub_backup"
-  wm_nginx_apply_desired "$candidate" "$transaction" || wm_fail "nginx rejected route; transaction will be rolled back"
-  wm_subscription_validate_public "$sub_metadata" || wm_fail "Public subscriptions failed validation; transaction will be rolled back"
-  wm_atomic_install_json "$candidate" "$WM_CONFIG_JSON"; wm_export_config_env_from_json; wm_transaction_commit "$transaction"
+  wm_runtime_prepare_subscriptions "$candidate" "$transaction" || wm_fail "Could not prepare route subscription state"
+  wm_runtime_apply_public_state "$transaction" || wm_fail "Public subscriptions failed validation; transaction will be rolled back"
+  wm_atomic_install_json "$WM_RUNTIME_CANDIDATE" "$WM_CONFIG_JSON"; wm_export_config_env_from_json; wm_transaction_commit "$transaction"
   wm_success "Exit imported and route verified: ${exit_id}"; wm_info "Keep or securely delete the join manifest after confirming service"
 }
 

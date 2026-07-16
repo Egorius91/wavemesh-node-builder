@@ -8,7 +8,7 @@ MVP goals:
 - configure nginx and Let's Encrypt SSL;
 - install 3X-UI;
 - create VLESS + XHTTP topology through nginx;
-- generate a correct public subscription URL;
+- configure 3X-UI native multi-inbound subscriptions behind an opaque public URL;
 - validate that subscriptions never expose local ports, localhost, panel port, or raw IP when a domain is configured.
 
 > This project is original WaveMesh infrastructure code. It does not copy private goVLESS source code. goVLESS is treated only as a behavioral reference.
@@ -37,7 +37,7 @@ Client
 Subscription URL:
 
 ```text
-https://domain.com/sub/<random>/
+https://domain.com/<opaque>/<opaque>/<subId>
 ```
 
 Every client link inside the subscription must use:
@@ -154,6 +154,9 @@ After installation:
 wavemesh show-report
 wavemesh diagnostics
 wavemesh validate-subscription
+wavemesh subscription capabilities --json
+wavemesh subscription migrate-native --dry-run
+wavemesh subscription migrate-native --apply
 wavemesh cascade status --json
 wavemesh cascade health [--exit-id EXIT_ID] [--json]
 wavemesh cascade verify-e2e [--json]
@@ -187,7 +190,7 @@ Implemented:
 - 3X-UI database discovery and backup;
 - standalone, Entry, and Exit roles;
 - managed Entry-to-Exit VLESS/XHTTP cascade routes;
-- private per-client multi-route subscriptions;
+- private per-client native multi-route subscriptions with the generated renderer retained for rollback;
 - route lifecycle and forced Exit removal commands;
 - persisted `runtime.json` health state with three-check thresholds;
 - redacted desired/observed drift detection and managed reconciliation;

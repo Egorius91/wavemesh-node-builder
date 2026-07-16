@@ -35,6 +35,9 @@ cfg=json.load(open(sys.argv[1],encoding="utf-8"))
 print(cfg.get("installation",{}).get("xui",{}).get("database_path", ""))
 PY
 )"
+  if [[ -z "$db" ]] && declare -F wm_find_xui_settings_db >/dev/null; then
+    db="$(wm_find_xui_settings_db || true)"
+  fi
   if [[ -n "$db" ]]; then
     [[ -f "$db" ]] || { wm_warn "Configured 3X-UI database is missing: ${db}"; return 1; }
     printf '%s\n' "$db" > "$transaction/x-ui.before.db.path"
@@ -76,7 +79,9 @@ if json.load(open(sys.argv[1],encoding="utf-8")) != json.load(open(sys.argv[2],e
     raise SystemExit("Xray rollback read-back differs from snapshot")
 PY
   fi
-  if declare -F wm_subscription_prepare >/dev/null && declare -F wm_subscription_validate_public >/dev/null; then
+  if declare -F wm_subscription_backend >/dev/null && [[ "$(wm_subscription_backend "$WM_CONFIG_JSON")" == "xui-native" ]]; then
+    wm_native_validate_public "$WM_CONFIG_JSON" || return 1
+  elif declare -F wm_subscription_prepare >/dev/null && declare -F wm_subscription_validate_public >/dev/null; then
     mkdir -p "$check_dir/rendered"
     wm_subscription_prepare "$WM_CONFIG_JSON" "$check_dir/config.json" "$check_dir/rendered" "$check_dir/metadata.json" || return 1
     wm_subscription_validate_public "$check_dir/metadata.json" || return 1

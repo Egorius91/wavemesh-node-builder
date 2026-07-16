@@ -45,10 +45,11 @@ wm_obtain_ssl() {
 
 wm_configure_nginx_https() {
   wm_info "Configuring nginx HTTPS reverse proxy"
-  local panel_path_no_slash sub_path_no_slash
+  local panel_path_no_slash renderer
   panel_path_no_slash="${PANEL_PATH%/}"
-  sub_path_no_slash="${SUB_PATH%/}"
-  [[ -f /etc/nginx/wavemesh-managed-locations.conf ]] || install -m 0644 /dev/null /etc/nginx/wavemesh-managed-locations.conf
+  renderer="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/lib/nginx_renderer.py"
+  python3 "$renderer" --config "$WM_CONFIG_JSON" --output /etc/nginx/wavemesh-managed-locations.conf
+  chmod 0644 /etc/nginx/wavemesh-managed-locations.conf
   cat > /etc/nginx/sites-available/wavemesh-node.conf <<EOF
 server {
     listen 80;
@@ -107,30 +108,6 @@ server {
         proxy_request_buffering off;
     }
 
-    location = ${sub_path_no_slash} {
-        return 301 https://\$host${SUB_PATH};
-    }
-
-    location = ${SUB_PATH} {
-        root ${WM_SUB_DIR};
-        try_files /sub.txt =404;
-        default_type text/plain;
-        add_header Cache-Control "no-store" always;
-        add_header Profile-Title "base64:V2F2ZU1lc2hWUE4=" always;
-    }
-
-    location ${SUB_PATH} {
-        proxy_pass http://127.0.0.1:2096;
-        proxy_http_version 1.1;
-        proxy_set_header Host \$host;
-        proxy_set_header X-Forwarded-Proto https;
-        proxy_set_header X-Forwarded-Host \$host;
-        proxy_set_header X-Forwarded-Port 443;
-        proxy_redirect off;
-        proxy_buffering off;
-        proxy_hide_header Profile-Title;
-        add_header Profile-Title "base64:V2F2ZU1lc2hWUE4=" always;
-    }
 }
 EOF
   nginx -t

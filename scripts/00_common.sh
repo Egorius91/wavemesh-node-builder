@@ -22,6 +22,7 @@ XHTTP_LOCAL_PORT=""
 XHTTP_PATH=""
 SUB_PATH=""
 SUB_LOCAL_PORT=""
+SUB_BACKEND="xui-native"
 FINGERPRINT="randomized"
 NODE_NAME=""
 WEB_IDENTITY_NAME=""
@@ -190,7 +191,7 @@ wm_generate_random_values() {
   SUB_LOCAL_PORT="${SUB_LOCAL_PORT:-$(wm_random_port 31000 39000)}"
   PANEL_PATH="/${PANEL_PATH:-$(wm_random_alnum 18)}/"
   XHTTP_PATH="/api/$(wm_random_alnum 14)/"
-  SUB_PATH="/sub/$(wm_random_alnum 14)/"
+  SUB_PATH="/$(wm_random_alnum 10)/$(wm_random_alnum 18)/"
   NODE_NAME="${NODE_NAME:-Node-$(wm_random_alnum 6)}"
   WEB_IDENTITY_NAME="${WEB_IDENTITY_NAME:-$(wm_random_company_name)}"
   PANEL_USERNAME="${PANEL_USERNAME:-$(wm_random_alnum 10)}"
@@ -221,7 +222,7 @@ cfg = {
     "http_port": 80,
     "public_port": 443,
     "xhttp": {"listen": "127.0.0.1", "port": int("$XHTTP_LOCAL_PORT"), "path": "$XHTTP_PATH"},
-    "subscription": {"path": "$SUB_PATH", "mode": "generated", "local_port": int("$SUB_LOCAL_PORT")}
+    "subscription": {"path": "$SUB_PATH", "mode": "xui-native", "backend": "xui-native", "local_port": 2096}
   },
   "panel": {"type": "3x-ui", "listen_port": int("$PANEL_PORT"), "path": "$PANEL_PATH", "username": "$PANEL_USERNAME", "password": "$PANEL_PASSWORD", "api_auth": {"mode": "pending", "token_name": "wavemesh-node-builder", "token": ""}},
   "tls": {"provider": "letsencrypt", "email": "$EMAIL", "certificate_path": "/etc/letsencrypt/live/$DOMAIN/fullchain.pem", "key_path": "/etc/letsencrypt/live/$DOMAIN/privkey.pem"},
@@ -261,6 +262,7 @@ vals={
 "XHTTP_PATH": cfg["network"]["xhttp"]["path"],
 "SUB_PATH": cfg["network"]["subscription"]["path"],
 "SUB_LOCAL_PORT": str(cfg["network"]["subscription"].get("local_port", "")),
+"SUB_BACKEND": cfg["network"]["subscription"].get("backend", cfg["network"]["subscription"].get("mode", "generated")),
 "CLIENT_COUNT": str(max(len(clients), int("$CLIENT_COUNT"))),
 "FINGERPRINT": "$FINGERPRINT",
 "NODE_NAME": "$NODE_NAME",

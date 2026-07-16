@@ -56,14 +56,17 @@ def merge_external_clients(desired, response):
     desired_settings=as_object(desired.get("settings"))
     actual_settings=as_object(actual.get("settings"))
     managed=desired_settings.get("clients") if isinstance(desired_settings.get("clients"),list) else []
+    if str(desired.get("remark") or "").startswith("--!"):
+        desired_settings["clients"]=[client for client in managed if isinstance(client,dict)]
+        desired["settings"]=desired_settings
+        return desired
     existing=actual_settings.get("clients") if isinstance(actual_settings.get("clients"),list) else []
     identities=set().union(*(client_identity(client) for client in managed if isinstance(client,dict)))
     external=[]
     for client in existing:
         if not isinstance(client,dict): continue
-        email=str(client.get("email") or "")
         identity=client_identity(client)
-        if email.startswith("wm.") or identities.intersection(identity): continue
+        if identities.intersection(identity): continue
         external.append(client)
         identities.update(identity)
     desired_settings["clients"]=[client for client in managed if isinstance(client,dict)]+external

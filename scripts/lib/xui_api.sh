@@ -116,8 +116,12 @@ required={
   "route_test": "/panel/api/xray/routeTest",
 }
 result={name: path in paths for name,path in required.items()}
+result.update({
+  "clients_api": all(path in paths for path in ("/panel/api/clients/list", "/panel/api/clients/subLinks/{subId}")),
+  "settings_api": all(path in paths for path in ("/panel/api/setting/all", "/panel/api/setting/update")),
+})
 print(json.dumps(result, separators=(",", ":"), sort_keys=True))
-if not all(result.values()):
+if not all(result[name] for name in required):
     sys.exit(2)
 PY
   local rc=$?

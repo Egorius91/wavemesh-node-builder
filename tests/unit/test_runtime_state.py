@@ -1,6 +1,8 @@
 import copy
 import importlib.util
 import json
+import subprocess
+import sys
 import tempfile
 from pathlib import Path
 
@@ -53,7 +55,7 @@ with tempfile.TemporaryDirectory() as name:
     desired_inbound = json.loads(inbound.read_text(encoding="utf-8"))
     desired_outbound = json.loads(outbound.read_text(encoding="utf-8"))
     assert desired_inbound["listen"] == "127.0.0.1" and desired_inbound["enable"] is True
-    assert desired_inbound["tag"] == "wm-route-de-fra-1" and desired_inbound["remark"] == "wm-route-de-fra-1"
+    assert desired_inbound["tag"] == "wm-route-de-fra-1" and desired_inbound["remark"] == "RU -> Germany"
     assert desired_inbound["streamSettings"]["externalProxy"][0]["remark"] == "RU -> Germany"
     assert desired_inbound["settings"]["clients"][0]["tgId"] == 0
     assert desired_outbound["tag"] == "wm-exit-de-fra-1"
@@ -91,6 +93,14 @@ with tempfile.TemporaryDirectory() as name:
         state = runtime.evaluate(config, state, actual_inbounds, template, "location /api/de/runtime-route/ { proxy_pass http://127.0.0.1:21001; }", temp / "subscriptions", probes)
         assert state["exits"]["de-fra-1"]["status"] == expected
     assert state["node_status"] == "healthy" and runtime.drift_plan(config, state) == []
+    failed_probes = copy.deepcopy(probes)
+    failed_probes["routes"][0]["test_outbound"] = False
+    failed_probes["routes"][0]["error"] = "testOutbound failed"
+    failed_state = state
+    for expected in ("healthy", "healthy", "unhealthy"):
+        failed_state = runtime.evaluate(config, failed_state, actual_inbounds, template, "location /api/de/runtime-route/ { proxy_pass http://127.0.0.1:21001; }", temp / "subscriptions", failed_probes)
+        assert failed_state["exits"]["de-fra-1"]["status"] == expected
+    assert failed_state["node_status"] == "unhealthy"
     drifted = runtime.evaluate(config, state, {"obj": []}, template, "", temp / "subscriptions", probes)
     assert drifted["routes"]["route-de-fra-1"]["status"] == "misconfigured"
     plan = runtime.drift_plan(config, drifted)
@@ -106,5 +116,26 @@ with tempfile.TemporaryDirectory() as name:
     assert misplaced["routes"]["route-de-fra-1"]["routing_rule"] == "missing"
     synced = runtime.sync_runtime(disabled, state)
     assert synced["routes"]["route-de-fra-1"]["status"] == "disabled"
+
+    auto_config = copy.deepcopy(config)
+    auto_config["routes"] = [{
+        "id": "route-auto-auto-europe", "kind": "auto", "display_name": "Auto Europe",
+        "enabled": True, "presentation": {"published": True},
+        "entry": {"listen": "127.0.0.1", "local_port": 21102, "public_path": "/api/auto/runtime/", "inbound_tag": "wm-route-auto-auto-europe"},
+        "routing": {"rule_tag": "wm-rule-auto-auto-europe", "balancer_tag": "wm-balancer-auto-europe"},
+    }]
+    auto_config["clients"][0]["credentials"] = [{
+        "route_id": "route-auto-auto-europe", "email": "wm.client-1.route-auto-auto-europe",
+        "uuid": "00000000-0000-4000-8000-000000000011", "enabled": True,
+    }]
+    auto_source = temp / "auto-config.json"; auto_inbound = temp / "auto-inbound.json"
+    auto_source.write_text(json.dumps(auto_config), encoding="utf-8")
+    subprocess.run([
+        sys.executable, str(tool), "inbound-artifact", "--config", str(auto_source),
+        "--route-id", "route-auto-auto-europe", "--output", str(auto_inbound),
+    ], check=True)
+    rendered_auto = json.loads(auto_inbound.read_text(encoding="utf-8"))
+    assert rendered_auto["tag"] == "wm-route-auto-auto-europe"
+    assert rendered_auto["settings"]["clients"][0]["subId"] == "sub-runtime-example-1234"
 
 print("runtime state tests: OK")

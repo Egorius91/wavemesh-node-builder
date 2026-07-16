@@ -16,6 +16,7 @@ source "$SCRIPTS_DIR/08_subscriptions.sh"
 source "$SCRIPTS_DIR/09_report.sh"
 source "$SCRIPTS_DIR/10_diagnostics.sh"
 source "$SCRIPTS_DIR/11_subscription_paths.sh"
+source "$SCRIPTS_DIR/lib/native_subscription.sh"
 
 main() {
   wm_banner
@@ -40,12 +41,13 @@ main() {
   wm_install_3xui
   wm_configure_3xui_panel
   wm_xui_bootstrap_api_token || wm_fail "Could not establish verified 3X-UI bearer API access"
+  wm_native_apply_settings "$WM_CONFIG_JSON" || wm_fail "Could not configure 3X-UI native subscription backend through the API"
+  wm_assert_xui_builtin_sub_loopback
   case "$NODE_ROLE" in
     standalone)
       wm_create_clients
       wm_create_xhttp_inbound
-      wm_generate_fallback_subscription
-      wm_validate_subscription_output
+      wm_native_validate_public "$WM_CONFIG_JSON" || wm_fail "Native subscription validation failed"
       wm_run_diagnostics
       ;;
     entry)

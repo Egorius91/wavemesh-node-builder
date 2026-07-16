@@ -265,6 +265,10 @@ For disaster recovery, restore only a backup from the same node and version. Sto
 
 ## Health and drift
 
+Native subscription profile names are rendered from the public inbound remark
+only. Technical 3X-UI client email identifiers remain available for API and
+traffic accounting but are not appended to names shown in VPN clients.
+
 Use these commands for normal operations:
 
 ```bash

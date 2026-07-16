@@ -47,6 +47,11 @@ Compare results with the Exit provider address used when the manifest was create
 
 Symptoms: Exit import or health cannot complete the outbound probe.
 
+Health requires the result of a real HTTP request routed through a temporary
+Xray instance and returned in `obj.success`; an HTTP 200 response from the
+3X-UI API with a top-level `success=true` only means that the panel processed
+the request. It does not prove that the Exit data plane is reachable.
+
 On the Entry:
 
 ```bash

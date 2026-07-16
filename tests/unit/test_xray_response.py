@@ -28,6 +28,46 @@ assert module.extract_route_outbound({"obj": route}) == "wm-exit-de-fra-1"
 assert module.extract_route_outbound({"obj": json.dumps(route)}) == "wm-exit-de-fra-1"
 assert module.extract_route_outbound({"obj": {"matched": False, "outboundTag": ""}}) == ""
 
+reachable = {
+    "success": True,
+    "obj": {
+        "tag": "wm-exit-de-fra-1",
+        "success": True,
+        "delay": 87,
+        "mode": "tcp",
+        "endpoints": [{"address": "exit.example.com:443", "success": True, "delay": 87}],
+    },
+}
+unreachable = {
+    # The request itself succeeded, but the probe inside obj failed.
+    "success": True,
+    "obj": {
+        "tag": "wm-exit-de-fra-1",
+        "success": False,
+        "delay": 5001,
+        "error": "dial tcp: i/o timeout",
+        "mode": "tcp",
+        "endpoints": [{"address": "exit.example.com:443", "success": False, "delay": 5001, "error": "i/o timeout"}],
+    },
+}
+inconsistent = {
+    "success": True,
+    "obj": {
+        "success": True,
+        "delay": 1,
+        "mode": "tcp",
+        "endpoints": [{"address": "exit.example.com:443", "success": False, "delay": 1}],
+    },
+}
+assert module.extract_test_outbound(reachable) == {"success": True, "delay": 87, "error": None}
+assert module.extract_test_outbound(unreachable) == {"success": False, "delay": 5001, "error": "dial tcp: i/o timeout"}
+assert module.extract_test_outbound(inconsistent)["success"] is False
+assert module.extract_test_outbound({"success": True, "obj": 42}) == {"success": True, "delay": 42, "error": None}
+assert module.extract_test_outbound({
+    "success": True,
+    "obj": {"success": True, "delay": 243, "mode": "real", "httpStatus": 204},
+}) == {"success": True, "delay": 243, "error": None}
+
 for invalid in ({"obj": None}, {"obj": "[]"}, {"obj": {"xraySetting": "[]"}}, {"obj": {"xraySetting": {"xraySetting": None}}}):
     try:
         module.extract_template(invalid)
@@ -35,5 +75,13 @@ for invalid in ({"obj": None}, {"obj": "[]"}, {"obj": {"xraySetting": "[]"}}, {"
         pass
     else:
         raise AssertionError("unsupported Xray response was accepted")
+
+for invalid in ({"obj": None}, {"obj": "[]"}, {"obj": True}):
+    try:
+        module.extract_test_outbound(invalid)
+    except (ValueError, json.JSONDecodeError):
+        pass
+    else:
+        raise AssertionError("unsupported testOutbound response was accepted")
 
 print("xray response tests: OK")
