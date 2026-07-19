@@ -60,6 +60,7 @@ index 0000000..4e2e620
 +    return [item for item in result if item]
 +
 +
++
 +def as_object(value):
 +    if isinstance(value, str):
 +        try:
