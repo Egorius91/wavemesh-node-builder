@@ -1,0 +1,148 @@
+diff --git a/tests/unit/test_inbound_adapter.py b/tests/unit/test_inbound_adapter.py
+index e12cbe8..1baca05 100644
+--- a/tests/unit/test_inbound_adapter.py
++++ b/tests/unit/test_inbound_adapter.py
+@@ -16,7 +16,7 @@ with tempfile.TemporaryDirectory() as name:
+     clone["remark"]="wm-route-de-fra-1"
+     clone["streamSettings"]["externalProxy"][0]["remark"]="wm-route-de-fra-1"; actual.write_text(json.dumps({"success":True,"obj":[clone]}))
+     plan=json.loads(subprocess.check_output([sys.executable,str(tool),"plan","--desired",str(desired),"--actual",str(actual)])); assert plan=={"action":"update","id":12}
+-    bot_client={"id":"bot-uuid","email":"user_EgoriusLutius_f026d","subId":"bot-sub-id","enable":True,"tgId":0}
++    bot_client={"id":"bot-uuid","email":"external.bot.client","subId":"bot-sub-id","enable":True,"tgId":0}
+     stale_managed={"id":"stale-uuid","email":"wm.stale.client","subId":"stale-sub-id","enable":True}
+     clone=json.loads(desired.read_text()); clone["id"]=12; clone["settings"]["clients"] += [bot_client,stale_managed]
+     clone["remark"]="wm-route-de-fra-1"
+@@ -25,7 +25,7 @@ with tempfile.TemporaryDirectory() as name:
+     merged=Path(name)/"merged.json"
+     subprocess.run([sys.executable,str(tool),"merge-clients","--desired",str(desired),"--actual",str(actual),"--output",str(merged)],check=True)
+     merged_data=json.loads(merged.read_text()); emails=[client["email"] for client in merged_data["settings"]["clients"]]
+-    assert "user_EgoriusLutius_f026d" in emails and "wm.stale.client" in emails
++    assert "external.bot.client" in emails and "wm.stale.client" in emails
+     assert merged_data["remark"]=="RU -> Germany"
+     assert merged_data["streamSettings"]["externalProxy"][0]["remark"]=="RU -> Germany"
+     plan=json.loads(subprocess.check_output([sys.executable,str(tool),"plan","--desired",str(merged),"--actual",str(actual)])); assert plan=={"action":"update","id":12}
+@@ -36,6 +36,12 @@ with tempfile.TemporaryDirectory() as name:
+     plan=json.loads(subprocess.check_output([sys.executable,str(tool),"plan","--desired",str(desired),"--actual",str(actual)])); assert plan=={"action":"update","id":12}
+     hidden=json.loads(desired.read_text()); hidden["remark"]="--!wm-route-de-fra-1"; hidden["settings"]["clients"]=[]
+     hidden_path=Path(name)/"hidden.json"; hidden_path.write_text(json.dumps(hidden))
++    hidden_actual=json.loads(desired.read_text()); hidden_actual["id"]=12
++    hidden_actual["settings"]["clients"] += [bot_client,stale_managed]
++    actual.write_text(json.dumps({"success":True,"obj":[hidden_actual]}))
+     subprocess.run([sys.executable,str(tool),"merge-clients","--desired",str(hidden_path),"--actual",str(actual),"--output",str(merged)],check=True)
+-    assert json.loads(merged.read_text())["settings"]["clients"] == []
++    hidden_clients=json.loads(merged.read_text())["settings"]["clients"]
++    hidden_emails={client.get("email") for client in hidden_clients}
++    assert "external.bot.client" in hidden_emails
++    assert "wm.stale.client" in hidden_emails
+ print("inbound adapter tests: OK")
+diff --git a/tests/unit/test_native_subscription.py b/tests/unit/test_native_subscription.py
+index a3d5e64..8667427 100644
+--- a/tests/unit/test_native_subscription.py
++++ b/tests/unit/test_native_subscription.py
+@@ -69,6 +69,8 @@ profile_config["routes"].append({"id": "route-manual", "kind": "direct", "enable
+ profile_config["clients"][0]["credentials"].append({"route_id": "route-manual", "enabled": True})
+ profile_config["node"]["role"] = "entry"
+ assert native.expected_client_profiles(profile_config, profile_config["clients"][0]["subscription_id"]) == 3
++profile_config["network"]["subscription"]["publication_mode"] = "auto-only"
++assert native.expected_client_profiles(profile_config, profile_config["clients"][0]["subscription_id"]) == 1
+ 
+ with tempfile.TemporaryDirectory() as name:
+     source = Path(name) / "config.json"; output = Path(name) / "nginx.conf"
+diff --git a/tests/unit/test_route_presentation.py b/tests/unit/test_route_presentation.py
+new file mode 100644
+index 0000000..5e973c3
+--- /dev/null
++++ b/tests/unit/test_route_presentation.py
+@@ -0,0 +1,93 @@
++import copy
++import importlib.util
++import json
++from pathlib import Path
++
++root = Path(__file__).resolve().parents[2]
++tool = root / "scripts" / "lib" / "route_presentation.py"
++spec = importlib.util.spec_from_file_location("route_presentation", tool)
++module = importlib.util.module_from_spec(spec)
++spec.loader.exec_module(module)
++
++config = {
++    "network": {"subscription": {}},
++    "exits": [{"id": "de-1", "enabled": True}, {"id": "de-2", "enabled": True}],
++    "routes": [
++        {
++            "id": "route-auto-auto-europe",
++            "kind": "auto",
++            "enabled": True,
++            "presentation": {"published": True},
++            "entry": {"inbound_id": 30, "inbound_tag": "wm-route-auto-auto-europe"},
++        },
++        {
++            "id": "route-de-1",
++            "kind": "cascade",
++            "enabled": True,
++            "exit_id": "de-1",
++            "entry": {"inbound_id": 10, "inbound_tag": "wm-route-de-1"},
++        },
++        {
++            "id": "route-de-2",
++            "kind": "cascade",
++            "enabled": True,
++            "exit_id": "de-2",
++            "entry": {"inbound_id": 20, "inbound_tag": "wm-route-de-2"},
++        },
++    ],
++}
++
++assert module.publication_mode(config) == "all"
++assert module.public_route_ids(config) == [
++    "route-auto-auto-europe", "route-de-1", "route-de-2"
++]
++
++auto_only = module.set_publication_mode(config, "auto-only")
++assert module.public_route_ids(auto_only) == ["route-auto-auto-europe"]
++assert set(module.describe(auto_only)["hidden_enabled_route_ids"]) == {"route-de-1", "route-de-2"}
++
++unpublished = copy.deepcopy(config)
++unpublished["routes"][0]["presentation"]["published"] = False
++try:
++    module.set_publication_mode(unpublished, "auto-only")
++except ValueError as error:
++    assert "published Auto Route" in str(error)
++else:
++    raise AssertionError("auto-only accepted without a published Auto Route")
++
++actual = {
++    "obj": [
++        {
++            "id": 10,
++            "settings": {"clients": [
++                {"id": "manual-a", "email": "user-a", "subId": "sub-a", "enable": True},
++                {"id": "manual-disabled", "email": "user-disabled", "subId": "sub-disabled", "enable": False},
++            ]},
++        },
++        {
++            "id": 20,
++            "settings": {"clients": [
++                {"id": "manual-b", "email": "user-b", "subId": "sub-b", "enable": True},
++            ]},
++        },
++        {
++            "id": 30,
++            "settings": {"clients": [
++                {"id": "auto-a", "email": "user-a", "subId": "sub-a", "enable": True},
++            ]},
++        },
++    ]
++}
++report = module.native_transition_report(config, auto_only, actual)
++assert report["ready"] is False
++assert report["source_profile_count"] == 2
++assert report["targets"][0]["missing_profile_count"] == 1
++
++actual["obj"][2]["settings"]["clients"].append(
++    {"id": "auto-b", "email": "user-b", "subId": "sub-b", "enable": True}
++)
++report = module.native_transition_report(config, auto_only, actual)
++assert report["ready"] is True
++assert report["targets"][0]["missing_profile_count"] == 0
++
++print("route presentation tests: OK")
