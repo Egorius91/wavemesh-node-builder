@@ -1,6 +1,9 @@
 #!/usr/bin/env python3
 import argparse, json, os, secrets, tempfile, urllib.parse
 from pathlib import Path
+import sys
+sys.path.insert(0, str(Path(__file__).resolve().parent))
+from route_presentation import route_is_public
 
 def atomic(path,data):
     path=Path(path); path.parent.mkdir(parents=True,exist_ok=True); fd,tmp=tempfile.mkstemp(prefix=f".{path.name}.",dir=path.parent)
@@ -40,7 +43,7 @@ def render(cfg,output_dir):
         if not client.get("enabled",True): continue
         profiles=[]
         credentials={x["route_id"]:x for x in client.get("credentials",[]) if x.get("enabled",True)}
-        ordered=sorted((r for r in routes.values() if ((r.get("kind")=="cascade" and r.get("exit_id") in exits) or (r.get("kind")=="auto" and r.get("presentation",{}).get("published",False))) and r["id"] in credentials),key=lambda r:(r.get("sort_order",0),r.get("display_name",""),r["id"]))
+        ordered=sorted((r for r in routes.values() if ((r.get("kind")=="cascade" and r.get("exit_id") in exits) or r.get("kind")=="auto") and route_is_public(cfg,r,manual_default=r.get("kind")=="cascade") and r["id"] in credentials),key=lambda r:(r.get("sort_order",0),r.get("display_name",""),r["id"]))
         for route in ordered:
             credential=credentials[route["id"]]; path=route["entry"]["public_path"]
             if route.get("kind")=="cascade": name=route.get("display_name") or exits[route["exit_id"]].get("display_name") or route["id"]

@@ -12,6 +12,7 @@ with tempfile.TemporaryDirectory() as name:
     assert migrated["schema_version"] == 2 and migrated["node"]["role"] == "standalone"
     assert migrated["network"]["subscription"]["path"] == "/sub/legacy-path/"
     assert migrated["network"]["subscription"]["backend"] == "generated"
+    assert migrated["network"]["subscription"]["publication_mode"] == "all"
     assert migrated["clients"][0]["credentials"][0]["uuid"] == "00000000-0000-0000-0000-000000000001"
     assert migrated["routes"][0]["id"] == "route-standalone-default"
     assert len(migrated["migrations"]) == 1

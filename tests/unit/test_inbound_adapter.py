@@ -16,7 +16,7 @@ with tempfile.TemporaryDirectory() as name:
     clone["remark"]="wm-route-de-fra-1"
     clone["streamSettings"]["externalProxy"][0]["remark"]="wm-route-de-fra-1"; actual.write_text(json.dumps({"success":True,"obj":[clone]}))
     plan=json.loads(subprocess.check_output([sys.executable,str(tool),"plan","--desired",str(desired),"--actual",str(actual)])); assert plan=={"action":"update","id":12}
-    bot_client={"id":"bot-uuid","email":"user_EgoriusLutius_f026d","subId":"bot-sub-id","enable":True,"tgId":0}
+    bot_client={"id":"bot-uuid","email":"external.bot.client","subId":"bot-sub-id","enable":True,"tgId":0}
     stale_managed={"id":"stale-uuid","email":"wm.stale.client","subId":"stale-sub-id","enable":True}
     clone=json.loads(desired.read_text()); clone["id"]=12; clone["settings"]["clients"] += [bot_client,stale_managed]
     clone["remark"]="wm-route-de-fra-1"
@@ -25,7 +25,7 @@ with tempfile.TemporaryDirectory() as name:
     merged=Path(name)/"merged.json"
     subprocess.run([sys.executable,str(tool),"merge-clients","--desired",str(desired),"--actual",str(actual),"--output",str(merged)],check=True)
     merged_data=json.loads(merged.read_text()); emails=[client["email"] for client in merged_data["settings"]["clients"]]
-    assert "user_EgoriusLutius_f026d" in emails and "wm.stale.client" in emails
+    assert "external.bot.client" in emails and "wm.stale.client" in emails
     assert merged_data["remark"]=="RU -> Germany"
     assert merged_data["streamSettings"]["externalProxy"][0]["remark"]=="RU -> Germany"
     plan=json.loads(subprocess.check_output([sys.executable,str(tool),"plan","--desired",str(merged),"--actual",str(actual)])); assert plan=={"action":"update","id":12}
@@ -36,6 +36,12 @@ with tempfile.TemporaryDirectory() as name:
     plan=json.loads(subprocess.check_output([sys.executable,str(tool),"plan","--desired",str(desired),"--actual",str(actual)])); assert plan=={"action":"update","id":12}
     hidden=json.loads(desired.read_text()); hidden["remark"]="--!wm-route-de-fra-1"; hidden["settings"]["clients"]=[]
     hidden_path=Path(name)/"hidden.json"; hidden_path.write_text(json.dumps(hidden))
+    hidden_actual=json.loads(desired.read_text()); hidden_actual["id"]=12
+    hidden_actual["settings"]["clients"] += [bot_client,stale_managed]
+    actual.write_text(json.dumps({"success":True,"obj":[hidden_actual]}))
     subprocess.run([sys.executable,str(tool),"merge-clients","--desired",str(hidden_path),"--actual",str(actual),"--output",str(merged)],check=True)
-    assert json.loads(merged.read_text())["settings"]["clients"] == []
+    hidden_clients=json.loads(merged.read_text())["settings"]["clients"]
+    hidden_emails={client.get("email") for client in hidden_clients}
+    assert "external.bot.client" in hidden_emails
+    assert "wm.stale.client" in hidden_emails
 print("inbound adapter tests: OK")

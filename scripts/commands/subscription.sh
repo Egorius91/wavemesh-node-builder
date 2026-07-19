@@ -1,6 +1,7 @@
 #!/usr/bin/env bash
 
 WM_SUBSCRIPTION_PATH_TOOL="${WM_SUBSCRIPTION_PATH_TOOL:-$WM_LIB_DIR/lib/subscription_path.py}"
+WM_ROUTE_PRESENTATION_TOOL="${WM_ROUTE_PRESENTATION_TOOL:-$WM_LIB_DIR/lib/route_presentation.py}"
 
 wm_subscription_native_rebuild_command() {
   local transaction
@@ -190,6 +191,122 @@ wm_subscription_fallback_generated_command() {
   wm_success "Subscription backend switched to generated fallback"
 }
 
+
+wm_subscription_publication_mode_command() {
+  local requested="" action="" as_json=0 current_summary candidate_summary transaction candidate inbounds preflight ready
+  while [[ $# -gt 0 ]]; do
+    case "$1" in
+      all|auto-only) [[ -z "$requested" ]] || wm_fail "Publication mode was specified more than once"; requested="$1"; shift ;;
+      --dry-run) [[ -z "$action" ]] || wm_fail "Use only one of --dry-run or --apply"; action="dry-run"; shift ;;
+      --apply) [[ -z "$action" ]] || wm_fail "Use only one of --dry-run or --apply"; action="apply"; shift ;;
+      --json) as_json=1; shift ;;
+      *) wm_fail "Usage: wavemesh subscription publication-mode [--json] | all|auto-only --dry-run|--apply [--json]" ;;
+    esac
+  done
+
+  wm_load_config
+  wm_require_entry_role
+  current_summary="$(python3 "$WM_ROUTE_PRESENTATION_TOOL" status --config "$WM_CONFIG_JSON")" || wm_fail "Could not read subscription publication mode"
+  if [[ -z "$requested" ]]; then
+    if (( as_json == 1 )); then
+      printf '%s\n' "$current_summary" | python3 -m json.tool
+    else
+      printf '%s\n' "$current_summary" | python3 -c 'import json,sys; data=json.load(sys.stdin); print("Publication mode: {}".format(data["mode"])); print("Public routes: {}".format(data["public_route_count"])); print("Hidden enabled routes: {}".format(len(data["hidden_enabled_route_ids"])))'
+    fi
+    return
+  fi
+  [[ -n "$action" ]] || wm_fail "Use --dry-run or --apply when changing publication mode"
+
+  wm_lock_mutation "subscription-publication-mode"
+  transaction="$(mktemp -d)"; chmod 700 "$transaction"
+  candidate="$transaction/config.publication.json"
+  candidate_summary="$(python3 "$WM_ROUTE_PRESENTATION_TOOL" set --config "$WM_CONFIG_JSON" --output "$candidate" --mode "$requested")" || { rm -rf "$transaction"; wm_fail "Could not build publication mode candidate"; }
+
+  preflight='{"ready":true,"source_profile_count":0,"auto_target_count":0,"targets":[]}'
+  if [[ "$requested" == "auto-only" && "$(wm_subscription_backend "$WM_CONFIG_JSON")" == "xui-native" ]]; then
+    inbounds="$transaction/inbounds.json"
+    wm_xui_request_success GET /panel/api/inbounds/list none > "$inbounds" || { rm -rf "$transaction"; wm_fail "Could not inspect 3X-UI inbounds for Auto-only preflight"; }
+    preflight="$(python3 "$WM_ROUTE_PRESENTATION_TOOL" native-preflight --current "$WM_CONFIG_JSON" --candidate "$candidate" --inbounds "$inbounds")" || { rm -rf "$transaction"; wm_fail "Could not evaluate native Auto-only readiness"; }
+    ready="$(printf '%s\n' "$preflight" | python3 -c 'import json,sys; print(str(json.load(sys.stdin)["ready"]).lower())')"
+    if [[ "$ready" != "true" ]]; then
+      if (( as_json == 1 )); then
+        CANDIDATE="$candidate_summary" PREFLIGHT="$preflight" python3 - <<'PYREPORT'
+import json,os
+print(json.dumps({"candidate":json.loads(os.environ["CANDIDATE"]),"native_preflight":json.loads(os.environ["PREFLIGHT"])},indent=2,ensure_ascii=False,sort_keys=True))
+PYREPORT
+      fi
+      rm -rf "$transaction"
+      wm_fail "Auto-only preflight found active subscription clients missing from the published Auto inbound; synchronize bot keys before applying"
+    fi
+  fi
+
+  if [[ "$action" == "dry-run" ]]; then
+    if (( as_json == 1 )); then
+      CANDIDATE="$candidate_summary" PREFLIGHT="$preflight" python3 - <<'PYREPORT'
+import json,os
+print(json.dumps({"candidate":json.loads(os.environ["CANDIDATE"]),"native_preflight":json.loads(os.environ["PREFLIGHT"])},indent=2,ensure_ascii=False,sort_keys=True))
+PYREPORT
+    else
+      CANDIDATE="$candidate_summary" PREFLIGHT="$preflight" python3 - <<'PYREPORT'
+import json,os
+candidate=json.loads(os.environ["CANDIDATE"]); preflight=json.loads(os.environ["PREFLIGHT"])
+print("Target publication mode: {}".format(candidate["mode"]))
+print("Public routes after apply: {}".format(candidate["public_route_count"]))
+print("Hidden enabled routes after apply: {}".format(len(candidate["hidden_enabled_route_ids"])))
+if candidate["mode"] == "auto-only":
+    print("Native source profiles checked: {}".format(preflight["source_profile_count"]))
+    print("Published Auto targets: {}".format(preflight["auto_target_count"]))
+PYREPORT
+    fi
+    rm -rf "$transaction"
+    wm_success "Publication mode dry-run passed; no state changed"
+    return
+  fi
+
+  rm -rf "$transaction"
+  wm_transaction_begin "subscription-publication-mode"; transaction="$WM_ACTIVE_TRANSACTION"
+  candidate="$transaction/config.publication.json"
+  python3 "$WM_ROUTE_PRESENTATION_TOOL" set --config "$WM_CONFIG_JSON" --output "$candidate" --mode "$requested" >/dev/null || wm_fail "Could not rebuild publication mode candidate"
+  if [[ "$requested" == "auto-only" && "$(wm_subscription_backend "$WM_CONFIG_JSON")" == "xui-native" ]]; then
+    inbounds="$transaction/inbounds.preflight.json"
+    wm_xui_request_success GET /panel/api/inbounds/list none > "$inbounds" || wm_fail "Could not repeat 3X-UI Auto-only preflight inside transaction"
+    preflight="$(python3 "$WM_ROUTE_PRESENTATION_TOOL" native-preflight --current "$WM_CONFIG_JSON" --candidate "$candidate" --inbounds "$inbounds")" || wm_fail "Could not repeat native Auto-only readiness check"
+    ready="$(printf '%s\n' "$preflight" | python3 -c 'import json,sys; print(str(json.load(sys.stdin)["ready"]).lower())')"
+    [[ "$ready" == "true" ]] || wm_fail "Auto-only readiness changed after dry-run; no state was committed"
+  fi
+
+  local route_id kind enabled desired outbound reconciled_id updated_candidate
+  while IFS=$'\t' read -r route_id kind enabled; do
+    [[ -n "$route_id" ]] || continue
+    desired="$transaction/${route_id}.inbound.json"
+    if [[ "$kind" == "auto" ]]; then
+      python3 "$WM_RUNTIME_TOOL" inbound-artifact --config "$candidate" --route-id "$route_id" --output "$desired" || wm_fail "Could not build Auto inbound presentation for ${route_id}"
+    else
+      outbound="$transaction/${route_id}.outbound.json"
+      python3 "$WM_RUNTIME_TOOL" artifacts --config "$candidate" --route-id "$route_id" --inbound "$desired" --outbound "$outbound" || wm_fail "Could not build route presentation for ${route_id}"
+    fi
+    reconciled_id="$(wm_inbound_reconcile "$desired")" || wm_fail "Could not reconcile subscription presentation for ${route_id}"
+    wm_inbound_set_enabled "$reconciled_id" "$enabled" || wm_fail "Could not preserve inbound enabled state for ${route_id}"
+    updated_candidate="$transaction/config.${route_id}.json"
+    python3 "$WM_RUNTIME_TOOL" set-inbound-id --config "$candidate" --output "$updated_candidate" --route-id "$route_id" --inbound-id "$reconciled_id" || wm_fail "Could not preserve inbound identity for ${route_id}"
+    candidate="$updated_candidate"
+  done < <(python3 - "$candidate" <<'PYROUTES'
+import json,sys
+cfg=json.load(open(sys.argv[1],encoding="utf-8"))
+routes=sorted((r for r in cfg.get("routes",[]) if r.get("kind") in ("auto","cascade")),key=lambda r:(0 if r.get("kind")=="auto" else 1,r.get("sort_order",0),r.get("id","")))
+for route in routes:
+    print("\t".join((route["id"],route["kind"],str(route.get("enabled",True)).lower())))
+PYROUTES
+  )
+
+  wm_runtime_prepare_subscriptions "$candidate" "$transaction" || wm_fail "Could not prepare publication-mode subscriptions"
+  wm_runtime_apply_public_state "$transaction" || wm_fail "Publication-mode public output failed validation"
+  wm_atomic_install_json "$WM_RUNTIME_CANDIDATE" "$WM_CONFIG_JSON"; wm_export_config_env_from_json
+  python3 "$WM_RUNTIME_TOOL" sync --config "$WM_CONFIG_JSON" --runtime "$WM_RUNTIME_JSON" --output "$WM_RUNTIME_JSON"
+  wm_transaction_commit "$transaction"
+  wm_success "Subscription publication mode applied: ${requested}"
+}
+
 wm_subscription_command() {
   case "${1:-}" in
     rebuild) shift; wm_subscription_rebuild_command "$@" ;;
@@ -198,6 +315,7 @@ wm_subscription_command() {
     capabilities) shift; wm_subscription_capabilities_command "$@" ;;
     migrate-native) shift; wm_subscription_migrate_native_command "$@" ;;
     fallback-generated) shift; wm_subscription_fallback_generated_command "$@" ;;
-    *) wm_fail "Usage: wavemesh subscription rebuild|validate|capabilities --json|migrate-native|fallback-generated --dry-run|--apply|rotate-path --dry-run|--apply [--path PATH]" ;;
+    publication-mode) shift; wm_subscription_publication_mode_command "$@" ;;
+    *) wm_fail "Usage: wavemesh subscription rebuild|validate|capabilities --json|migrate-native|fallback-generated --dry-run|--apply|rotate-path --dry-run|--apply [--path PATH]|publication-mode [--json]|all|auto-only --dry-run|--apply" ;;
   esac
 }

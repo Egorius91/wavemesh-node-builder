@@ -28,7 +28,7 @@ case "${1:-}" in
   reconcile)
     shift; source "$WM_LIB_DIR/00_common.sh"; source "$WM_LIB_DIR/lib/transaction.sh"; source "$WM_LIB_DIR/lib/xui_api.sh"; source "$WM_LIB_DIR/lib/inbound_adapter.sh"; source "$WM_LIB_DIR/lib/xray_template.sh"; source "$WM_LIB_DIR/lib/nginx_renderer.sh"; source "$WM_LIB_DIR/lib/subscription_renderer.sh"; source "$WM_LIB_DIR/lib/native_subscription.sh"; source "$WM_LIB_DIR/lib/subscription_presentation.sh"; WM_RUNTIME_TOOL="$WM_LIB_DIR/lib/runtime_state.py"; source "$WM_LIB_DIR/commands/runtime.sh"; wm_reconcile_command "$@" ;;
   subscription)
-    shift; source "$WM_LIB_DIR/00_common.sh"; source "$WM_LIB_DIR/lib/transaction.sh"; source "$WM_LIB_DIR/lib/xui_api.sh"; source "$WM_LIB_DIR/lib/nginx_renderer.sh"; source "$WM_LIB_DIR/lib/subscription_renderer.sh"; source "$WM_LIB_DIR/lib/native_subscription.sh"; source "$WM_LIB_DIR/lib/subscription_presentation.sh"; source "$WM_LIB_DIR/commands/subscription.sh"; wm_subscription_command "$@" ;;
+    shift; source "$WM_LIB_DIR/00_common.sh"; source "$WM_LIB_DIR/lib/transaction.sh"; source "$WM_LIB_DIR/lib/xui_api.sh"; source "$WM_LIB_DIR/lib/inbound_adapter.sh"; source "$WM_LIB_DIR/lib/nginx_renderer.sh"; source "$WM_LIB_DIR/lib/subscription_renderer.sh"; source "$WM_LIB_DIR/lib/native_subscription.sh"; source "$WM_LIB_DIR/lib/subscription_presentation.sh"; WM_RUNTIME_TOOL="$WM_LIB_DIR/lib/runtime_state.py"; source "$WM_LIB_DIR/commands/runtime.sh"; source "$WM_LIB_DIR/commands/subscription.sh"; wm_subscription_command "$@" ;;
   exit)
     shift; source "$WM_LIB_DIR/00_common.sh"; source "$WM_LIB_DIR/lib/transaction.sh"; source "$WM_LIB_DIR/lib/xui_api.sh"; source "$WM_LIB_DIR/lib/inbound_adapter.sh"; source "$WM_LIB_DIR/lib/nginx_renderer.sh"; WM_EXIT_PEER_TOOL="$WM_LIB_DIR/lib/exit_peer.py"; source "$WM_LIB_DIR/commands/exit_peer.sh"; [[ "${1:-}" == "peer" ]] || wm_fail "Usage: wavemesh exit peer create|list|remove"; shift; wm_exit_peer_command "$@" ;;
   transaction)
@@ -72,6 +72,8 @@ Usage:
   wavemesh subscription migrate-native --dry-run|--apply
   wavemesh subscription fallback-generated --dry-run|--apply
   wavemesh subscription rotate-path --dry-run|--apply [--path PATH]
+  wavemesh subscription publication-mode [--json]
+  wavemesh subscription publication-mode all|auto-only --dry-run|--apply [--json]
   wavemesh transaction list [--json]
   wavemesh transaction recover --id ID|--latest
   wavemesh repair --nginx

@@ -130,6 +130,16 @@ with tempfile.TemporaryDirectory() as directory:
     assert result["profile_count"] == 3
     assert result["auto_routes"][0]["selectors"] == ["wm-exit-de-1", "wm-exit-de-2"]
 
+    auto_only = json.loads(json.dumps(config))
+    auto_only["network"] = {"subscription": {"publication_mode": "auto-only"}}
+    auto_only_path = base / "auto-only.json"
+    auto_only_path.write_text(json.dumps(auto_only), encoding="utf-8")
+    (users / "subscription-client-1.txt").write_text(lines[0] + "\n", encoding="utf-8")
+    auto_only_result = module.verify(auto_only_path, runtime_path, subscriptions)
+    assert auto_only_result["manual_route_count"] == 2
+    assert auto_only_result["published_route_count"] == 1
+    assert auto_only_result["profile_count"] == 1
+
     broken = json.loads(json.dumps(config))
     broken["balancers"][0]["selector"] = ["wm-exit-missing"]
     broken_path = base / "broken.json"

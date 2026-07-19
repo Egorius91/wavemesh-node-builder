@@ -64,6 +64,7 @@ def migrate_v1(config, backup_path):
     subscription = config.setdefault("network", {}).setdefault("subscription", {})
     subscription["mode"] = "generated"
     subscription["backend"] = "generated"
+    subscription["publication_mode"] = "all"
     config.setdefault("routes", [{"id": "route-standalone-default", "kind": "direct", "display_name": "Direct", "enabled": True, "sort_order": 0}])
     config.setdefault("migrations", []).append({"from": 1, "to": 2, "applied_at": utc_now(), "backup": str(backup_path)})
     config.setdefault("builder", {})["version"] = "0.2.0"
@@ -77,9 +78,17 @@ def migrate(path, backup_dir):
     if version == 2:
         subscription = config.setdefault("network", {}).setdefault("subscription", {})
         backend = subscription.get("backend") or subscription.get("mode") or "generated"
-        changed = subscription.get("backend") != backend or subscription.get("mode") != backend
+        publication_mode = subscription.get("publication_mode") or "all"
+        if publication_mode not in ("all", "auto-only"):
+            raise SystemExit(f"unsupported subscription publication mode: {publication_mode}")
+        changed = (
+            subscription.get("backend") != backend
+            or subscription.get("mode") != backend
+            or subscription.get("publication_mode") != publication_mode
+        )
         subscription["backend"] = backend
         subscription["mode"] = backend
+        subscription["publication_mode"] = publication_mode
         if changed:
             atomic_write(path, config)
         return
