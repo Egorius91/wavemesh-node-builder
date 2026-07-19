@@ -1,0 +1,43 @@
+diff --git a/tests/unit/test_runtime_state.py b/tests/unit/test_runtime_state.py
+index e5bd712..744a942 100644
+--- a/tests/unit/test_runtime_state.py
++++ b/tests/unit/test_runtime_state.py
+@@ -117,6 +117,30 @@ with tempfile.TemporaryDirectory() as name:
+     synced = runtime.sync_runtime(disabled, state)
+     assert synced["routes"]["route-de-fra-1"]["status"] == "disabled"
+ 
++    auto_only = copy.deepcopy(config)
++    auto_only["network"]["subscription"]["publication_mode"] = "auto-only"
++    hidden_desired = runtime.inbound_payload(auto_only, auto_only["routes"][0])
++    assert hidden_desired["remark"].startswith("--!")
++    assert hidden_desired["settings"]["clients"] == []
++    hidden_actual = copy.deepcopy(hidden_desired)
++    hidden_actual["id"] = 12
++    (subs / "sub-runtime-example-1234.txt").unlink()
++    hidden_state = {}
++    for expected in ("unknown", "unknown", "healthy"):
++        hidden_state = runtime.evaluate(
++            auto_only,
++            hidden_state,
++            {"obj": [hidden_actual]},
++            template,
++            "",
++            temp / "subscriptions",
++            probes,
++        )
++        assert hidden_state["exits"]["de-fra-1"]["status"] == expected
++    assert hidden_state["routes"]["route-de-fra-1"]["nginx_location"] == "missing"
++    assert hidden_state["routes"]["route-de-fra-1"]["subscription_profile"] == "absent"
++    assert runtime.drift_plan(auto_only, hidden_state) == []
++
+     auto_config = copy.deepcopy(config)
+     auto_config["routes"] = [{
+         "id": "route-auto-auto-europe", "kind": "auto", "display_name": "Auto Europe",
+@@ -137,5 +161,7 @@ with tempfile.TemporaryDirectory() as name:
+     rendered_auto = json.loads(auto_inbound.read_text(encoding="utf-8"))
+     assert rendered_auto["tag"] == "wm-route-auto-auto-europe"
+     assert rendered_auto["settings"]["clients"][0]["subId"] == "sub-runtime-example-1234"
++    updated_auto = runtime.set_inbound_id(auto_config, "route-auto-auto-europe", 44)
++    assert updated_auto["routes"][0]["entry"]["inbound_id"] == 44
+ 
+ print("runtime state tests: OK")
