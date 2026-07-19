@@ -35,18 +35,20 @@ jobs:
       - name: Validate implementation
         if: hashFiles('scripts/lib/route_presentation.py') != ''
         run: |
+          set -Eeuo pipefail
           python -m compileall -q scripts/lib tests/unit
           bash -n bin/wavemesh scripts/commands/subscription.sh
-          python -m unittest \
-            tests.unit.test_route_presentation \
-            tests.unit.test_auto_only_publication \
-            tests.unit.test_subscription_renderer \
-            tests.unit.test_native_subscription \
-            tests.unit.test_runtime_state \
-            tests.unit.test_e2e_auto \
-            tests.unit.test_inbound_adapter \
-            tests.unit.test_config_migration \
-            -v
+          for test_file in \
+            tests/unit/test_route_presentation.py \
+            tests/unit/test_auto_only_publication.py \
+            tests/unit/test_subscription_renderer.py \
+            tests/unit/test_native_subscription.py \
+            tests/unit/test_runtime_state.py \
+            tests/unit/test_e2e_auto.py \
+            tests/unit/test_inbound_adapter.py \
+            tests/unit/test_config_migration.py; do
+            python "$test_file"
+          done
 
       - name: Commit implementation
         run: |
