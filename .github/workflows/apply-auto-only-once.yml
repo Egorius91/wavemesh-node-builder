@@ -28,10 +28,7 @@ jobs:
             echo 'Implementation already applied.'
             exit 0
           fi
-          cat .github/auto-only.patch.gz.b64.part-* \
-            | base64 --decode \
-            | gzip --decompress \
-            > /tmp/auto-only.patch
+          cat .github/auto-only.patch.part-*.patch > /tmp/auto-only.patch
           git apply --index --whitespace=error-all /tmp/auto-only.patch
           git diff --cached --check
 
