@@ -29,6 +29,25 @@ jobs:
             exit 0
           fi
           git apply --index --recount --whitespace=error-all .github/native-readiness-hotfix.patch
+          python3 - <<'PY'
+          from pathlib import Path
+
+          path = Path("tests/unit/test_native_readiness.sh")
+          text = path.read_text(encoding="utf-8")
+          old = '''WM_NATIVE_SUBSCRIPTION_TOOL="$tmp_dir/native-tool.py"
+
+# shellcheck source=scripts/lib/native_subscription.sh
+source "$ROOT_DIR/scripts/lib/native_subscription.sh"
+'''
+          new = '''# shellcheck source=scripts/lib/native_subscription.sh
+source "$ROOT_DIR/scripts/lib/native_subscription.sh"
+WM_NATIVE_SUBSCRIPTION_TOOL="$tmp_dir/native-tool.py"
+'''
+          if old not in text:
+              raise SystemExit("native readiness mock ordering marker not found")
+          path.write_text(text.replace(old, new, 1), encoding="utf-8")
+          PY
+          git add tests/unit/test_native_readiness.sh
           git diff --cached --check
 
       - name: Validate shell syntax
