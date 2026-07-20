@@ -28,7 +28,7 @@ jobs:
             echo 'Hotfix already applied.'
             exit 0
           fi
-          git apply --index --whitespace=error-all .github/native-readiness-hotfix.patch
+          git apply --index --recount --whitespace=error-all .github/native-readiness-hotfix.patch
           git diff --cached --check
 
       - name: Validate hotfix
