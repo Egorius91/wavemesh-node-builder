@@ -76,6 +76,8 @@ jobs:
       - name: Commit hotfix
         run: |
           set -Eeuo pipefail
+          git restore --staged .github/workflows/tests.yml
+          git restore .github/workflows/tests.yml
           if git diff --cached --quiet; then
             echo 'No hotfix changes to commit.'
             exit 0
