@@ -1,6 +1,9 @@
 #!/usr/bin/env python3
 import argparse, ipaddress, json, re
 from pathlib import Path
+import sys
+sys.path.insert(0, str(Path(__file__).resolve().parent))
+from route_presentation import route_is_public
 
 PATH_RE=re.compile(r"^/(?!.*(?:\.\.|%2[fF]|\s)).{10,126}/$")
 SUB_ID_RE=re.compile(r"^[A-Za-z0-9_-]{16,80}$")
@@ -80,10 +83,8 @@ def render(config,additional_native_path=None,native_alias=None,additional_nativ
     for route in sorted(config.get("routes",[]),key=lambda x:(x.get("sort_order",0),x["id"])):
         if not route.get("enabled",True): continue
         kind=route.get("kind")
-        if kind=="cascade": publish=True
-        elif kind=="auto": publish=route.get("presentation",{}).get("published",False)
-        else: publish=False
-        if not publish: continue
+        if kind not in ("cascade","auto"): continue
+        if not route_is_public(config,route,manual_default=kind=="cascade"): continue
         entry=route["entry"]; path=entry["public_path"]
         if path in seen: raise ValueError(f"managed path collision: {path}")
         seen.add(path); blocks.append(render_location(path,entry["local_port"],[]))

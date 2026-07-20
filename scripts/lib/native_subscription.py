@@ -8,6 +8,9 @@ import ipaddress
 import json
 import re
 from pathlib import Path
+import sys
+sys.path.insert(0, str(Path(__file__).resolve().parent))
+from route_presentation import route_is_public
 
 
 BACKENDS = {"generated", "xui-native"}
@@ -184,11 +187,12 @@ def expected_client_profiles(config, subscription_id):
         if not route.get("enabled", True) or route.get("id") not in credentials:
             continue
         kind = route.get("kind")
-        if kind == "direct":
-            count += 1
-        elif kind == "cascade" and route.get("exit_id") in exits:
-            count += 1
-        elif kind == "auto" and route.get("presentation", {}).get("published", False):
+        eligible = (
+            kind == "direct"
+            or (kind == "cascade" and route.get("exit_id") in exits)
+            or kind == "auto"
+        )
+        if eligible and route_is_public(config, route, manual_default=True):
             count += 1
     return count
 

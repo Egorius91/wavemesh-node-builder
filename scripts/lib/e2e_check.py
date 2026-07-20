@@ -7,6 +7,9 @@ import sys
 import urllib.parse
 from pathlib import Path
 
+sys.path.insert(0, str(Path(__file__).resolve().parent))
+from route_presentation import route_is_public
+
 
 def load(path):
     return json.loads(Path(path).read_text(encoding="utf-8"))
@@ -62,8 +65,11 @@ def published_auto_routes(config, exits):
     return routes
 
 
-def ordered_published_routes(manual_routes, auto_routes):
-    routes = list(manual_routes) + [route for route, _ in auto_routes]
+def ordered_published_routes(config, manual_routes, auto_routes):
+    routes = [
+        route for route in manual_routes
+        if route_is_public(config, route, manual_default=True)
+    ] + [route for route, _ in auto_routes]
     routes.sort(key=lambda item: (item.get("sort_order", 0), item.get("display_name", ""), item["id"]))
     return routes
 
@@ -180,7 +186,7 @@ def verify(config_path, runtime_path, subscriptions):
         fail("multi-Exit E2E verification requires an Entry node")
     exits, manual_routes = enabled_manual_routes(config)
     auto_routes = published_auto_routes(config, exits)
-    published_routes = ordered_published_routes(manual_routes, auto_routes)
+    published_routes = ordered_published_routes(config, manual_routes, auto_routes)
     clients, profiles = validate_subscriptions(config, exits, published_routes, subscriptions)
     route_results = validate_runtime(load(runtime_path), manual_routes)
     auto_results = [

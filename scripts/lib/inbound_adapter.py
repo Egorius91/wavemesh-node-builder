@@ -56,11 +56,21 @@ def merge_external_clients(desired, response):
     desired_settings=as_object(desired.get("settings"))
     actual_settings=as_object(actual.get("settings"))
     managed=desired_settings.get("clients") if isinstance(desired_settings.get("clients"),list) else []
+    existing=actual_settings.get("clients") if isinstance(actual_settings.get("clients"),list) else []
     if str(desired.get("remark") or "").startswith("--!"):
-        desired_settings["clients"]=[client for client in managed if isinstance(client,dict)]
+        # Hidden inbounds are excluded by 3X-UI native subscriptions. Keep their
+        # client records intact so publication-mode changes are reversible and
+        # never destroy clients owned by another control plane (for example the bot).
+        identities=set().union(*(client_identity(client) for client in managed if isinstance(client,dict)))
+        preserved=[client for client in managed if isinstance(client,dict)]
+        for client in existing:
+            if not isinstance(client,dict): continue
+            identity=client_identity(client)
+            if identities.intersection(identity): continue
+            preserved.append(client); identities.update(identity)
+        desired_settings["clients"]=preserved
         desired["settings"]=desired_settings
         return desired
-    existing=actual_settings.get("clients") if isinstance(actual_settings.get("clients"),list) else []
     identities=set().union(*(client_identity(client) for client in managed if isinstance(client,dict)))
     external=[]
     for client in existing:
