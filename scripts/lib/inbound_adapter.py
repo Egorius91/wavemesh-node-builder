@@ -58,17 +58,12 @@ def merge_external_clients(desired, response):
     managed=desired_settings.get("clients") if isinstance(desired_settings.get("clients"),list) else []
     existing=actual_settings.get("clients") if isinstance(actual_settings.get("clients"),list) else []
     if str(desired.get("remark") or "").startswith("--!"):
-        # Hidden inbounds are excluded by 3X-UI native subscriptions. Keep their
-        # client records intact so publication-mode changes are reversible and
-        # never destroy clients owned by another control plane (for example the bot).
-        identities=set().union(*(client_identity(client) for client in managed if isinstance(client,dict)))
-        preserved=[client for client in managed if isinstance(client,dict)]
-        for client in existing:
-            if not isinstance(client,dict): continue
-            identity=client_identity(client)
-            if identities.intersection(identity): continue
-            preserved.append(client); identities.update(identity)
-        desired_settings["clients"]=preserved
+        # 3X-UI native subscriptions select enabled inbounds by a matching client
+        # subId and do not treat the --! remark as a subscription filter. Hidden
+        # inbounds therefore must have no client attachments. Auto-only preflight
+        # guarantees that every active subId is already attached to the published
+        # Auto inbound, while the transaction database snapshot provides rollback.
+        desired_settings["clients"]=[client for client in managed if isinstance(client,dict)]
         desired["settings"]=desired_settings
         return desired
     identities=set().union(*(client_identity(client) for client in managed if isinstance(client,dict)))
