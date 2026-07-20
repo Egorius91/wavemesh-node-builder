@@ -1,0 +1,60 @@
+name: Apply native readiness hotfix once
+
+on:
+  pull_request:
+    branches:
+      - main
+
+permissions:
+  contents: write
+
+jobs:
+  apply-hotfix:
+    if: github.head_ref == 'fix/native-publication-readiness-retry'
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+
+    steps:
+      - name: Checkout work branch
+        uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
+        with:
+          ref: fix/native-publication-readiness-retry
+          fetch-depth: 0
+
+      - name: Apply hotfix patch
+        run: |
+          set -Eeuo pipefail
+          if [[ -f tests/unit/test_native_readiness.sh ]]; then
+            echo 'Hotfix already applied.'
+            exit 0
+          fi
+          git apply --index --whitespace=error-all .github/native-readiness-hotfix.patch
+          git diff --cached --check
+
+      - name: Validate hotfix
+        run: |
+          set -Eeuo pipefail
+          bash -n scripts/lib/native_subscription.sh tests/unit/test_native_readiness.sh
+          bash tests/unit/test_native_readiness.sh
+          python3 -m compileall -q scripts tests
+          for test in tests/unit/test_*.py; do
+            python3 "$test"
+          done
+          python3 tests/e2e/test_multi_exit.py
+          bash tests/unit/test_baseline.sh
+          bash tests/unit/test_runtime_process.sh
+          bash tests/unit/test_transaction.sh
+          bash tests/integration/test_xui_api.sh
+          git diff --cached --check
+
+      - name: Commit hotfix
+        run: |
+          set -Eeuo pipefail
+          if git diff --cached --quiet; then
+            echo 'No hotfix changes to commit.'
+            exit 0
+          fi
+          git config user.name 'github-actions[bot]'
+          git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
+          git commit -m 'Retry native subscription readiness checks'
+          git push origin HEAD:fix/native-publication-readiness-retry
