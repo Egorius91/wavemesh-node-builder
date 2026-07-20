@@ -1,0 +1,14 @@
+diff --git a/tests/unit/test_native_readiness.sh b/tests/unit/test_native_readiness.sh
+index f077e4c..3df69b7 100755
+--- a/tests/unit/test_native_readiness.sh
++++ b/tests/unit/test_native_readiness.sh
+@@ -35,10 +35,9 @@ else:
+ PY
+ chmod +x "$tmp_dir/native-tool.py"
+-WM_NATIVE_SUBSCRIPTION_TOOL="$tmp_dir/native-tool.py"
+-
+ # shellcheck source=scripts/lib/native_subscription.sh
+ source "$ROOT_DIR/scripts/lib/native_subscription.sh"
++WM_NATIVE_SUBSCRIPTION_TOOL="$tmp_dir/native-tool.py"
+ 
+ printf '{"network":{"subscription":{"path":"/opaque/"}}}\n' > "$tmp_dir/config.json"
