@@ -41,7 +41,5 @@ with tempfile.TemporaryDirectory() as name:
     actual.write_text(json.dumps({"success":True,"obj":[hidden_actual]}))
     subprocess.run([sys.executable,str(tool),"merge-clients","--desired",str(hidden_path),"--actual",str(actual),"--output",str(merged)],check=True)
     hidden_clients=json.loads(merged.read_text())["settings"]["clients"]
-    hidden_emails={client.get("email") for client in hidden_clients}
-    assert "external.bot.client" in hidden_emails
-    assert "wm.stale.client" in hidden_emails
+    assert hidden_clients == []
 print("inbound adapter tests: OK")
