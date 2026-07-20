@@ -29,6 +29,7 @@ jobs:
           set -Eeuo pipefail
           bash tests/unit/test_baseline.sh
           bash tests/unit/test_runtime_process.sh
+          bash tests/unit/test_native_readiness.sh
           bash tests/unit/test_transaction.sh
           bash tests/integration/test_xui_api.sh
           bash -n bin/wavemesh scripts/commands/*.sh scripts/lib/*.sh
