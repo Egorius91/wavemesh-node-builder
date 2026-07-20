@@ -24,15 +24,15 @@ jobs:
 
     steps:
       - name: Checkout
-        uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6.0.3
+        uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
 
       - name: Initialize CodeQL
-        uses: github/codeql-action/init@7740f2fb21add1d46278215acea47540db22f022 # v4.36.0
+        uses: github/codeql-action/init@cf463419fdde78c727231e445622a9ac37966f84 # v4.36.0
         with:
           languages: python
           queries: security-extended
 
       - name: Analyze
-        uses: github/codeql-action/analyze@7740f2fb21add1d46278215acea47540db22f022 # v4.36.0
+        uses: github/codeql-action/analyze@cf463419fdde78c727231e445622a9ac37966f84 # v4.36.0
         with:
           category: '/language:python'
