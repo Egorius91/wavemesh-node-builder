@@ -51,12 +51,24 @@ jobs:
           done
           python3 tests/e2e/test_multi_exit.py
 
-      - name: Validate existing shell tests
+      - name: Validate baseline shell test
         run: |
           set -Eeuo pipefail
           bash tests/unit/test_baseline.sh
+
+      - name: Validate runtime process shell test
+        run: |
+          set -Eeuo pipefail
           bash tests/unit/test_runtime_process.sh
+
+      - name: Validate transaction shell test
+        run: |
+          set -Eeuo pipefail
           bash tests/unit/test_transaction.sh
+
+      - name: Validate XUI adapter shell test
+        run: |
+          set -Eeuo pipefail
           bash tests/integration/test_xui_api.sh
           git diff --cached --check
 
