@@ -125,22 +125,40 @@ raise SystemExit(0 if all(required) else 1)
 ' "$allow_custom_renderer" || { wm_warn "3X-UI native subscription capabilities are incomplete"; return 1; }
 }
 
-wm_native_validate_profile_counts() {
-  local config="${1:-$WM_CONFIG_JSON}" sub_id links expected_api expected_config checked=0
-  while IFS= read -r sub_id; do
-    [[ -n "$sub_id" ]] || continue
-    links="$(mktemp)"
-    wm_xui_request_success GET "/panel/api/clients/subLinks/${sub_id}" none > "$links" || { rm -f "$links"; return 1; }
-    expected_api="$(python3 - "$links" <<'PY'
+wm_native_wait_profile_count() {
+  local config="$1" sub_id="$2" links="$3"
+  local attempts="${WM_NATIVE_READINESS_ATTEMPTS:-10}" delay="${WM_NATIVE_READINESS_DELAY_SECONDS:-1}"
+  local attempt expected_api="-1" expected_config
+  [[ "$attempts" =~ ^[1-9][0-9]*$ ]] || attempts=10
+  [[ "$delay" =~ ^[0-9]+([.][0-9]+)?$ ]] || delay=1
+  expected_config="$(python3 "$WM_NATIVE_SUBSCRIPTION_TOOL" expected-profiles --config "$config" --subscription-id "$sub_id")" || return 1
+  (( expected_config > 0 )) || { wm_warn "Canonical config has no published profiles for an enabled builder client"; return 1; }
+  for attempt in $(seq 1 "$attempts"); do
+    if wm_xui_request_success GET "/panel/api/clients/subLinks/${sub_id}" none > "$links"; then
+      expected_api="$(python3 - "$links" <<'PY'
 import json,sys
 obj=json.load(open(sys.argv[1],encoding="utf-8")).get("obj",[])
 print(len(obj) if isinstance(obj,list) else -1)
 PY
-)"
-    expected_config="$(python3 "$WM_NATIVE_SUBSCRIPTION_TOOL" expected-profiles --config "$config" --subscription-id "$sub_id")" || { rm -f "$links"; return 1; }
+)" || expected_api="-1"
+      if [[ "$expected_api" == "$expected_config" ]]; then
+        printf '%s\n' "$expected_api"
+        return 0
+      fi
+    fi
+    (( attempt < attempts )) && sleep "$delay"
+  done
+  wm_warn "Native profile count did not converge to canonical published routes: ${expected_api} != ${expected_config}"
+  return 1
+}
+
+wm_native_validate_profile_counts() {
+  local config="${1:-$WM_CONFIG_JSON}" sub_id links checked=0
+  while IFS= read -r sub_id; do
+    [[ -n "$sub_id" ]] || continue
+    links="$(mktemp)"
+    wm_native_wait_profile_count "$config" "$sub_id" "$links" >/dev/null || { rm -f "$links"; return 1; }
     rm -f "$links"
-    (( expected_config > 0 )) || { wm_warn "Canonical config has no published profiles for an enabled builder client"; return 1; }
-    [[ "$expected_api" == "$expected_config" ]] || { wm_warn "Clients API profile count differs from canonical published routes: ${expected_api} != ${expected_config}"; return 1; }
     checked=$((checked+1))
   done < <(python3 - "$config" <<'PY'
 import json,sys
@@ -162,30 +180,37 @@ wm_native_fetch_public() {
   return 1
 }
 
+wm_native_wait_public_content() {
+  local config="$1" sub_id="$2" content="$3" expected="$4" forbidden="$5"
+  local attempts="${WM_NATIVE_READINESS_ATTEMPTS:-10}" delay="${WM_NATIVE_READINESS_DELAY_SECONDS:-1}"
+  local attempt path
+  [[ "$attempts" =~ ^[1-9][0-9]*$ ]] || attempts=10
+  [[ "$delay" =~ ^[0-9]+([.][0-9]+)?$ ]] || delay=1
+  path="$(python3 - "$config" "$sub_id" <<'PY'
+import json,sys
+cfg=json.load(open(sys.argv[1],encoding="utf-8")); print(cfg["network"]["subscription"]["path"]+sys.argv[2])
+PY
+)" || return 1
+  for attempt in $(seq 1 "$attempts"); do
+    if curl -fsSk --max-time 10 -H 'Accept: text/plain' "https://${DOMAIN}${path}" -o "$content" \
+      && python3 "$WM_NATIVE_SUBSCRIPTION_TOOL" validate-content --content "$content" --domain "$DOMAIN" --forbidden "$forbidden" --expected-profiles "$expected" >/dev/null; then
+      return 0
+    fi
+    (( attempt < attempts )) && sleep "$delay"
+  done
+  wm_warn "Native public subscription content did not converge after readiness retries"
+  return 1
+}
+
 wm_native_validate_public() {
-  local config="${1:-$WM_CONFIG_JSON}" allow_custom_renderer="${2:-false}" sub_id content links expected expected_config path forbidden validated=0
+  local config="${1:-$WM_CONFIG_JSON}" allow_custom_renderer="${2:-false}" sub_id content links expected forbidden validated=0
   wm_native_require_capabilities "$config" "$allow_custom_renderer" || return 1
   forbidden="127.0.0.1,localhost,$PUBLIC_IP,$PANEL_PORT,$XHTTP_LOCAL_PORT,2096"
   while IFS= read -r sub_id; do
     [[ -n "$sub_id" ]] || continue
     links="$(mktemp)"; content="$(mktemp)"
-    wm_xui_request_success GET "/panel/api/clients/subLinks/${sub_id}" none > "$links" || { rm -f "$links" "$content"; return 1; }
-    expected="$(python3 - "$links" <<'PY'
-import json,sys
-obj=json.load(open(sys.argv[1],encoding="utf-8")).get("obj",[])
-print(len(obj) if isinstance(obj,list) else -1)
-PY
-)"
-    (( expected > 0 )) || { rm -f "$links" "$content"; wm_warn "Configured client has no enabled native subscription profiles"; return 1; }
-    expected_config="$(python3 "$WM_NATIVE_SUBSCRIPTION_TOOL" expected-profiles --config "$config" --subscription-id "$sub_id")" || { rm -f "$links" "$content"; return 1; }
-    [[ "$expected" == "$expected_config" ]] || { rm -f "$links" "$content"; wm_warn "Native profile count differs from canonical published routes: ${expected} != ${expected_config}"; return 1; }
-    path="$(python3 - "$config" "$sub_id" <<'PY'
-import json,sys
-cfg=json.load(open(sys.argv[1],encoding="utf-8")); print(cfg["network"]["subscription"]["path"]+sys.argv[2])
-PY
-)"
-    wm_native_fetch_public "https://${DOMAIN}${path}" "$content" || { rm -f "$links" "$content"; wm_warn "Native public subscription URL is unreachable after readiness retries"; return 1; }
-    python3 "$WM_NATIVE_SUBSCRIPTION_TOOL" validate-content --content "$content" --domain "$DOMAIN" --forbidden "$forbidden" --expected-profiles "$expected" >/dev/null || { rm -f "$links" "$content"; return 1; }
+    expected="$(wm_native_wait_profile_count "$config" "$sub_id" "$links")" || { rm -f "$links" "$content"; return 1; }
+    wm_native_wait_public_content "$config" "$sub_id" "$content" "$expected" "$forbidden" || { rm -f "$links" "$content"; return 1; }
     rm -f "$links" "$content"; validated=$((validated+1))
   done < <(python3 - "$config" <<'PY'
 import json,sys
