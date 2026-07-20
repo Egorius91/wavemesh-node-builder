@@ -1,0 +1,22 @@
+diff --git a/scripts/lib/native_subscription.sh b/scripts/lib/native_subscription.sh
+index 50f3508..7b2e7a1 100644
+--- a/scripts/lib/native_subscription.sh
++++ b/scripts/lib/native_subscription.sh
+@@ -186,6 +186,17 @@ PY
+   (( checked > 0 )) || wm_warn "No builder-managed clients are available for profile count validation"
+ }
+ 
++wm_native_fetch_public() {
++  local url="$1" output="$2" attempt
++  for attempt in $(seq 1 10); do
++    if curl -fsSk --max-time 10 -H 'Accept: text/plain' "$url" -o "$output"; then
++      return 0
++    fi
++    (( attempt < 10 )) && sleep 1
++  done
++  return 1
++}
++
+ wm_native_wait_public_content() {
+   local config="$1" sub_id="$2" content="$3" expected="$4" forbidden="$5"
+   local attempts="${WM_NATIVE_READINESS_ATTEMPTS:-10}" delay="${WM_NATIVE_READINESS_DELAY_SECONDS:-1}"
