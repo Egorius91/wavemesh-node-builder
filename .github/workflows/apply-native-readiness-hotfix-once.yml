@@ -30,6 +30,7 @@ jobs:
           fi
           git apply --index --recount --whitespace=error-all .github/native-readiness-hotfix.patch
           git apply --index --recount --whitespace=error-all .github/native-readiness-test-order.patch
+          git apply --index --recount --whitespace=error-all .github/native-readiness-compat.patch
           git diff --cached --check
 
       - name: Validate shell syntax
