@@ -4,11 +4,20 @@ from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[2]
 
+STREAM_TIMEOUTS = (
+    "proxy_connect_timeout 10s;",
+    "proxy_send_timeout 300s;",
+    "proxy_read_timeout 300s;",
+    "send_timeout 300s;",
+)
+
+
 def load_module(name, path):
     spec = importlib.util.spec_from_file_location(name, path)
     module = importlib.util.module_from_spec(spec)
     spec.loader.exec_module(module)
     return module
+
 
 subscription = load_module("subscription_renderer", ROOT / "scripts/lib/subscription_renderer.py")
 nginx = load_module("nginx_renderer", ROOT / "scripts/lib/nginx_renderer.py")
@@ -57,6 +66,8 @@ def test_published_auto_is_public_without_exit_secrets():
     rendered = nginx.render(cfg)
     assert "location /api/auto/abcdefghijkl/" in rendered
     assert "proxy_pass http://127.0.0.1:21102;" in rendered
+    for directive in STREAM_TIMEOUTS:
+        assert directive in rendered
 
 
 def test_disabled_auto_cannot_be_published():

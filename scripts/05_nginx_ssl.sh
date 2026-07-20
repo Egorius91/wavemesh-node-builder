@@ -104,6 +104,10 @@ server {
         proxy_set_header X-Forwarded-Host \$host;
         proxy_set_header X-Forwarded-Port 443;
         proxy_redirect off;
+        proxy_connect_timeout 10s;
+        proxy_send_timeout 300s;
+        proxy_read_timeout 300s;
+        send_timeout 300s;
         proxy_buffering off;
         proxy_request_buffering off;
     }

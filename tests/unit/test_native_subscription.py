@@ -14,6 +14,18 @@ spec = importlib.util.spec_from_file_location("native_subscription", tool)
 native = importlib.util.module_from_spec(spec)
 spec.loader.exec_module(native)
 
+STREAM_TIMEOUTS = (
+    "proxy_connect_timeout 10s;",
+    "proxy_send_timeout 300s;",
+    "proxy_read_timeout 300s;",
+    "send_timeout 300s;",
+)
+
+
+def location_block(rendered, path):
+    return rendered.split(f"location {path} {{", 1)[1].split("\n}", 1)[0]
+
+
 config = json.loads((root / "tests" / "fixtures" / "config-entry-v2.json").read_text())
 config["network"]["subscription"].update(
     {"path": "/AbCdEf1234/XyZ9876543210abcde/", "mode": "xui-native", "backend": "xui-native", "local_port": 2096}
@@ -77,18 +89,23 @@ with tempfile.TemporaryDirectory() as name:
     source.write_text(json.dumps(config))
     subprocess.run([sys.executable, str(nginx), "--config", str(source), "--output", str(output)], check=True)
     rendered = output.read_text()
-    assert f"location {config['network']['subscription']['path']}" in rendered
+    subscription_path = config["network"]["subscription"]["path"]
+    assert f"location {subscription_path}" in rendered
     assert "proxy_pass http://127.0.0.1:2096;" in rendered
     assert "root /var/www/wavemesh-sub/users;" not in rendered
+    native_block = location_block(rendered, subscription_path)
+    assert all(directive not in native_block for directive in STREAM_TIMEOUTS)
 
     alias_output = Path(name) / "nginx-alias.conf"
     subprocess.run([
         sys.executable, str(nginx), "--config", str(source), "--output", str(alias_output),
-        "--native-alias-from", "/old-native-path/", "--native-alias-to", config["network"]["subscription"]["path"],
+        "--native-alias-from", "/old-native-path/", "--native-alias-to", subscription_path,
     ], check=True)
     alias_rendered = alias_output.read_text()
     assert "location /old-native-path/" in alias_rendered
-    assert f"proxy_pass http://127.0.0.1:2096{config['network']['subscription']['path']};" in alias_rendered
+    assert f"proxy_pass http://127.0.0.1:2096{subscription_path};" in alias_rendered
+    alias_block = location_block(alias_rendered, "/old-native-path/")
+    assert all(directive not in alias_block for directive in STREAM_TIMEOUTS)
 
     generated_config = json.loads(json.dumps(config))
     generated_config["network"]["subscription"].update({"backend": "generated", "mode": "generated", "local_port": 33854})
@@ -104,6 +121,8 @@ with tempfile.TemporaryDirectory() as name:
     assert "location /new-native-path/" in migration_rendered
     assert "proxy_pass http://127.0.0.1:2096;" in migration_rendered
     assert "proxy_pass http://127.0.0.1:33854;" not in migration_rendered
+    migration_block = location_block(migration_rendered, "/new-native-path/")
+    assert all(directive not in migration_block for directive in STREAM_TIMEOUTS)
 
     clients = Path(name) / "clients.json"; reconciled = Path(name) / "reconciled.json"; actions = Path(name) / "actions.json"
     clients.write_text(json.dumps({"obj": [{"uuid": config["clients"][0]["uuid"], "email": "wm.client", "subId": "", "enable": True}]}))

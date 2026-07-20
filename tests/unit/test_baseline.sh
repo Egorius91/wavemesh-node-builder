@@ -25,6 +25,17 @@ for file in "$ROOT_DIR/install.sh" "$ROOT_DIR/bin/wavemesh" "$ROOT_DIR"/scripts/
   bash -n "$file"
 done
 
+for directive in \
+  'proxy_connect_timeout 10s;' \
+  'proxy_send_timeout 300s;' \
+  'proxy_read_timeout 300s;' \
+  'send_timeout 300s;'; do
+  grep -Fq "$directive" "$ROOT_DIR/scripts/05_nginx_ssl.sh" || {
+    echo "initial XHTTP nginx template is missing: $directive" >&2
+    exit 1
+  }
+done
+
 tmp="$(mktemp -d)"
 trap 'rm -rf "$tmp"' EXIT
 mkdir -p "$tmp/transaction"

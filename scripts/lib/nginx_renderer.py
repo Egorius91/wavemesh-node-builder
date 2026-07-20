@@ -7,6 +7,12 @@ from route_presentation import route_is_public
 
 PATH_RE=re.compile(r"^/(?!.*(?:\.\.|%2[fF]|\s)).{10,126}/$")
 SUB_ID_RE=re.compile(r"^[A-Za-z0-9_-]{16,80}$")
+STREAM_TIMEOUT_DIRECTIVES=[
+    "    proxy_connect_timeout 10s;",
+    "    proxy_send_timeout 300s;",
+    "    proxy_read_timeout 300s;",
+    "    send_timeout 300s;",
+]
 def validate_path(value):
     if not PATH_RE.fullmatch(value): raise ValueError(f"invalid managed path: {value}")
 def normalize_path(value):
@@ -39,11 +45,13 @@ def client_subscription_paths(config):
         validate_path(path)
         result.append((client,sub_id,path))
     return result
-def render_location(path,port,allowed_ips):
+def render_location(path,port,allowed_ips,stream_timeouts=False):
     validate_path(path); lines=[f"location {path} {{"]
     for address in allowed_ips: ipaddress.ip_address(address); lines.append(f"    allow {address};")
     if allowed_ips: lines += ["    deny all;",""]
-    lines += [f"    proxy_pass http://127.0.0.1:{int(port)};","    proxy_http_version 1.1;","    proxy_set_header Host $host;","    proxy_set_header X-Forwarded-Proto https;","    proxy_set_header X-Forwarded-Host $host;","    proxy_set_header X-Forwarded-Port 443;","    proxy_redirect off;","    proxy_buffering off;","    proxy_request_buffering off;","}"]
+    lines += [f"    proxy_pass http://127.0.0.1:{int(port)};","    proxy_http_version 1.1;","    proxy_set_header Host $host;","    proxy_set_header X-Forwarded-Proto https;","    proxy_set_header X-Forwarded-Host $host;","    proxy_set_header X-Forwarded-Port 443;","    proxy_redirect off;"]
+    if stream_timeouts: lines += STREAM_TIMEOUT_DIRECTIVES
+    lines += ["    proxy_buffering off;","    proxy_request_buffering off;","}"]
     return "\n".join(lines)
 def render_native_alias(path,target,port):
     validate_path(path); target=normalize_path(target)
@@ -79,7 +87,7 @@ def render(config,additional_native_path=None,native_alias=None,additional_nativ
         if not peer.get("enabled",True): continue
         inbound=peer["inbound"]; path=inbound["public_path"]
         if path in seen: raise ValueError(f"managed path collision: {path}")
-        seen.add(path); blocks.append(render_location(path,inbound["local_port"],peer.get("allowed_entry_ips",[])))
+        seen.add(path); blocks.append(render_location(path,inbound["local_port"],peer.get("allowed_entry_ips",[]),stream_timeouts=True))
     for route in sorted(config.get("routes",[]),key=lambda x:(x.get("sort_order",0),x["id"])):
         if not route.get("enabled",True): continue
         kind=route.get("kind")
@@ -87,7 +95,7 @@ def render(config,additional_native_path=None,native_alias=None,additional_nativ
         if not route_is_public(config,route,manual_default=kind=="cascade"): continue
         entry=route["entry"]; path=entry["public_path"]
         if path in seen: raise ValueError(f"managed path collision: {path}")
-        seen.add(path); blocks.append(render_location(path,entry["local_port"],[]))
+        seen.add(path); blocks.append(render_location(path,entry["local_port"],[],stream_timeouts=True))
     return "\n\n".join(blocks)+(chr(10) if blocks else "")
 def main():
     p=argparse.ArgumentParser(); p.add_argument("--config",required=True); p.add_argument("--output",required=True); p.add_argument("--additional-native-path"); p.add_argument("--additional-native-port",type=int); p.add_argument("--native-alias-from"); p.add_argument("--native-alias-to"); a=p.parse_args()
