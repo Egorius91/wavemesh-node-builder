@@ -1,0 +1,33 @@
+[Unit]
+Description=WaveMesh Observe-Only Node Agent
+Documentation=https://github.com/Egorius91/wavemesh-node-builder
+After=network-online.target x-ui.service nginx.service
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=root
+Group=root
+UMask=0077
+ExecStart=/usr/bin/python3 /usr/local/lib/wavemesh-agent/wavemesh_node_agent.py run --env-file /etc/wavemesh-agent/agent.env
+ExecReload=/bin/kill -HUP $MAINPID
+Restart=always
+RestartSec=10
+TimeoutStopSec=30
+NoNewPrivileges=true
+PrivateTmp=true
+ProtectSystem=strict
+ProtectHome=true
+ProtectKernelTunables=true
+ProtectKernelModules=true
+ProtectControlGroups=true
+ProtectClock=true
+RestrictSUIDSGID=true
+LockPersonality=true
+MemoryDenyWriteExecute=true
+RestrictAddressFamilies=AF_UNIX AF_INET AF_INET6
+CapabilityBoundingSet=
+ReadWritePaths=/etc/wavemesh-agent /etc/wavemesh-node
+
+[Install]
+WantedBy=multi-user.target
