@@ -10,8 +10,8 @@ import tempfile
 import unittest
 
 ROOT = Path(__file__).resolve().parents[2]
-MODULE_PATH = ROOT / "agent" / "wavemesh_node_agent.py"
-SPEC = importlib.util.spec_from_file_location("wavemesh_node_agent", MODULE_PATH)
+MODULE_PATH = ROOT / "agent" / "node_agent.py"
+SPEC = importlib.util.spec_from_file_location("wave_node_agent", MODULE_PATH)
 assert SPEC and SPEC.loader
 agent = importlib.util.module_from_spec(SPEC)
 sys.modules[SPEC.name] = agent
@@ -88,6 +88,30 @@ class NodeAgentTests(unittest.TestCase):
             self.assertEqual(config.agent_token, replacement)
             self.assertTrue(agent.valid_token(replacement))
             self.assertEqual(len(agent.token_hash(replacement)), 64)
+
+    def test_pending_rotation_token_survives_restart(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            env_path = Path(directory) / "agent.env"
+            agent.write_env_file(
+                env_path,
+                {
+                    "WAVEMESH_API_BASE": "https://example.invalid/api",
+                    "WAVEMESH_NODE_ID": "node-12345678",
+                    "WAVEMESH_TENANT_ID": "tenant-12345678",
+                    "WAVEMESH_AGENT_TOKEN": agent.generate_token(),
+                    "WAVEMESH_AGENT_TOKEN_EXPIRES_AT": agent.format_timestamp(
+                        datetime.now(timezone.utc) + timedelta(hours=1)
+                    ),
+                    "WAVEMESH_AGENT_MODE": "observe-only",
+                },
+            )
+            first = agent.NodeAgent(agent.AgentConfig.load(env_path))
+            pending = first.load_or_create_pending_replacement()
+            second = agent.NodeAgent(agent.AgentConfig.load(env_path))
+            self.assertEqual(second.load_or_create_pending_replacement(), pending)
+            self.assertEqual(second.config.pending_rotation_path.stat().st_mode & 0o777, 0o600)
+            second.clear_pending_replacement()
+            self.assertFalse(second.config.pending_rotation_path.exists())
 
     def test_forbidden_observation_key_is_rejected(self) -> None:
         with self.assertRaises(agent.AgentError):
