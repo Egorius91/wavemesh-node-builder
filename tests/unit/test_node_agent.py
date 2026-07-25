@@ -5,6 +5,7 @@ from datetime import datetime, timedelta, timezone
 import importlib.util
 import json
 from pathlib import Path
+import sys
 import tempfile
 import unittest
 
@@ -13,6 +14,7 @@ MODULE_PATH = ROOT / "agent" / "wavemesh_node_agent.py"
 SPEC = importlib.util.spec_from_file_location("wavemesh_node_agent", MODULE_PATH)
 assert SPEC and SPEC.loader
 agent = importlib.util.module_from_spec(SPEC)
+sys.modules[SPEC.name] = agent
 SPEC.loader.exec_module(agent)
 
 
