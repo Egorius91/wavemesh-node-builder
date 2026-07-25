@@ -2,7 +2,7 @@
 set -Eeuo pipefail
 
 PROJECT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
-AGENT_SOURCE="$PROJECT_DIR/agent/wavemesh_node_agent.py"
+AGENT_SOURCE="$PROJECT_DIR/agent/node_agent.py"
 UNIT_SOURCE="$PROJECT_DIR/agent/wavemesh-node-agent.service"
 ENV_FILE="${WAVEMESH_AGENT_ENV:-/etc/wavemesh-agent/agent.env}"
 INSTALL_DIR="/usr/local/lib/wavemesh-agent"
@@ -32,11 +32,11 @@ chown root:root "$ENV_FILE"
 
 install -d -m 0700 /etc/wavemesh-agent
 install -d -m 0755 "$INSTALL_DIR"
-install -m 0755 "$AGENT_SOURCE" "$INSTALL_DIR/wavemesh_node_agent.py"
+install -m 0755 "$AGENT_SOURCE" "$INSTALL_DIR/node_agent.py"
 install -m 0644 "$UNIT_SOURCE" "$UNIT_PATH"
 
-/usr/bin/python3 "$INSTALL_DIR/wavemesh_node_agent.py" check --env-file "$ENV_FILE" >/dev/null
-/usr/bin/python3 -m py_compile "$INSTALL_DIR/wavemesh_node_agent.py"
+/usr/bin/python3 "$INSTALL_DIR/node_agent.py" check --env-file "$ENV_FILE" >/dev/null
+/usr/bin/python3 -m py_compile "$INSTALL_DIR/node_agent.py"
 
 systemctl daemon-reload
 systemctl enable --now wavemesh-node-agent.service
