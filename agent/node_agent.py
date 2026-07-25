@@ -134,6 +134,8 @@ class NodeAgent:
         self.last_health_state: dict[str, Any] = {
             "mode": "observe_only",
             "node_status": "unknown",
+            "healthy_exits": 0,
+            "total_exits": 0,
             "routes": [],
             "auto_routes": [],
         }
@@ -143,21 +145,54 @@ class NodeAgent:
         next_observation = 0.0
         while not _STOP:
             started = time.monotonic()
+
             try:
                 self.rotate_if_due()
-                if time.monotonic() >= next_observation:
+            except ApiError as exc:
+                LOG.warning(
+                    "Credential rotation failed: status=%s code=%s retryable=%s",
+                    exc.status,
+                    exc.code,
+                    exc.retryable,
+                )
+            except Exception as exc:  # noqa: BLE001 - long-running service boundary
+                LOG.exception("Credential rotation cycle failed: %s", exc)
+
+            if time.monotonic() >= next_observation:
+                try:
                     self.collect_and_send_observation()
                     next_observation = time.monotonic() + self.config.observation_seconds
+                except ApiError as exc:
+                    self.mark_health_degraded()
+                    next_observation = time.monotonic() + min(60, self.config.observation_seconds)
+                    LOG.warning(
+                        "Health observation failed: status=%s code=%s retryable=%s",
+                        exc.status,
+                        exc.code,
+                        exc.retryable,
+                    )
+                except Exception as exc:  # noqa: BLE001 - long-running service boundary
+                    self.mark_health_degraded()
+                    next_observation = time.monotonic() + min(60, self.config.observation_seconds)
+                    LOG.exception("Health observation cycle failed: %s", exc)
+
+            try:
                 self.send_heartbeat()
             except ApiError as exc:
-                LOG.warning("SaaS request failed: status=%s code=%s retryable=%s", exc.status, exc.code, exc.retryable)
+                LOG.warning("Heartbeat failed: status=%s code=%s retryable=%s", exc.status, exc.code, exc.retryable)
             except Exception as exc:  # noqa: BLE001 - long-running service boundary
-                LOG.exception("Agent cycle failed: %s", exc)
+                LOG.exception("Heartbeat cycle failed: %s", exc)
 
             if once:
                 return
             elapsed = time.monotonic() - started
             stop_aware_sleep(max(1.0, self.config.heartbeat_seconds - elapsed))
+
+    def mark_health_degraded(self) -> None:
+        self.last_health_state = {
+            **self.last_health_state,
+            "node_status": "degraded",
+        }
 
     def rotate_if_due(self) -> None:
         now = datetime.now(timezone.utc)
@@ -176,6 +211,8 @@ class NodeAgent:
                 expected=(201,),
             )
         except ApiError as exc:
+            if exc.code == "NODE_CREDENTIAL_ROTATION_NOT_DUE":
+                return
             if exc.code in {
                 "NODE_CREDENTIAL_HASH_CONFLICT",
                 "NODE_CREDENTIAL_REUSE_FORBIDDEN",
