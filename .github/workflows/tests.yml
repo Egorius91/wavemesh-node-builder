@@ -19,7 +19,7 @@ jobs:
       - name: Python unit and E2E tests
         run: |
           set -Eeuo pipefail
-          python3 -m compileall -q scripts tests
+          python3 -m compileall -q agent scripts tests
           for test in tests/unit/test_*.py; do
             python3 "$test"
           done
@@ -32,6 +32,6 @@ jobs:
           bash tests/unit/test_native_readiness.sh
           bash tests/unit/test_transaction.sh
           bash tests/integration/test_xui_api.sh
-          bash -n bin/wavemesh scripts/commands/*.sh scripts/lib/*.sh
+          bash -n bin/wavemesh agent/*.sh scripts/commands/*.sh scripts/lib/*.sh
       - name: Patch hygiene
         run: git diff --check
