@@ -75,8 +75,8 @@ class NodeMtlsStateTests(unittest.TestCase):
             self.assertEqual(reloaded.generation, active.generation)
             self.assertTrue(state.active_link.is_symlink())
             self.assertEqual(active.private_key.stat().st_mode & 0o777, 0o600)
-            self.assertEqual(active.certificate.stat().st_mode & 0o777, 0o644)
-            self.assertEqual(active.ca_bundle.stat().st_mode & 0o777, 0o644)
+            self.assertEqual(active.certificate.stat().st_mode & 0o777, 0o600)
+            self.assertEqual(active.ca_bundle.stat().st_mode & 0o777, 0o600)
             self.assertEqual(active.metadata.stat().st_mode & 0o777, 0o600)
             self.assertFalse(state.pending_key.exists())
             self.assertFalse(state.pending_csr.exists())
@@ -160,6 +160,13 @@ class NodeMtlsStateTests(unittest.TestCase):
 
             with self.assertRaises(mtls.MtlsStateError):
                 state.active_identity()
+
+    def test_atomic_state_writer_rejects_broader_file_modes(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            target = Path(directory) / "unsafe.crt"
+            with self.assertRaises(mtls.MtlsStateError):
+                mtls.atomic_write_bytes(target, b"not-secret-but-private-state", 0o644)
+            self.assertFalse(target.exists())
 
 
 def issue_test_certificate(
