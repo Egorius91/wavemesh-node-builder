@@ -46,8 +46,10 @@ generations directory: 0700
 private keys: 0600
 CSR/pending metadata: 0600
 active generation metadata: 0600
-certificate/CA bundle: 0644 or stricter
+certificate/CA bundle: 0600
 ```
+
+All files under the Agent TLS state root are private even when their cryptographic content is public. This avoids permission drift and keeps the entire identity bundle behind one filesystem policy.
 
 Production deployment must also ensure `root:root` ownership. Unit tests run as the CI user and validate permission modes only.
 
@@ -164,7 +166,8 @@ The target Ubuntu image must provide an approved OpenSSL version before deployme
 Unit tests generate an isolated temporary CA and leaf certificate and cover:
 
 - idempotent pending request reuse;
-- private file modes;
+- private file modes for key, CSR, certificate, CA and metadata;
+- rejection of broader file modes by the atomic state writer;
 - metadata without private key/CSR;
 - partial pending state failure;
 - exact URI SAN validation;
