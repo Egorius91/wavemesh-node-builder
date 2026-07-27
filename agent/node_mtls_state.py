@@ -1,10 +1,5 @@
 #!/usr/bin/env python3
-"""Local, non-networked mTLS identity state for the WaveMesh Node Agent.
-
-This module is intentionally not imported by ``node_agent.py`` yet. It prepares
-and validates local key/CSR/certificate generations without changing the
-current bearer-authenticated observe-only runtime.
-"""
+"""Local, non-networked mTLS identity state for the WaveMesh Node Agent."""
 
 from __future__ import annotations
 
@@ -24,6 +19,7 @@ from typing import Any
 DEFAULT_TLS_ROOT = Path("/etc/wavemesh-agent/tls")
 MAX_PEM_BYTES = 128 * 1024
 SAFE_IDENTITY_PATTERN = re.compile(r"^spiffe://wavevpn/[a-z][a-z0-9-]{1,31}/tenant/[A-Za-z0-9._:%-]{1,256}/node/[A-Za-z0-9._:%-]{1,256}$")
+SAFE_OPAQUE_ID_PATTERN = re.compile(r"^[A-Za-z0-9_-]{8,128}$")
 SHA256_PATTERN = re.compile(r"^[a-f0-9]{64}$")
 PRIVATE_FILE_MODE = 0o600
 
@@ -46,8 +42,17 @@ class ActiveIdentity:
     directory: Path
     private_key: Path
     certificate: Path
+    certificate_chain: Path
     ca_bundle: Path
     metadata: Path
+
+
+@dataclass(frozen=True)
+class PendingAcknowledgement:
+    credential_id: str
+    request_hash: str
+    delivery_expires_at: datetime
+    recorded_at: datetime
 
 
 class NodeMtlsState:
@@ -57,6 +62,7 @@ class NodeMtlsState:
         self.pending_dir = root / "pending"
         self.generations_dir = root / "generations"
         self.active_link = root / "active"
+        self.acknowledgement_path = root / "acknowledgement.pending.json"
 
     @property
     def pending_key(self) -> Path:
@@ -151,6 +157,7 @@ class NodeMtlsState:
 
         certificate_temp = self._temporary_path(self.pending_dir, "certificate")
         ca_temp = self._temporary_path(self.pending_dir, "ca")
+        generation_temp: Path | None = None
         try:
             atomic_write_bytes(certificate_temp, certificate_bytes, PRIVATE_FILE_MODE)
             atomic_write_bytes(ca_temp, ca_bytes, PRIVATE_FILE_MODE)
@@ -168,16 +175,32 @@ class NodeMtlsState:
                     raise MtlsStateError("Existing mTLS generation path is unsafe")
                 active = self._validate_generation(generation_dir, expected_identity_uri)
             else:
-                generation_dir.mkdir(mode=0o700)
+                generation_temp = self.generations_dir / (
+                    f".{generation}.{secrets.token_hex(8)}"
+                )
+                generation_temp.mkdir(mode=0o700)
                 atomic_write_bytes(
-                    generation_dir / "client.key",
+                    generation_temp / "client.key",
                     self.pending_key.read_bytes(),
                     PRIVATE_FILE_MODE,
                 )
-                atomic_write_bytes(generation_dir / "client.crt", certificate_bytes, PRIVATE_FILE_MODE)
-                atomic_write_bytes(generation_dir / "ca.crt", ca_bytes, PRIVATE_FILE_MODE)
+                atomic_write_bytes(
+                    generation_temp / "client.crt",
+                    certificate_bytes,
+                    PRIVATE_FILE_MODE,
+                )
+                atomic_write_bytes(
+                    generation_temp / "client-chain.crt",
+                    certificate_bytes + ca_bytes,
+                    PRIVATE_FILE_MODE,
+                )
+                atomic_write_bytes(
+                    generation_temp / "ca.crt",
+                    ca_bytes,
+                    PRIVATE_FILE_MODE,
+                )
                 atomic_write_json(
-                    generation_dir / "metadata.json",
+                    generation_temp / "metadata.json",
                     {
                         "activated_at": format_timestamp(datetime.now(timezone.utc)),
                         "generation": generation,
@@ -187,7 +210,10 @@ class NodeMtlsState:
                     },
                     PRIVATE_FILE_MODE,
                 )
-                self._fsync_directory(generation_dir)
+                self._fsync_directory(generation_temp)
+                os.replace(generation_temp, generation_dir)
+                generation_temp = None
+                self._fsync_directory(self.generations_dir)
                 active = self._validate_generation(generation_dir, expected_identity_uri)
 
             self._activate_generation(generation)
@@ -201,8 +227,16 @@ class NodeMtlsState:
                     path.unlink()
                 except FileNotFoundError:
                     pass
+            if generation_temp is not None and generation_temp.exists():
+                if (
+                    generation_temp.is_symlink()
+                    or generation_temp.parent.resolve() != self.generations_dir.resolve()
+                    or not generation_temp.name.startswith(".")
+                ):
+                    raise MtlsStateError("Temporary mTLS generation path is unsafe")
+                shutil.rmtree(generation_temp)
 
-    def active_identity(self) -> ActiveIdentity | None:
+    def active_identity(self, expected_identity_uri: str | None = None) -> ActiveIdentity | None:
         self._ensure_layout()
         if not self.active_link.exists() and not self.active_link.is_symlink():
             return None
@@ -213,7 +247,93 @@ class NodeMtlsState:
         generations_root = self.generations_dir.resolve()
         if target.parent != generations_root:
             raise MtlsStateError("Active mTLS identity points outside the generations directory")
-        return self._validate_generation(target, expected_identity_uri=None)
+        return self._validate_generation(target, expected_identity_uri=expected_identity_uri)
+
+    def active_request_hash(self, active: ActiveIdentity | None = None) -> str | None:
+        identity = active or self.active_identity()
+        if identity is None:
+            return None
+        return require_sha256(read_json_object(identity.metadata), "request_hash")
+
+    def record_pending_acknowledgement(
+        self,
+        credential_id: str,
+        request_hash: str,
+        delivery_expires_at: datetime,
+    ) -> PendingAcknowledgement:
+        self._ensure_layout()
+        if not SAFE_OPAQUE_ID_PATTERN.fullmatch(credential_id):
+            raise MtlsStateError("mTLS acknowledgement credential ID is invalid")
+        if not SHA256_PATTERN.fullmatch(request_hash):
+            raise MtlsStateError("mTLS acknowledgement request hash is invalid")
+        if delivery_expires_at.tzinfo is None:
+            raise MtlsStateError("mTLS delivery expiry must include a timezone")
+        normalized_expiry = delivery_expires_at.astimezone(timezone.utc).replace(
+            microsecond=(delivery_expires_at.microsecond // 1000) * 1000
+        )
+
+        existing = self.pending_acknowledgement()
+        if existing is not None:
+            if (
+                existing.credential_id != credential_id
+                or existing.request_hash != request_hash
+                or existing.delivery_expires_at != normalized_expiry
+            ):
+                raise MtlsStateError("Conflicting mTLS acknowledgement is already pending")
+            return existing
+
+        recorded_at = datetime.now(timezone.utc)
+        atomic_write_json(
+            self.acknowledgement_path,
+            {
+                "credential_id": credential_id,
+                "delivery_expires_at": format_timestamp(normalized_expiry),
+                "recorded_at": format_timestamp(recorded_at),
+                "request_hash": request_hash,
+            },
+            PRIVATE_FILE_MODE,
+        )
+        self._fsync_directory(self.root)
+        return PendingAcknowledgement(
+            credential_id=credential_id,
+            request_hash=request_hash,
+            delivery_expires_at=normalized_expiry,
+            recorded_at=recorded_at,
+        )
+
+    def pending_acknowledgement(self) -> PendingAcknowledgement | None:
+        self._ensure_layout()
+        if not self.acknowledgement_path.exists():
+            return None
+        self._ensure_safe_regular_file(self.acknowledgement_path)
+        value = read_json_object(self.acknowledgement_path)
+        credential_id = require_text(value, "credential_id", 128)
+        if not SAFE_OPAQUE_ID_PATTERN.fullmatch(credential_id):
+            raise MtlsStateError("mTLS acknowledgement credential ID is invalid")
+        request_hash = require_sha256(value, "request_hash")
+        delivery_expires_at = parse_timestamp(
+            require_text(value, "delivery_expires_at", 64),
+            "delivery expiry",
+        )
+        recorded_at = parse_timestamp(
+            require_text(value, "recorded_at", 64),
+            "acknowledgement timestamp",
+        )
+        return PendingAcknowledgement(
+            credential_id=credential_id,
+            request_hash=request_hash,
+            delivery_expires_at=delivery_expires_at,
+            recorded_at=recorded_at,
+        )
+
+    def clear_pending_acknowledgement(self, credential_id: str) -> None:
+        pending = self.pending_acknowledgement()
+        if pending is None:
+            return
+        if pending.credential_id != credential_id:
+            raise MtlsStateError("Refusing to clear another mTLS acknowledgement")
+        self.acknowledgement_path.unlink()
+        self._fsync_directory(self.root)
 
     def clear_pending_request(self) -> None:
         self._ensure_layout()
@@ -271,10 +391,12 @@ class NodeMtlsState:
             raise MtlsStateError("mTLS generation directory is unsafe")
         key = directory / "client.key"
         certificate = directory / "client.crt"
+        certificate_chain = directory / "client-chain.crt"
         ca = directory / "ca.crt"
         metadata_path = directory / "metadata.json"
         self._ensure_safe_regular_file(key)
         self._ensure_safe_regular_file(certificate)
+        self._ensure_safe_regular_file(certificate_chain)
         self._ensure_safe_regular_file(ca)
         self._ensure_safe_regular_file(metadata_path)
         metadata = read_json_object(metadata_path)
@@ -293,6 +415,7 @@ class NodeMtlsState:
             directory=directory,
             private_key=key,
             certificate=certificate,
+            certificate_chain=certificate_chain,
             ca_bundle=ca,
             metadata=metadata_path,
         )
@@ -339,7 +462,7 @@ class NodeMtlsState:
         if path.is_symlink() or not path.is_file():
             raise MtlsStateError(f"mTLS state file is missing or unsafe: {path.name}")
         actual_mode = path.stat().st_mode & 0o777
-        if actual_mode != PRIVATE_FILE_MODE:
+        if os.name != "nt" and actual_mode != PRIVATE_FILE_MODE:
             raise MtlsStateError(f"mTLS state file permissions are invalid: {path.name}")
 
     def _run(self, arguments: list[str]) -> None:
@@ -372,16 +495,13 @@ class NodeMtlsState:
 
     @staticmethod
     def _fsync_file(path: Path) -> None:
-        with path.open("rb") as handle:
+        mode = "r+b" if os.name == "nt" else "rb"
+        with path.open(mode) as handle:
             os.fsync(handle.fileno())
 
     @staticmethod
     def _fsync_directory(path: Path) -> None:
-        descriptor = os.open(path, os.O_RDONLY | getattr(os, "O_DIRECTORY", 0))
-        try:
-            os.fsync(descriptor)
-        finally:
-            os.close(descriptor)
+        fsync_directory(path)
 
 
 def validate_identity_uri(value: str) -> None:
@@ -424,6 +544,7 @@ def atomic_write_bytes(path: Path, content: bytes, mode: int) -> None:
             os.fsync(handle.fileno())
         os.chmod(temporary, PRIVATE_FILE_MODE)
         os.replace(temporary, path)
+        fsync_directory(path.parent)
     finally:
         try:
             temporary.unlink()
@@ -434,6 +555,16 @@ def atomic_write_bytes(path: Path, content: bytes, mode: int) -> None:
 def atomic_write_json(path: Path, value: dict[str, Any], mode: int) -> None:
     content = (json.dumps(value, indent=2, sort_keys=True) + "\n").encode("utf-8")
     atomic_write_bytes(path, content, mode)
+
+
+def fsync_directory(path: Path) -> None:
+    if os.name == "nt":
+        return
+    descriptor = os.open(path, os.O_RDONLY | getattr(os, "O_DIRECTORY", 0))
+    try:
+        os.fsync(descriptor)
+    finally:
+        os.close(descriptor)
 
 
 def read_json_object(path: Path) -> dict[str, Any]:
@@ -466,6 +597,16 @@ def sha256_text(value: str) -> str:
 
 def format_timestamp(value: datetime) -> str:
     return value.astimezone(timezone.utc).isoformat(timespec="milliseconds").replace("+00:00", "Z")
+
+
+def parse_timestamp(value: str, label: str) -> datetime:
+    try:
+        parsed = datetime.fromisoformat(value.replace("Z", "+00:00"))
+    except ValueError as exc:
+        raise MtlsStateError(f"mTLS {label} is invalid") from exc
+    if parsed.tzinfo is None:
+        raise MtlsStateError(f"mTLS {label} must include a timezone")
+    return parsed.astimezone(timezone.utc)
 
 
 def safe_error(value: str) -> str:

@@ -4,10 +4,12 @@ from __future__ import annotations
 from datetime import datetime, timedelta, timezone
 import importlib.util
 import json
+import os
 from pathlib import Path
 import sys
 import tempfile
 import unittest
+from unittest import mock
 
 ROOT = Path(__file__).resolve().parents[2]
 MODULE_PATH = ROOT / "agent" / "node_agent.py"
@@ -16,6 +18,11 @@ assert SPEC and SPEC.loader
 agent = importlib.util.module_from_spec(SPEC)
 sys.modules[SPEC.name] = agent
 SPEC.loader.exec_module(agent)
+
+
+def assert_posix_mode(case: unittest.TestCase, path: Path, expected: int) -> None:
+    if os.name != "nt":
+        case.assertEqual(path.stat().st_mode & 0o777, expected)
 
 
 class NodeAgentTests(unittest.TestCase):
@@ -84,7 +91,7 @@ class NodeAgentTests(unittest.TestCase):
 
             stored = agent.read_env_file(env_path)
             self.assertEqual(stored["WAVEMESH_AGENT_TOKEN"], replacement)
-            self.assertEqual(env_path.stat().st_mode & 0o777, 0o600)
+            assert_posix_mode(self, env_path, 0o600)
             self.assertEqual(config.agent_token, replacement)
             self.assertTrue(agent.valid_token(replacement))
             self.assertEqual(len(agent.token_hash(replacement)), 64)
@@ -109,7 +116,7 @@ class NodeAgentTests(unittest.TestCase):
             pending = first.load_or_create_pending_replacement()
             second = agent.NodeAgent(agent.AgentConfig.load(env_path))
             self.assertEqual(second.load_or_create_pending_replacement(), pending)
-            self.assertEqual(second.config.pending_rotation_path.stat().st_mode & 0o777, 0o600)
+            assert_posix_mode(self, second.config.pending_rotation_path, 0o600)
             second.clear_pending_replacement()
             self.assertFalse(second.config.pending_rotation_path.exists())
 
@@ -251,7 +258,7 @@ class NodeAgentTests(unittest.TestCase):
             self.assertEqual(second.runtime["rotation_retry_code"], "NETWORK_ERROR")
             self.assertNotIn(token, encoded)
             self.assertNotIn(agent.token_hash(token), encoded)
-            self.assertEqual(runtime_path.stat().st_mode & 0o777, 0o600)
+            assert_posix_mode(self, runtime_path, 0o600)
 
     def test_rotation_retry_state_is_cleared_after_credential_expiry_changes(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
@@ -285,6 +292,103 @@ class NodeAgentTests(unittest.TestCase):
     def test_forbidden_observation_key_is_rejected(self) -> None:
         with self.assertRaises(agent.AgentError):
             agent.assert_redacted({"api_token": "not-allowed"})
+
+    def test_mtls_defaults_disabled_without_changing_bearer_configuration(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            env_path = Path(directory) / "agent.env"
+            token = agent.generate_token()
+            agent.write_env_file(
+                env_path,
+                {
+                    "WAVEMESH_API_BASE": "https://example.invalid/api",
+                    "WAVEMESH_NODE_ID": "node-12345678",
+                    "WAVEMESH_TENANT_ID": "tenant-12345678",
+                    "WAVEMESH_AGENT_TOKEN": token,
+                    "WAVEMESH_AGENT_TOKEN_EXPIRES_AT": agent.format_timestamp(
+                        datetime.now(timezone.utc) + timedelta(hours=24)
+                    ),
+                    "WAVEMESH_AGENT_MODE": "observe-only",
+                },
+            )
+
+            config = agent.AgentConfig.load(env_path)
+
+            self.assertEqual(config.mtls_mode, "disabled")
+            self.assertIsNone(config.mtls_api_base)
+            self.assertEqual(config.agent_token, token)
+            self.assertIsNone(agent.build_mtls_runtime(config))
+
+    def test_shadow_failure_does_not_block_bearer_foreground_cycle(self) -> None:
+        class FakeStatus:
+            def __init__(self, state):
+                self.state = state
+
+            def capability(self):
+                return {
+                    "mode": "shadow",
+                    "state": self.state,
+                    "retry_attempts": 0,
+                    "retry_at": None,
+                    "code": None,
+                }
+
+        class FakeMtlsRuntime:
+            def __init__(self):
+                self.lifecycle_calls = 0
+                self.shadow_calls = 0
+
+            def lifecycle_cycle(self, version):
+                self.lifecycle_calls += 1
+                return FakeStatus("SHADOW_READY")
+
+            def shadow_heartbeat(self, payload):
+                self.shadow_calls += 1
+                raise RuntimeError("simulated mTLS transport failure")
+
+        with tempfile.TemporaryDirectory() as directory:
+            env_path = Path(directory) / "agent.env"
+            runtime_path = Path(directory) / "runtime.json"
+            agent.write_env_file(
+                env_path,
+                {
+                    "WAVEMESH_API_BASE": "https://example.invalid/api",
+                    "WAVEMESH_NODE_ID": "node-12345678",
+                    "WAVEMESH_TENANT_ID": "tenant-12345678",
+                    "WAVEMESH_AGENT_TOKEN": agent.generate_token(),
+                    "WAVEMESH_AGENT_TOKEN_EXPIRES_AT": agent.format_timestamp(
+                        datetime.now(timezone.utc) + timedelta(hours=24)
+                    ),
+                    "WAVEMESH_AGENT_MODE": "observe-only",
+                    "WAVEMESH_AGENT_RUNTIME_PATH": str(runtime_path),
+                },
+            )
+            mtls_runtime = FakeMtlsRuntime()
+            instance = agent.NodeAgent(
+                agent.AgentConfig.load(env_path),
+                mtls_runtime=mtls_runtime,
+            )
+            bearer_heartbeats = []
+
+            with (
+                mock.patch.object(instance, "rotate_if_due"),
+                mock.patch.object(instance, "collect_and_send_observation"),
+                mock.patch.object(
+                    instance,
+                    "send_heartbeat",
+                    side_effect=lambda payload: bearer_heartbeats.append(payload),
+                ),
+            ):
+                instance.run(once=True)
+
+            self.assertEqual(mtls_runtime.lifecycle_calls, 1)
+            self.assertEqual(mtls_runtime.shadow_calls, 1)
+            self.assertEqual(len(bearer_heartbeats), 1)
+            self.assertEqual(
+                bearer_heartbeats[0]["capabilities"]["mtls_shadow"]["state"],
+                "SHADOW_READY",
+            )
+            self.assertEqual(instance.last_mtls_status["state"], "BLOCKED")
+            self.assertNotIn("simulated", json.dumps(instance.last_mtls_status))
 
 
 if __name__ == "__main__":

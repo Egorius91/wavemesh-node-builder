@@ -60,8 +60,10 @@ class FakeState:
             created_at="2026-07-27T08:00:00.000Z",
         )
         self.activation = None
+        self.acknowledgement = None
 
-    def active_identity(self):
+    def active_identity(self, expected_identity_uri=None):
+        self.expected_identity_uri = expected_identity_uri
         return self.active
 
     def prepare_pending_request(self):
@@ -74,10 +76,18 @@ class FakeState:
             directory=Path("/private/generation"),
             private_key=Path("/private/generation/client.key"),
             certificate=Path("/private/generation/client.crt"),
+            certificate_chain=Path("/private/generation/client-chain.crt"),
             ca_bundle=Path("/private/generation/ca.crt"),
             metadata=Path("/private/generation/metadata.json"),
         )
         return self.active
+
+    def record_pending_acknowledgement(self, credential_id, request_hash, delivery_expires_at):
+        self.acknowledgement = (credential_id, request_hash, delivery_expires_at)
+
+    def clear_pending_acknowledgement(self, credential_id):
+        if self.acknowledgement and self.acknowledgement[0] == credential_id:
+            self.acknowledgement = None
 
 
 def config(auth_mode="bearer", bearer=TOKEN):
@@ -120,6 +130,17 @@ class NodeMtlsClientTests(unittest.TestCase):
         self.assertEqual(captured["tenant"], TENANT_ID)
         self.assertIsInstance(captured["context"], ssl.SSLContext)
 
+    def test_bearer_transport_does_not_read_mtls_identity_state(self) -> None:
+        state = mock.Mock()
+        opener = mock.Mock(return_value=FakeResponse(204))
+        transport = client.NodeMtlsTransport(config("bearer"), state, opener)
+
+        transport.api_json("POST", "heartbeat", {}, expected=(204,))
+
+        state.active_identity.assert_not_called()
+        request_object = opener.call_args.args[0]
+        self.assertEqual(request_object.get_header("Authorization"), f"Bearer {TOKEN}")
+
     def test_bootstrap_mode_switches_to_mtls_after_local_activation(self) -> None:
         state = FakeState()
         auth_headers = []
@@ -160,6 +181,7 @@ class NodeMtlsClientTests(unittest.TestCase):
                 directory=Path("/private/generation"),
                 private_key=Path("/private/generation/client.key"),
                 certificate=Path("/private/generation/client.crt"),
+                certificate_chain=Path("/private/generation/client-chain.crt"),
                 ca_bundle=Path("/private/generation/ca.crt"),
                 metadata=Path("/private/generation/metadata.json"),
             )
@@ -183,10 +205,11 @@ class NodeMtlsClientTests(unittest.TestCase):
                     "credential_id": "credential_mtls_123",
                     "certificate": "-----BEGIN CERTIFICATE-----\nY2VydA==\n-----END CERTIFICATE-----",
                     "chain": "-----BEGIN CERTIFICATE-----\nY2hhaW4=\n-----END CERTIFICATE-----",
-                    "identity_uri": expected_identity,
                     "issuer_key_id": "staging-intermediate-1",
+                    "lifecycle_status": "PENDING_ACKNOWLEDGEMENT",
                     "not_before": "2026-07-27T08:00:00.000Z",
                     "expires_at": "2026-07-28T08:00:00.000Z",
+                    "delivery_expires_at": "2026-07-27T08:15:00.000Z",
                     "previous_valid_until": None,
                     "already_processed": True,
                 }
@@ -202,12 +225,14 @@ class NodeMtlsClientTests(unittest.TestCase):
         self.assertTrue(result.already_processed)
         self.assertEqual(result.generation, "a" * 24)
         self.assertEqual(state.activation[2], expected_identity)
+        self.assertEqual(state.acknowledgement[0], "credential_mtls_123")
         self.assertEqual(requests[0][2]["csr"], state.pending.csr_pem)
         self.assertNotIn(state.pending.request_hash, requests[0][4]["Idempotency-Key"])
         self.assertTrue(requests[0][5])
 
-    def test_wrong_certificate_identity_does_not_activate_pending_key(self) -> None:
+    def test_response_identity_field_cannot_override_local_expected_identity(self) -> None:
         state = FakeState()
+        expected_identity = config("bootstrap-mtls").expected_identity_uri
 
         class FakeTransport:
             def api_json(self, *args, **kwargs):
@@ -217,8 +242,10 @@ class NodeMtlsClientTests(unittest.TestCase):
                     "chain": "chain",
                     "identity_uri": "spiffe://wavevpn/staging/tenant/other_tenant/node/other_node",
                     "issuer_key_id": "staging-intermediate-1",
+                    "lifecycle_status": "PENDING_ACKNOWLEDGEMENT",
                     "not_before": "2026-07-27T08:00:00.000Z",
                     "expires_at": "2026-07-28T08:00:00.000Z",
+                    "delivery_expires_at": "2026-07-27T08:15:00.000Z",
                     "previous_valid_until": None,
                     "already_processed": False,
                 }
@@ -228,9 +255,8 @@ class NodeMtlsClientTests(unittest.TestCase):
             state=state,
             transport=FakeTransport(),
         )
-        with self.assertRaises(client.MtlsClientError):
-            lifecycle.issue_or_rotate("0.3.0-mtls-test")
-        self.assertIsNone(state.activation)
+        lifecycle.issue_or_rotate("0.3.0-mtls-test")
+        self.assertEqual(state.activation[2], expected_identity)
 
     def test_rotation_schedule_and_sanitized_metadata(self) -> None:
         expiry = datetime(2026, 7, 28, 8, 0, tzinfo=timezone.utc)
@@ -251,6 +277,7 @@ class NodeMtlsClientTests(unittest.TestCase):
         result = client.CertificateLifecycleResult(
             credential_id="credential_mtls_123",
             expires_at=expiry,
+            delivery_expires_at=expiry - timedelta(hours=23, minutes=45),
             previous_valid_until=expiry - timedelta(hours=23, minutes=55),
             already_processed=False,
             generation="c" * 24,
@@ -260,6 +287,48 @@ class NodeMtlsClientTests(unittest.TestCase):
         self.assertEqual(metadata["credential_id"], "credential_mtls_123")
         for forbidden in ("PRIVATE KEY", "BEGIN CERTIFICATE", TOKEN, "1" * 64, "2" * 64):
             self.assertNotIn(forbidden, encoded)
+
+    def test_retrieve_and_acknowledge_use_opaque_credential_scope(self) -> None:
+        state = FakeState()
+        requests = []
+
+        class FakeTransport:
+            def api_json(self, method, path, payload, expected, headers=None, certificate_request=False):
+                requests.append((method, path, payload, expected))
+                if path.endswith("/acknowledge"):
+                    return {
+                        "credential_id": "credential_mtls_123",
+                        "lifecycle_status": "ACKNOWLEDGED",
+                        "acknowledged_at": "2026-07-27T08:02:00.000Z",
+                        "already_processed": False,
+                    }
+                return {
+                    "credential_id": "credential_mtls_123",
+                    "certificate": "certificate",
+                    "chain": "chain",
+                    "lifecycle_status": "PENDING_ACKNOWLEDGEMENT",
+                    "expires_at": "2026-07-28T08:00:00.000Z",
+                    "delivery_expires_at": "2026-07-27T08:15:00.000Z",
+                    "previous_valid_until": None,
+                    "already_processed": True,
+                }
+
+        lifecycle = client.NodeCertificateLifecycleClient(
+            config("bearer"),
+            state=state,
+            transport=FakeTransport(),
+        )
+        lifecycle.retrieve("credential_mtls_123")
+        acknowledged_at = lifecycle.acknowledge("credential_mtls_123")
+
+        self.assertEqual(requests[0][0:3], (
+            "GET",
+            f"internal/v1/nodes/{NODE_ID}/certificates/credential_mtls_123",
+            None,
+        ))
+        self.assertTrue(requests[1][1].endswith("/credential_mtls_123/acknowledge"))
+        self.assertEqual(acknowledged_at, datetime(2026, 7, 27, 8, 2, tzinfo=timezone.utc))
+        self.assertIsNone(state.acknowledgement)
 
     def test_invalid_configuration_fails_closed(self) -> None:
         with self.assertRaises(client.MtlsClientError):
@@ -275,6 +344,36 @@ class NodeMtlsClientTests(unittest.TestCase):
             config("bootstrap-mtls", bearer=None)
         with self.assertRaises(client.MtlsClientError):
             config("unsupported")
+
+    def test_mtls_context_separates_server_trust_from_client_chain(self) -> None:
+        active = state_module.ActiveIdentity(
+            generation="a" * 24,
+            directory=Path("/private/generation"),
+            private_key=Path("/private/generation/client.key"),
+            certificate=Path("/private/generation/client.crt"),
+            certificate_chain=Path("/private/generation/client-chain.crt"),
+            ca_bundle=Path("/private/generation/client-ca.crt"),
+            metadata=Path("/private/generation/metadata.json"),
+        )
+        context = mock.Mock()
+        server_ca = Path("/etc/ssl/private-mtls-ingress-ca.crt")
+
+        with mock.patch.object(
+            client.ssl,
+            "create_default_context",
+            return_value=context,
+        ) as create_context:
+            result = client.build_mtls_ssl_context(active, server_ca)
+
+        self.assertIs(result, context)
+        create_context.assert_called_once_with(
+            purpose=ssl.Purpose.SERVER_AUTH,
+            cafile=str(server_ca),
+        )
+        context.load_cert_chain.assert_called_once_with(
+            certfile=str(active.certificate_chain),
+            keyfile=str(active.private_key),
+        )
 
 
 if __name__ == "__main__":
