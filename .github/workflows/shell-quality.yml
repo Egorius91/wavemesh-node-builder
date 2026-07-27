@@ -23,7 +23,7 @@ jobs:
 
       - name: ShellCheck error-level findings
         run: |
-          find bin scripts tests -type f -name '*.sh' -print0 \
+          find bin agent scripts tests -type f -name '*.sh' -print0 \
             | xargs -0 shellcheck --severity=error
 
       - name: Patch hygiene

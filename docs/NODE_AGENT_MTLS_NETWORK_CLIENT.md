@@ -8,9 +8,9 @@ Parent: #29
 
 The observe-only Node Agent can run a second, isolated mTLS lifecycle in
 `shadow` mode while its existing bearer observation and heartbeat path remains
-authoritative. This change does not modify the installer or systemd unit, does
-not deploy a Node, does not enable a SaaS gate, and never disables or deletes
-the bearer credential.
+authoritative. Packaging is handled by the separate installer phase; no Node
+is deployed, no SaaS gate is enabled, and the bearer credential is never
+disabled or deleted.
 
 The implementation is split across:
 
@@ -128,12 +128,12 @@ The integration does not log or place in general runtime:
 
 ## Rollback
 
-Set `WAVEMESH_AGENT_MTLS_MODE=disabled` and restart the Agent in the later
-installer/systemd phase. Bearer operation remains unchanged and does not
-require token recovery. Do not delete mTLS state during rollback; preserving it
-keeps the operation reversible and avoids generating another identity.
+Set `WAVEMESH_AGENT_MTLS_MODE=disabled` and perform the separately approved
+Agent restart. Bearer operation remains unchanged and does not require token
+recovery. Do not delete mTLS state during rollback; preserving it keeps the
+operation reversible and avoids generating another identity.
 
 ## Deferred work
 
-Installer copying, environment rendering, systemd read/write paths, staging
-deployment, SaaS gate enablement, and live acceptance remain separate changes.
+Staging deployment, SaaS gate enablement, operational acceptance, and live
+rollback verification remain separate changes.

@@ -90,13 +90,15 @@ sudo bash agent/install.sh
 The installer:
 
 1. validates the enrolled environment without printing the bearer token;
-2. copies the agent to `/usr/local/lib/wavemesh-agent/node_agent.py`;
-3. installs a hardened `wavemesh-node-agent.service`;
-4. enables and starts the service;
-5. fails closed if the service does not become active.
+2. creates a private backup when the installed version or config will change;
+3. installs the Agent and mTLS modules atomically;
+4. migrates a missing mTLS mode to explicit `disabled`;
+5. installs the hardened `wavemesh-node-agent.service`;
+6. reloads systemd only when unit content changed;
+7. enables the unit without starting or restarting it.
 
-This rotation-scaling change does not modify installer behavior. Deployment and
-a controlled service restart remain separate reviewed operations.
+Deployment and a controlled service restart remain separate reviewed
+operations. See `docs/NODE_AGENT_INSTALLER.md` for rollback behavior.
 
 ## Operations
 

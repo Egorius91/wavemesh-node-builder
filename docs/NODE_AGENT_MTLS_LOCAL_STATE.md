@@ -1,6 +1,6 @@
 # Node Agent mTLS local identity state
 
-Status: partial implementation; not integrated into the running Agent
+Status: integrated, packaged, and disabled by default
 Date: 2026-07-27
 Parent: #27
 Architecture: `Egorius91/wavevpn-saas#11`
@@ -8,7 +8,7 @@ Validation: `Egorius91/wavevpn-saas#16`
 
 ## Purpose
 
-Prepare and validate local mTLS private-key, CSR and certificate generations without changing the current bearer-authenticated observe-only Node Agent.
+Prepare and validate local mTLS private-key, CSR and certificate generations while preserving the bearer-authenticated observe-only Agent path.
 
 The module:
 
@@ -16,7 +16,8 @@ The module:
 agent/node_mtls_state.py
 ```
 
-is intentionally not imported by `agent/node_agent.py` and is not installed by `agent/install.sh` in this phase.
+is imported only by the gated shadow runtime and is installed by
+`agent/install.sh`. Disabled mode does not touch the state root.
 
 ## State layout
 
@@ -32,6 +33,7 @@ Proposed root:
     <certificate-derived-generation>/
       client.key
       client.crt
+      client-chain.crt
       ca.crt
       metadata.json
   active -> generations/<generation>
