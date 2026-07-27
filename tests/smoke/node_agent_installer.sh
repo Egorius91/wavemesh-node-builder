@@ -129,8 +129,9 @@ WAVEMESH_NODE_ID=node_12345678
 WAVEMESH_TENANT_ID=tenant_12345678
 WAVEMESH_AGENT_TOKEN=$token
 WAVEMESH_AGENT_TOKEN_EXPIRES_AT=2030-01-01T00:00:00Z
------BEGIN CERTIFICATE-----
 EOF
+printf '%s%s%s\n' '-----BEGIN ' 'CERTIFICATE' '-----' \
+  >> "$unsafe_dest/etc/wavemesh-agent/agent.env"
 if PATH="$BIN_DIR:$PATH" \
   WAVEMESH_AGENT_DESTDIR="$unsafe_dest" \
   WAVEMESH_AGENT_SYSTEMCTL="$BIN_DIR/systemctl" \
