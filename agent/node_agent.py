@@ -25,7 +25,7 @@ from datetime import datetime, timedelta, timezone
 from typing import Any
 from urllib import error, request
 
-AGENT_VERSION = "0.2.0-observe-only"
+AGENT_VERSION = "0.2.1-observe-only"
 DEFAULT_ENV_PATH = Path("/etc/wavemesh-agent/agent.env")
 DEFAULT_RUNTIME_PATH = Path("/etc/wavemesh-agent/runtime.json")
 NODE_CONFIG_PATH = Path("/etc/wavemesh-node/config.json")
@@ -43,6 +43,13 @@ FORBIDDEN_KEY_PARTS = (
     "subscriptionurl",
     "token",
     "uuid",
+)
+ROTATION_RETRY_KEYS = (
+    "rotation_retry_attempts",
+    "rotation_retry_at",
+    "rotation_retry_credential_expires_at",
+    "rotation_retry_code",
+    "rotation_retryable",
 )
 
 LOG = logging.getLogger("wavemesh-node-agent")
@@ -74,6 +81,9 @@ class AgentConfig:
     heartbeat_seconds: int
     observation_seconds: int
     rotate_before_seconds: int
+    rotation_jitter_seconds: int
+    rotation_retry_base_seconds: int
+    rotation_retry_max_seconds: int
     request_timeout_seconds: int
     runtime_path: Path
 
@@ -99,6 +109,21 @@ class AgentConfig:
         if not valid_token(token):
             raise AgentError("WAVEMESH_AGENT_TOKEN has an invalid format")
 
+        retry_base = bounded_int(
+            values.get("WAVEMESH_AGENT_ROTATION_RETRY_BASE_SECONDS"),
+            30,
+            5,
+            300,
+        )
+        retry_max = max(
+            retry_base,
+            bounded_int(
+                values.get("WAVEMESH_AGENT_ROTATION_RETRY_MAX_SECONDS"),
+                900,
+                30,
+                3600,
+            ),
+        )
         return cls(
             env_path=env_path,
             api_base=values["WAVEMESH_API_BASE"].rstrip("/"),
@@ -111,6 +136,14 @@ class AgentConfig:
             heartbeat_seconds=bounded_int(values.get("WAVEMESH_AGENT_HEARTBEAT_SECONDS"), 60, 15, 3600),
             observation_seconds=bounded_int(values.get("WAVEMESH_AGENT_OBSERVATION_SECONDS"), 300, 60, 86400),
             rotate_before_seconds=bounded_int(values.get("WAVEMESH_AGENT_ROTATE_BEFORE_SECONDS"), 21600, 3600, 604800),
+            rotation_jitter_seconds=bounded_int(
+                values.get("WAVEMESH_AGENT_ROTATION_JITTER_SECONDS"),
+                0,
+                0,
+                3600,
+            ),
+            rotation_retry_base_seconds=retry_base,
+            rotation_retry_max_seconds=retry_max,
             request_timeout_seconds=bounded_int(values.get("WAVEMESH_AGENT_REQUEST_TIMEOUT_SECONDS"), 30, 5, 120),
             runtime_path=Path(values.get("WAVEMESH_AGENT_RUNTIME_PATH", str(DEFAULT_RUNTIME_PATH))),
         )
@@ -194,9 +227,32 @@ class NodeAgent:
             "node_status": "degraded",
         }
 
+    def rotation_schedule_jitter_seconds(self) -> int:
+        return deterministic_jitter_seconds(
+            self.config.node_id,
+            self.config.token_expires_at,
+            self.config.rotation_jitter_seconds,
+            namespace="rotation-schedule",
+        )
+
+    def rotation_due_at(self) -> datetime:
+        return self.config.token_expires_at - timedelta(seconds=self.config.rotate_before_seconds) + timedelta(
+            seconds=self.rotation_schedule_jitter_seconds()
+        )
+
+    def rotation_is_due(self, now: datetime) -> bool:
+        if self.config.pending_rotation_path.is_file():
+            return True
+        return now >= self.rotation_due_at()
+
     def rotate_if_due(self) -> None:
         now = datetime.now(timezone.utc)
-        if now + timedelta(seconds=self.config.rotate_before_seconds) < self.config.token_expires_at:
+        self.record_rotation_schedule()
+        if not self.rotation_is_due(now):
+            return
+
+        retry_at = self.rotation_retry_at()
+        if retry_at and now < retry_at:
             return
 
         replacement = self.load_or_create_pending_replacement()
@@ -212,6 +268,7 @@ class NodeAgent:
             )
         except ApiError as exc:
             if exc.code == "NODE_CREDENTIAL_ROTATION_NOT_DUE":
+                self.schedule_rotation_retry(now, exc.code, True)
                 return
             if exc.code in {
                 "NODE_CREDENTIAL_HASH_CONFLICT",
@@ -219,12 +276,93 @@ class NodeAgent:
                 "NODE_CREDENTIAL_NOT_ACTIVE",
             }:
                 self.clear_pending_replacement()
+            self.schedule_rotation_retry(now, exc.code, exc.retryable)
+            raise
+        except Exception as exc:  # noqa: BLE001 - retry boundary
+            self.schedule_rotation_retry(now, type(exc).__name__, True)
             raise
 
         expires_at = parse_timestamp(require_string(response, "expires_at"))
         self.config.save_rotated_token(replacement, expires_at)
         self.clear_pending_replacement()
+        self.clear_rotation_retry_state()
+        self.record_rotation_schedule()
         LOG.info("Node credential rotated; expires_at=%s", format_timestamp(expires_at))
+
+    def record_rotation_schedule(self) -> None:
+        expires_at = format_timestamp(self.config.token_expires_at)
+        due_at = format_timestamp(self.rotation_due_at())
+        jitter = self.rotation_schedule_jitter_seconds()
+        changed = any(
+            (
+                self.runtime.get("rotation_credential_expires_at") != expires_at,
+                self.runtime.get("rotation_due_at") != due_at,
+                self.runtime.get("rotation_jitter_seconds") != jitter,
+            )
+        )
+        if not changed:
+            return
+        self.runtime["rotation_credential_expires_at"] = expires_at
+        self.runtime["rotation_due_at"] = due_at
+        self.runtime["rotation_jitter_seconds"] = jitter
+        write_json_file(self.config.runtime_path, self.runtime)
+
+    def rotation_retry_at(self) -> datetime | None:
+        current_expiry = format_timestamp(self.config.token_expires_at)
+        if self.runtime.get("rotation_retry_credential_expires_at") != current_expiry:
+            self.clear_rotation_retry_state()
+            return None
+        raw = self.runtime.get("rotation_retry_at")
+        if not isinstance(raw, str):
+            return None
+        try:
+            return parse_timestamp(raw)
+        except (AgentError, ValueError):
+            self.clear_rotation_retry_state()
+            return None
+
+    def schedule_rotation_retry(self, now: datetime, code: str, retryable: bool) -> None:
+        current_expiry = format_timestamp(self.config.token_expires_at)
+        previous_attempts = 0
+        if self.runtime.get("rotation_retry_credential_expires_at") == current_expiry:
+            previous_attempts = safe_int(self.runtime.get("rotation_retry_attempts"), 0, 1_000_000)
+        attempts = previous_attempts + 1
+        if retryable:
+            delay = rotation_backoff_seconds(
+                self.config.rotation_retry_base_seconds,
+                self.config.rotation_retry_max_seconds,
+                attempts,
+                self.config.node_id,
+                self.config.token_expires_at,
+            )
+        else:
+            delay = self.config.rotation_retry_max_seconds
+        retry_at = now + timedelta(seconds=delay)
+        self.runtime.update(
+            {
+                "rotation_retry_attempts": attempts,
+                "rotation_retry_at": format_timestamp(retry_at),
+                "rotation_retry_credential_expires_at": current_expiry,
+                "rotation_retry_code": safe_text(code, 96),
+                "rotation_retryable": bool(retryable),
+            }
+        )
+        write_json_file(self.config.runtime_path, self.runtime)
+        LOG.info(
+            "Credential rotation retry scheduled: attempts=%s delay_seconds=%s retryable=%s",
+            attempts,
+            delay,
+            retryable,
+        )
+
+    def clear_rotation_retry_state(self) -> None:
+        changed = False
+        for key in ROTATION_RETRY_KEYS:
+            if key in self.runtime:
+                del self.runtime[key]
+                changed = True
+        if changed:
+            write_json_file(self.config.runtime_path, self.runtime)
 
     def load_or_create_pending_replacement(self) -> str:
         path = self.config.pending_rotation_path
@@ -437,6 +575,48 @@ def valid_token(token: str) -> bool:
     return 32 <= len(tail) <= 128 and all(character.isalnum() or character in "_-" for character in tail)
 
 
+def deterministic_jitter_seconds(
+    node_id: str,
+    expires_at: datetime,
+    maximum: int,
+    namespace: str,
+    attempt: int = 0,
+) -> int:
+    if maximum <= 0:
+        return 0
+    material = "\0".join(
+        (
+            namespace,
+            node_id,
+            format_timestamp(expires_at),
+            str(max(0, attempt)),
+        )
+    ).encode("utf-8")
+    value = int.from_bytes(hashlib.sha256(material).digest()[:8], "big")
+    return value % (maximum + 1)
+
+
+def rotation_backoff_seconds(
+    base_seconds: int,
+    max_seconds: int,
+    attempt: int,
+    node_id: str,
+    expires_at: datetime,
+) -> int:
+    bounded_attempt = max(1, attempt)
+    exponent = min(20, bounded_attempt - 1)
+    ceiling = min(max_seconds, base_seconds * (2**exponent))
+    floor = max(1, ceiling // 2)
+    spread = max(0, ceiling - floor)
+    return floor + deterministic_jitter_seconds(
+        node_id,
+        expires_at,
+        spread,
+        namespace="rotation-retry",
+        attempt=bounded_attempt,
+    )
+
+
 def read_env_file(path: Path) -> dict[str, str]:
     if not path.is_file():
         raise AgentError(f"Agent environment file is missing: {path}")
@@ -591,6 +771,9 @@ def main() -> int:
                     "node_id": config.node_id,
                     "tenant_id": config.tenant_id,
                     "token_expires_at": format_timestamp(config.token_expires_at),
+                    "rotation_jitter_seconds": config.rotation_jitter_seconds,
+                    "rotation_retry_base_seconds": config.rotation_retry_base_seconds,
+                    "rotation_retry_max_seconds": config.rotation_retry_max_seconds,
                     "agent_version": AGENT_VERSION,
                 },
                 ensure_ascii=False,
