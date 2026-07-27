@@ -113,6 +113,175 @@ class NodeAgentTests(unittest.TestCase):
             second.clear_pending_replacement()
             self.assertFalse(second.config.pending_rotation_path.exists())
 
+    def test_rotation_scaling_defaults_preserve_existing_schedule(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            env_path = Path(directory) / "agent.env"
+            expiry = datetime(2026, 7, 28, 12, 0, tzinfo=timezone.utc)
+            token = agent.generate_token()
+            agent.write_env_file(
+                env_path,
+                {
+                    "WAVEMESH_API_BASE": "https://example.invalid/api",
+                    "WAVEMESH_NODE_ID": "node-12345678",
+                    "WAVEMESH_TENANT_ID": "tenant-12345678",
+                    "WAVEMESH_AGENT_TOKEN": token,
+                    "WAVEMESH_AGENT_TOKEN_EXPIRES_AT": agent.format_timestamp(expiry),
+                    "WAVEMESH_AGENT_MODE": "observe-only",
+                },
+            )
+
+            config = agent.AgentConfig.load(env_path)
+            instance = agent.NodeAgent(config)
+
+            self.assertEqual(config.rotation_jitter_seconds, 0)
+            self.assertEqual(config.rotation_retry_base_seconds, 30)
+            self.assertEqual(config.rotation_retry_max_seconds, 900)
+            self.assertEqual(instance.rotation_schedule_jitter_seconds(), 0)
+            self.assertEqual(
+                instance.rotation_due_at(),
+                expiry - timedelta(seconds=config.rotate_before_seconds),
+            )
+
+    def test_deterministic_rotation_jitter_is_stable_bounded_and_distributed(self) -> None:
+        expiry = datetime(2026, 7, 28, 12, 0, tzinfo=timezone.utc)
+        first = agent.deterministic_jitter_seconds(
+            "node-entry-a",
+            expiry,
+            900,
+            namespace="rotation-schedule",
+        )
+        second = agent.deterministic_jitter_seconds(
+            "node-entry-a",
+            expiry,
+            900,
+            namespace="rotation-schedule",
+        )
+        values = {
+            agent.deterministic_jitter_seconds(
+                f"node-entry-{index}",
+                expiry,
+                900,
+                namespace="rotation-schedule",
+            )
+            for index in range(100)
+        }
+
+        self.assertEqual(first, second)
+        self.assertGreaterEqual(first, 0)
+        self.assertLessEqual(first, 900)
+        self.assertGreater(len(values), 20)
+        self.assertEqual(
+            agent.deterministic_jitter_seconds(
+                "node-entry-a",
+                expiry,
+                0,
+                namespace="rotation-schedule",
+            ),
+            0,
+        )
+
+    def test_rotation_backoff_is_bounded_and_deterministic(self) -> None:
+        expiry = datetime(2026, 7, 28, 12, 0, tzinfo=timezone.utc)
+        delays = [
+            agent.rotation_backoff_seconds(30, 900, attempt, "node-entry-a", expiry)
+            for attempt in range(1, 12)
+        ]
+        repeated = agent.rotation_backoff_seconds(30, 900, 4, "node-entry-a", expiry)
+
+        self.assertEqual(repeated, delays[3])
+        for attempt, delay in enumerate(delays, start=1):
+            ceiling = min(900, 30 * (2 ** (attempt - 1)))
+            self.assertGreaterEqual(delay, max(1, ceiling // 2))
+            self.assertLessEqual(delay, ceiling)
+        self.assertTrue(all(delay <= 900 for delay in delays))
+
+    def test_pending_rotation_bypasses_initial_jitter_schedule(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            env_path = Path(directory) / "agent.env"
+            expiry = datetime.now(timezone.utc) + timedelta(hours=24)
+            agent.write_env_file(
+                env_path,
+                {
+                    "WAVEMESH_API_BASE": "https://example.invalid/api",
+                    "WAVEMESH_NODE_ID": "node-12345678",
+                    "WAVEMESH_TENANT_ID": "tenant-12345678",
+                    "WAVEMESH_AGENT_TOKEN": agent.generate_token(),
+                    "WAVEMESH_AGENT_TOKEN_EXPIRES_AT": agent.format_timestamp(expiry),
+                    "WAVEMESH_AGENT_MODE": "observe-only",
+                    "WAVEMESH_AGENT_ROTATE_BEFORE_SECONDS": "21600",
+                    "WAVEMESH_AGENT_ROTATION_JITTER_SECONDS": "900",
+                },
+            )
+            instance = agent.NodeAgent(agent.AgentConfig.load(env_path))
+            now = datetime.now(timezone.utc)
+
+            self.assertFalse(instance.rotation_is_due(now))
+            instance.load_or_create_pending_replacement()
+            self.assertTrue(instance.rotation_is_due(now))
+
+    def test_rotation_retry_state_survives_restart_without_secret_material(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            env_path = Path(directory) / "agent.env"
+            runtime_path = Path(directory) / "runtime.json"
+            expiry = datetime(2026, 7, 28, 12, 0, tzinfo=timezone.utc)
+            token = agent.generate_token()
+            agent.write_env_file(
+                env_path,
+                {
+                    "WAVEMESH_API_BASE": "https://example.invalid/api",
+                    "WAVEMESH_NODE_ID": "node-12345678",
+                    "WAVEMESH_TENANT_ID": "tenant-12345678",
+                    "WAVEMESH_AGENT_TOKEN": token,
+                    "WAVEMESH_AGENT_TOKEN_EXPIRES_AT": agent.format_timestamp(expiry),
+                    "WAVEMESH_AGENT_MODE": "observe-only",
+                    "WAVEMESH_AGENT_RUNTIME_PATH": str(runtime_path),
+                },
+            )
+            now = datetime(2026, 7, 28, 6, 0, tzinfo=timezone.utc)
+            first = agent.NodeAgent(agent.AgentConfig.load(env_path))
+            first.schedule_rotation_retry(now, "NETWORK_ERROR", True)
+
+            second = agent.NodeAgent(agent.AgentConfig.load(env_path))
+            retry_at = second.rotation_retry_at()
+            encoded = runtime_path.read_text(encoding="utf-8")
+
+            self.assertIsNotNone(retry_at)
+            self.assertGreater(retry_at, now)
+            self.assertEqual(second.runtime["rotation_retry_attempts"], 1)
+            self.assertEqual(second.runtime["rotation_retry_code"], "NETWORK_ERROR")
+            self.assertNotIn(token, encoded)
+            self.assertNotIn(agent.token_hash(token), encoded)
+            self.assertEqual(runtime_path.stat().st_mode & 0o777, 0o600)
+
+    def test_rotation_retry_state_is_cleared_after_credential_expiry_changes(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            env_path = Path(directory) / "agent.env"
+            runtime_path = Path(directory) / "runtime.json"
+            initial_expiry = datetime(2026, 7, 28, 12, 0, tzinfo=timezone.utc)
+            agent.write_env_file(
+                env_path,
+                {
+                    "WAVEMESH_API_BASE": "https://example.invalid/api",
+                    "WAVEMESH_NODE_ID": "node-12345678",
+                    "WAVEMESH_TENANT_ID": "tenant-12345678",
+                    "WAVEMESH_AGENT_TOKEN": agent.generate_token(),
+                    "WAVEMESH_AGENT_TOKEN_EXPIRES_AT": agent.format_timestamp(initial_expiry),
+                    "WAVEMESH_AGENT_MODE": "observe-only",
+                    "WAVEMESH_AGENT_RUNTIME_PATH": str(runtime_path),
+                },
+            )
+            instance = agent.NodeAgent(agent.AgentConfig.load(env_path))
+            instance.schedule_rotation_retry(
+                datetime(2026, 7, 28, 6, 0, tzinfo=timezone.utc),
+                "NETWORK_ERROR",
+                True,
+            )
+            instance.config.token_expires_at = initial_expiry + timedelta(hours=24)
+
+            self.assertIsNone(instance.rotation_retry_at())
+            self.assertNotIn("rotation_retry_at", instance.runtime)
+            self.assertNotIn("rotation_retry_attempts", instance.runtime)
+
     def test_forbidden_observation_key_is_rejected(self) -> None:
         with self.assertRaises(agent.AgentError):
             agent.assert_redacted({"api_token": "not-allowed"})
