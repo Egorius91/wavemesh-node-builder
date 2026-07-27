@@ -27,7 +27,7 @@ from urllib import error, request
 
 try:
     from node_mtls_runtime import MtlsRuntimeConfig, NodeMtlsRuntime
-except ImportError:  # The bearer-only installer is updated in a separate PR.
+except ImportError:  # Preserve bearer-only compatibility during staged upgrades.
     MtlsRuntimeConfig = None  # type: ignore[assignment,misc]
     NodeMtlsRuntime = None  # type: ignore[assignment,misc]
 
