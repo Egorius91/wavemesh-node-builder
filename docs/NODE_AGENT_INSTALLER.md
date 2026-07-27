@@ -14,7 +14,7 @@ The installer:
 
 - requires root for real system paths;
 - installs `node_agent.py`, `node_mtls_client.py`, `node_mtls_runtime.py`, and
-  `node_mtls_state.py`;
+  `node_mtls_state.py`, plus the read-only `acceptance.py` collector;
 - uses same-directory temporary files and atomic rename for every installed
   file;
 - creates `/etc/wavemesh-agent` and its mTLS state tree with mode `0700`;
@@ -74,3 +74,7 @@ a symlink.
 Smoke tests verify module installation, modes, disabled migration, PEM
 rejection, private backups, idempotency, rollback, conditional daemon reload,
 no implicit restart, systemd hardening, and systemd unit parsing.
+
+The prepared one-Entry-Node activation, shadow, rotation, and rollback
+procedure is `docs/NODE_AGENT_MTLS_ACCEPTANCE.md`. Reading that runbook does
+not authorize its server-side steps.
