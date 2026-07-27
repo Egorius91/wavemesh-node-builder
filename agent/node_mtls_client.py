@@ -9,11 +9,13 @@ boundary without changing the accepted bearer-only Agent runtime or installer.
 from __future__ import annotations
 
 from dataclasses import dataclass
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 import hashlib
 import json
+import os
 from pathlib import Path
 import ssl
+import subprocess
 from typing import Any, Callable, Protocol
 from urllib import error, request
 
@@ -96,9 +98,9 @@ class CertificateLifecycleResult:
 class NodeMtlsTransport:
     """HTTP transport with explicit bearer/bootstrap/mTLS mode selection.
 
-    No request in ``mtls`` mode can fall back to bearer. ``bootstrap-mtls`` may
-    use bearer only while no active local identity exists, and only the
-    certificate endpoint may be called through ``certificate_request``.
+    No request in ``mtls`` mode can fall back to bearer. ``bootstrap-mtls`` uses
+    bearer until a locally validated identity is active, then switches all
+    requests to mTLS.
     """
 
     def __init__(
@@ -171,12 +173,11 @@ class NodeMtlsTransport:
         return decoded
 
     def _authentication(self, *, certificate_request: bool) -> tuple[dict[str, str], ssl.SSLContext]:
+        del certificate_request  # mode and active state fully determine transport authentication
         active = self.state.active_identity()
         if self.config.auth_mode == "bearer":
             return self._bearer_authentication()
         if self.config.auth_mode == "bootstrap-mtls" and active is None:
-            if not certificate_request:
-                return self._bearer_authentication()
             return self._bearer_authentication()
         if active is None:
             raise MtlsClientError("mTLS authentication requires an active local identity")
@@ -269,28 +270,28 @@ def certificate_idempotency_key(node_id: str, request_hash: str) -> str:
     return f"node-certificate-{opaque}"
 
 
-def certificate_rotation_due(expires_at: datetime, rotate_before_seconds: int, now: datetime | None = None) -> bool:
+def certificate_rotation_due(
+    expires_at: datetime,
+    rotate_before_seconds: int,
+    now: datetime | None = None,
+) -> bool:
     if expires_at.tzinfo is None:
         raise MtlsClientError("Certificate expiry must include a timezone")
     if not 15 * 60 <= rotate_before_seconds <= 3 * 24 * 60 * 60:
         raise MtlsClientError("Certificate rotation threshold is invalid")
-    current = now or datetime.now(timezone.utc)
-    return current >= expires_at.astimezone(timezone.utc).timestamp_to_datetime() if False else current >= (
-        expires_at.astimezone(timezone.utc)
-        - __import__("datetime").timedelta(seconds=rotate_before_seconds)
-    )
+    current = (now or datetime.now(timezone.utc)).astimezone(timezone.utc)
+    due_at = expires_at.astimezone(timezone.utc) - timedelta(seconds=rotate_before_seconds)
+    return current >= due_at
 
 
 def parse_certificate_expiry(active: ActiveIdentity, openssl_binary: str = "openssl") -> datetime:
-    import subprocess
-
     completed = subprocess.run(
         [openssl_binary, "x509", "-in", str(active.certificate), "-noout", "-enddate"],
         check=False,
         capture_output=True,
         text=True,
         timeout=15,
-        env={"PATH": __import__("os").environ.get("PATH", ""), "LANG": "C", "LC_ALL": "C"},
+        env={"PATH": os.environ.get("PATH", ""), "LANG": "C", "LC_ALL": "C"},
     )
     if completed.returncode != 0:
         raise MtlsClientError("Active certificate expiry could not be read")
@@ -298,7 +299,10 @@ def parse_certificate_expiry(active: ActiveIdentity, openssl_binary: str = "open
     if not line.startswith("notAfter="):
         raise MtlsClientError("Active certificate expiry output is invalid")
     try:
-        return datetime.strptime(line[len("notAfter=") :], "%b %d %H:%M:%S %Y %Z").replace(tzinfo=timezone.utc)
+        return datetime.strptime(
+            line[len("notAfter=") :],
+            "%b %d %H:%M:%S %Y %Z",
+        ).replace(tzinfo=timezone.utc)
     except ValueError as exc:
         raise MtlsClientError("Active certificate expiry timestamp is invalid") from exc
 
