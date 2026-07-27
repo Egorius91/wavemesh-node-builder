@@ -7,7 +7,6 @@ import json
 from pathlib import Path
 import ssl
 import sys
-import tempfile
 import unittest
 from unittest import mock
 from urllib import error
@@ -93,15 +92,16 @@ def config(auth_mode="bearer", bearer=TOKEN):
 
 
 class NodeMtlsClientTests(unittest.TestCase):
-    def test_current_bearer_default_remains_valid(self) -> None:
+    def test_current_bearer_default_and_pure_mtls_modes_remain_distinct(self) -> None:
         configured = config()
         self.assertEqual(configured.auth_mode, "bearer")
         self.assertEqual(
             configured.expected_identity_uri,
             f"spiffe://wavevpn/staging/tenant/{TENANT_ID}/node/{NODE_ID}",
         )
-        with self.assertRaises(client.MtlsClientError):
-            config("mtls", bearer="not-required-but-invalid")
+        mtls_only = config("mtls", bearer=None)
+        self.assertEqual(mtls_only.auth_mode, "mtls")
+        self.assertIsNone(mtls_only.bearer_token)
 
     def test_bearer_transport_includes_authorization(self) -> None:
         captured = {}
@@ -146,6 +146,7 @@ class NodeMtlsClientTests(unittest.TestCase):
         def opener(req, **kwargs):
             nonlocal called
             called += 1
+            self.assertIsNone(req.get_header("Authorization"))
             raise error.URLError("unreachable")
 
         missing = client.NodeMtlsTransport(config("mtls", bearer=None), FakeState(), opener)
