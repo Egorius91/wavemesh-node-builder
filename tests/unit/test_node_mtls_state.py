@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import importlib.util
+from datetime import datetime, timedelta, timezone
 import json
 import os
 from pathlib import Path
@@ -10,6 +11,7 @@ import subprocess
 import sys
 import tempfile
 import unittest
+from unittest import mock
 
 ROOT = Path(__file__).resolve().parents[2]
 MODULE_PATH = ROOT / "agent" / "node_mtls_state.py"
@@ -19,8 +21,13 @@ mtls = importlib.util.module_from_spec(SPEC)
 sys.modules[SPEC.name] = mtls
 SPEC.loader.exec_module(mtls)
 
-OPENSSL = shutil.which("openssl")
+OPENSSL = os.environ.get("OPENSSL_BINARY") or shutil.which("openssl")
 IDENTITY = "spiffe://wavevpn/staging/tenant/tenant_12345678/node/node_12345678"
+
+
+def assert_posix_mode(case: unittest.TestCase, path: Path, expected: int) -> None:
+    if os.name != "nt":
+        case.assertEqual(path.stat().st_mode & 0o777, expected)
 
 
 @unittest.skipUnless(OPENSSL, "OpenSSL is required")
@@ -35,11 +42,11 @@ class NodeMtlsStateTests(unittest.TestCase):
 
             self.assertEqual(first, second)
             self.assertEqual(state.pending_key.read_bytes(), key_before)
-            self.assertEqual(state.root.stat().st_mode & 0o777, 0o700)
-            self.assertEqual(state.pending_dir.stat().st_mode & 0o777, 0o700)
-            self.assertEqual(state.pending_key.stat().st_mode & 0o777, 0o600)
-            self.assertEqual(state.pending_csr.stat().st_mode & 0o777, 0o600)
-            self.assertEqual(state.pending_metadata.stat().st_mode & 0o777, 0o600)
+            assert_posix_mode(self, state.root, 0o700)
+            assert_posix_mode(self, state.pending_dir, 0o700)
+            assert_posix_mode(self, state.pending_key, 0o600)
+            assert_posix_mode(self, state.pending_csr, 0o600)
+            assert_posix_mode(self, state.pending_metadata, 0o600)
             self.assertRegex(first.request_hash, r"^[a-f0-9]{64}$")
             self.assertRegex(first.public_key_hash, r"^[a-f0-9]{64}$")
             self.assertNotIn("PRIVATE KEY", metadata_text)
@@ -56,6 +63,7 @@ class NodeMtlsStateTests(unittest.TestCase):
             with self.assertRaises(mtls.MtlsStateError):
                 state.prepare_pending_request()
 
+    @unittest.skipIf(os.name == "nt", "Windows test users cannot create symlinks")
     def test_activate_certificate_uses_atomic_generation_and_clears_pending(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory)
@@ -74,10 +82,11 @@ class NodeMtlsStateTests(unittest.TestCase):
             self.assertIsNotNone(reloaded)
             self.assertEqual(reloaded.generation, active.generation)
             self.assertTrue(state.active_link.is_symlink())
-            self.assertEqual(active.private_key.stat().st_mode & 0o777, 0o600)
-            self.assertEqual(active.certificate.stat().st_mode & 0o777, 0o600)
-            self.assertEqual(active.ca_bundle.stat().st_mode & 0o777, 0o600)
-            self.assertEqual(active.metadata.stat().st_mode & 0o777, 0o600)
+            assert_posix_mode(self, active.private_key, 0o600)
+            assert_posix_mode(self, active.certificate, 0o600)
+            assert_posix_mode(self, active.certificate_chain, 0o600)
+            assert_posix_mode(self, active.ca_bundle, 0o600)
+            assert_posix_mode(self, active.metadata, 0o600)
             self.assertFalse(state.pending_key.exists())
             self.assertFalse(state.pending_csr.exists())
             self.assertFalse(state.pending_metadata.exists())
@@ -85,6 +94,33 @@ class NodeMtlsStateTests(unittest.TestCase):
             self.assertEqual(metadata["public_key_hash"], pending.public_key_hash)
             self.assertNotIn(IDENTITY, json.dumps(metadata))
             self.assertEqual(metadata["identity_uri_hash"], mtls.sha256_text(IDENTITY))
+
+    def test_failed_generation_commit_leaves_no_partial_final_generation(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            state = mtls.NodeMtlsState(root / "tls", openssl_binary=OPENSSL)
+            state.prepare_pending_request()
+            certificate, ca = issue_test_certificate(root, state.pending_csr, IDENTITY)
+            original_write_json = mtls.atomic_write_json
+
+            def fail_generation_metadata(path, value, mode):
+                if path.name == "metadata.json" and path.parent.parent == state.generations_dir:
+                    raise OSError("simulated crash before generation commit")
+                return original_write_json(path, value, mode)
+
+            with (
+                mock.patch.object(mtls, "atomic_write_json", side_effect=fail_generation_metadata),
+                self.assertRaises(OSError),
+            ):
+                state.activate_pending_certificate(
+                    certificate.read_text(encoding="utf-8"),
+                    ca.read_text(encoding="utf-8"),
+                    IDENTITY,
+                )
+
+            self.assertEqual(list(state.generations_dir.iterdir()), [])
+            self.assertTrue(state.pending_key.exists())
+            self.assertTrue(state.pending_csr.exists())
 
     def test_wrong_identity_is_rejected_and_pending_state_is_preserved(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
@@ -148,6 +184,7 @@ class NodeMtlsStateTests(unittest.TestCase):
             self.assertTrue(state.pending_key.exists())
             self.assertIsNone(state.active_identity())
 
+    @unittest.skipIf(os.name == "nt", "Windows test users cannot create symlinks")
     def test_active_symlink_outside_generations_is_rejected(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory)
@@ -167,6 +204,34 @@ class NodeMtlsStateTests(unittest.TestCase):
             with self.assertRaises(mtls.MtlsStateError):
                 mtls.atomic_write_bytes(target, b"not-secret-but-private-state", 0o644)
             self.assertFalse(target.exists())
+
+    def test_acknowledgement_journal_is_private_idempotent_and_crash_safe(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            state = mtls.NodeMtlsState(Path(directory) / "tls", openssl_binary=OPENSSL)
+            expiry = datetime.now(timezone.utc) + timedelta(minutes=15)
+
+            first = state.record_pending_acknowledgement(
+                "credential_mtls_123",
+                "a" * 64,
+                expiry,
+            )
+            second = state.pending_acknowledgement()
+            replay = state.record_pending_acknowledgement(
+                "credential_mtls_123",
+                "a" * 64,
+                expiry,
+            )
+            encoded = state.acknowledgement_path.read_text(encoding="utf-8")
+
+            self.assertEqual(first.credential_id, second.credential_id)
+            self.assertEqual(second, replay)
+            assert_posix_mode(self, state.acknowledgement_path, 0o600)
+            self.assertNotIn("PRIVATE KEY", encoded)
+            self.assertNotIn("BEGIN CERTIFICATE", encoded)
+            with self.assertRaises(mtls.MtlsStateError):
+                state.clear_pending_acknowledgement("credential_other_123")
+            state.clear_pending_acknowledgement("credential_mtls_123")
+            self.assertIsNone(state.pending_acknowledgement())
 
 
 def issue_test_certificate(

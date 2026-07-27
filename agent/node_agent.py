@@ -25,7 +25,13 @@ from datetime import datetime, timedelta, timezone
 from typing import Any
 from urllib import error, request
 
-AGENT_VERSION = "0.2.1-observe-only"
+try:
+    from node_mtls_runtime import MtlsRuntimeConfig, NodeMtlsRuntime
+except ImportError:  # The bearer-only installer is updated in a separate PR.
+    MtlsRuntimeConfig = None  # type: ignore[assignment,misc]
+    NodeMtlsRuntime = None  # type: ignore[assignment,misc]
+
+AGENT_VERSION = "0.3.0-mtls-shadow"
 DEFAULT_ENV_PATH = Path("/etc/wavemesh-agent/agent.env")
 DEFAULT_RUNTIME_PATH = Path("/etc/wavemesh-agent/runtime.json")
 NODE_CONFIG_PATH = Path("/etc/wavemesh-node/config.json")
@@ -86,6 +92,16 @@ class AgentConfig:
     rotation_retry_max_seconds: int
     request_timeout_seconds: int
     runtime_path: Path
+    mtls_mode: str
+    mtls_api_base: str | None
+    mtls_environment: str
+    mtls_state_root: Path
+    mtls_server_ca_file: Path | None
+    mtls_rotate_before_seconds: int
+    mtls_retry_base_seconds: int
+    mtls_retry_max_seconds: int
+    mtls_retry_max_attempts: int
+    mtls_retry_jitter_seconds: int
 
     @classmethod
     def load(cls, env_path: Path) -> "AgentConfig":
@@ -124,6 +140,15 @@ class AgentConfig:
                 3600,
             ),
         )
+        mtls_mode = values.get("WAVEMESH_AGENT_MTLS_MODE", "disabled")
+        if mtls_mode not in {"disabled", "shadow"}:
+            raise AgentError("WAVEMESH_AGENT_MTLS_MODE must be disabled or shadow")
+        mtls_api_base = values.get("WAVEMESH_AGENT_MTLS_API_BASE") or None
+        if mtls_mode == "shadow" and (
+            not mtls_api_base
+            or not mtls_api_base.startswith("https://")
+        ):
+            raise AgentError("Shadow mode requires an HTTPS WAVEMESH_AGENT_MTLS_API_BASE")
         return cls(
             env_path=env_path,
             api_base=values["WAVEMESH_API_BASE"].rstrip("/"),
@@ -146,6 +171,50 @@ class AgentConfig:
             rotation_retry_max_seconds=retry_max,
             request_timeout_seconds=bounded_int(values.get("WAVEMESH_AGENT_REQUEST_TIMEOUT_SECONDS"), 30, 5, 120),
             runtime_path=Path(values.get("WAVEMESH_AGENT_RUNTIME_PATH", str(DEFAULT_RUNTIME_PATH))),
+            mtls_mode=mtls_mode,
+            mtls_api_base=mtls_api_base.rstrip("/") if mtls_api_base else None,
+            mtls_environment=values.get("WAVEMESH_AGENT_MTLS_ENVIRONMENT", "staging"),
+            mtls_state_root=Path(
+                values.get(
+                    "WAVEMESH_AGENT_MTLS_STATE_ROOT",
+                    "/etc/wavemesh-agent/tls",
+                )
+            ),
+            mtls_server_ca_file=(
+                Path(values["WAVEMESH_AGENT_MTLS_SERVER_CA_FILE"])
+                if values.get("WAVEMESH_AGENT_MTLS_SERVER_CA_FILE")
+                else None
+            ),
+            mtls_rotate_before_seconds=bounded_int(
+                values.get("WAVEMESH_AGENT_MTLS_ROTATE_BEFORE_SECONDS"),
+                6 * 60 * 60,
+                15 * 60,
+                3 * 24 * 60 * 60,
+            ),
+            mtls_retry_base_seconds=bounded_int(
+                values.get("WAVEMESH_AGENT_MTLS_RETRY_BASE_SECONDS"),
+                30,
+                5,
+                300,
+            ),
+            mtls_retry_max_seconds=bounded_int(
+                values.get("WAVEMESH_AGENT_MTLS_RETRY_MAX_SECONDS"),
+                900,
+                30,
+                3600,
+            ),
+            mtls_retry_max_attempts=bounded_int(
+                values.get("WAVEMESH_AGENT_MTLS_RETRY_MAX_ATTEMPTS"),
+                8,
+                1,
+                32,
+            ),
+            mtls_retry_jitter_seconds=bounded_int(
+                values.get("WAVEMESH_AGENT_MTLS_RETRY_JITTER_SECONDS"),
+                0,
+                0,
+                300,
+            ),
         )
 
     @property
@@ -162,8 +231,16 @@ class AgentConfig:
 
 
 class NodeAgent:
-    def __init__(self, config: AgentConfig) -> None:
+    def __init__(self, config: AgentConfig, mtls_runtime: Any | None = None) -> None:
         self.config = config
+        self.mtls_runtime = mtls_runtime
+        self.last_mtls_status: dict[str, Any] = {
+            "mode": "disabled",
+            "state": "BEARER_ONLY",
+            "retry_attempts": 0,
+            "retry_at": None,
+            "code": None,
+        }
         self.last_health_state: dict[str, Any] = {
             "mode": "observe_only",
             "node_status": "unknown",
@@ -191,6 +268,8 @@ class NodeAgent:
             except Exception as exc:  # noqa: BLE001 - long-running service boundary
                 LOG.exception("Credential rotation cycle failed: %s", exc)
 
+            self.run_mtls_lifecycle()
+
             if time.monotonic() >= next_observation:
                 try:
                     self.collect_and_send_observation()
@@ -209,12 +288,14 @@ class NodeAgent:
                     next_observation = time.monotonic() + min(60, self.config.observation_seconds)
                     LOG.exception("Health observation cycle failed: %s", exc)
 
+            heartbeat_payload = self.build_heartbeat_payload()
             try:
-                self.send_heartbeat()
+                self.send_heartbeat(heartbeat_payload)
             except ApiError as exc:
                 LOG.warning("Heartbeat failed: status=%s code=%s retryable=%s", exc.status, exc.code, exc.retryable)
             except Exception as exc:  # noqa: BLE001 - long-running service boundary
                 LOG.exception("Heartbeat cycle failed: %s", exc)
+            self.run_mtls_shadow_heartbeat(heartbeat_payload)
 
             if once:
                 return
@@ -226,6 +307,52 @@ class NodeAgent:
             **self.last_health_state,
             "node_status": "degraded",
         }
+
+    def run_mtls_lifecycle(self) -> None:
+        if self.mtls_runtime is None:
+            return
+        try:
+            status = self.mtls_runtime.lifecycle_cycle(AGENT_VERSION)
+            self._record_mtls_status(status.capability())
+        except Exception as exc:  # noqa: BLE001 - bearer health must remain independent
+            self._record_mtls_status(
+                {
+                    "mode": "shadow",
+                    "state": "BLOCKED",
+                    "retry_attempts": 0,
+                    "retry_at": None,
+                    "code": safe_error_code(type(exc).__name__),
+                }
+            )
+
+    def run_mtls_shadow_heartbeat(self, payload: dict[str, Any]) -> None:
+        if self.mtls_runtime is None:
+            return
+        try:
+            status = self.mtls_runtime.shadow_heartbeat(payload)
+            self._record_mtls_status(status.capability())
+        except Exception as exc:  # noqa: BLE001 - bearer health must remain independent
+            self._record_mtls_status(
+                {
+                    "mode": "shadow",
+                    "state": "BLOCKED",
+                    "retry_attempts": 0,
+                    "retry_at": None,
+                    "code": safe_error_code(type(exc).__name__),
+                }
+            )
+
+    def _record_mtls_status(self, status: dict[str, Any]) -> None:
+        assert_redacted(status)
+        if status == self.last_mtls_status:
+            return
+        self.last_mtls_status = dict(status)
+        LOG.info(
+            "mTLS shadow state changed: state=%s retry_attempts=%s code=%s",
+            safe_text(status.get("state"), 32),
+            safe_int(status.get("retry_attempts"), 0, 32),
+            safe_text(status.get("code"), 96) or "none",
+        )
 
     def rotation_schedule_jitter_seconds(self) -> int:
         return deterministic_jitter_seconds(
@@ -419,7 +546,7 @@ class NodeAgent:
             state.get("total_exits"),
         )
 
-    def send_heartbeat(self) -> None:
+    def build_heartbeat_payload(self) -> dict[str, Any]:
         state = self.last_health_state
         node_status = str(state.get("node_status", "unknown"))
         status = "active" if node_status == "healthy" else "degraded"
@@ -435,19 +562,23 @@ class NodeAgent:
             "auto_routes_total": len(state.get("auto_routes") or []),
             "healthy_exits": int(state.get("healthy_exits") or 0),
             "total_exits": int(state.get("total_exits") or 0),
+            "mtls_shadow": self.last_mtls_status,
         }
         assert_redacted(capabilities)
+        return {
+            "agent_version": AGENT_VERSION,
+            "builder_version": builder_version,
+            "observed_version": self.config.observed_version,
+            "status": status,
+            "capabilities": capabilities,
+            "sent_at": format_timestamp(datetime.now(timezone.utc)),
+        }
+
+    def send_heartbeat(self, payload: dict[str, Any] | None = None) -> None:
         self.api_json(
             "POST",
             f"internal/v1/nodes/{self.config.node_id}/heartbeat",
-            {
-                "agent_version": AGENT_VERSION,
-                "builder_version": builder_version,
-                "observed_version": self.config.observed_version,
-                "status": status,
-                "capabilities": capabilities,
-                "sent_at": format_timestamp(datetime.now(timezone.utc)),
-            },
+            payload or self.build_heartbeat_payload(),
             expected=(204,),
         )
 
@@ -730,6 +861,43 @@ def safe_text(value: Any, maximum: int) -> str:
     return str(value)[:maximum]
 
 
+def safe_error_code(value: Any) -> str:
+    normalized = "".join(
+        character if character.isalnum() else "_"
+        for character in str(value).upper()
+    )[:96]
+    return normalized if normalized and normalized[0].isalpha() else "MTLS_INTERNAL_ERROR"
+
+
+def build_mtls_runtime(config: AgentConfig) -> Any | None:
+    if config.mtls_mode == "disabled":
+        return None
+    if NodeMtlsRuntime is None or MtlsRuntimeConfig is None:
+        raise AgentError("Node Agent mTLS runtime modules are not installed")
+    return NodeMtlsRuntime(
+        MtlsRuntimeConfig(
+            mode=config.mtls_mode,
+            bearer_api_base=config.api_base,
+            mtls_api_base=config.mtls_api_base,
+            node_id=config.node_id,
+            tenant_id=config.tenant_id,
+            environment=config.mtls_environment,
+            bearer_token=config.agent_token,
+            state_root=config.mtls_state_root,
+            server_ca_file=config.mtls_server_ca_file,
+            request_timeout_seconds=config.request_timeout_seconds,
+            rotate_before_seconds=config.mtls_rotate_before_seconds,
+            retry_base_seconds=config.mtls_retry_base_seconds,
+            retry_max_seconds=max(
+                config.mtls_retry_base_seconds,
+                config.mtls_retry_max_seconds,
+            ),
+            retry_max_attempts=config.mtls_retry_max_attempts,
+            retry_jitter_seconds=config.mtls_retry_jitter_seconds,
+        )
+    )
+
+
 def require_string(value: dict[str, Any], key: str) -> str:
     item = value.get(key)
     if not isinstance(item, str) or not item:
@@ -762,6 +930,7 @@ def main() -> int:
     logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(name)s: %(message)s")
     args = parse_args()
     config = AgentConfig.load(args.env_file)
+    mtls_runtime = build_mtls_runtime(config)
     if args.command == "check":
         print(
             json.dumps(
@@ -774,6 +943,13 @@ def main() -> int:
                     "rotation_jitter_seconds": config.rotation_jitter_seconds,
                     "rotation_retry_base_seconds": config.rotation_retry_base_seconds,
                     "rotation_retry_max_seconds": config.rotation_retry_max_seconds,
+                    "mtls_mode": config.mtls_mode,
+                    "mtls_configured": mtls_runtime is not None,
+                    "mtls_state": (
+                        mtls_runtime.status().state.value
+                        if mtls_runtime is not None
+                        else "BEARER_ONLY"
+                    ),
                     "agent_version": AGENT_VERSION,
                 },
                 ensure_ascii=False,
@@ -783,7 +959,7 @@ def main() -> int:
 
     signal.signal(signal.SIGTERM, handle_stop)
     signal.signal(signal.SIGINT, handle_stop)
-    NodeAgent(config).run(once=args.command == "once")
+    NodeAgent(config, mtls_runtime=mtls_runtime).run(once=args.command == "once")
     return 0
 
 

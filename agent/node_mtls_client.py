@@ -1,10 +1,5 @@
 #!/usr/bin/env python3
-"""Observe-only Node Agent mTLS network lifecycle.
-
-The module is intentionally independent from ``node_agent.py`` in its first
-increment. It provides a testable transport and certificate bootstrap/rotation
-boundary without changing the accepted bearer-only Agent runtime or installer.
-"""
+"""Observe-only Node Agent mTLS network and certificate lifecycle."""
 
 from __future__ import annotations
 
@@ -63,6 +58,7 @@ class MtlsClientConfig:
     bearer_token: str | None = None
     request_timeout_seconds: int = 30
     state_root: Path = Path("/etc/wavemesh-agent/tls")
+    server_ca_file: Path | None = None
 
     def __post_init__(self) -> None:
         if self.auth_mode not in AUTH_MODES:
@@ -77,6 +73,11 @@ class MtlsClientConfig:
             raise MtlsClientError("Bearer/bootstrap mode requires a valid Node bearer token")
         if not 5 <= self.request_timeout_seconds <= 120:
             raise MtlsClientError("Node Agent request timeout is invalid")
+        if self.server_ca_file is not None:
+            if not self.server_ca_file.is_absolute():
+                raise MtlsClientError("Node mTLS server CA path must be absolute")
+            if self.server_ca_file.is_symlink() or not self.server_ca_file.is_file():
+                raise MtlsClientError("Node mTLS server CA path is unsafe")
 
     @property
     def expected_identity_uri(self) -> str:
@@ -90,6 +91,7 @@ class MtlsClientConfig:
 class CertificateLifecycleResult:
     credential_id: str
     expires_at: datetime
+    delivery_expires_at: datetime
     previous_valid_until: datetime | None
     already_processed: bool
     generation: str
@@ -117,14 +119,18 @@ class NodeMtlsTransport:
         self,
         method: str,
         path: str,
-        payload: dict[str, Any],
+        payload: dict[str, Any] | None,
         expected: tuple[int, ...],
         headers: dict[str, str] | None = None,
         *,
         certificate_request: bool = False,
     ) -> dict[str, Any]:
         auth_headers, ssl_context = self._authentication(certificate_request=certificate_request)
-        body = json.dumps(payload, separators=(",", ":"), ensure_ascii=False).encode("utf-8")
+        body = (
+            json.dumps(payload, separators=(",", ":"), ensure_ascii=False).encode("utf-8")
+            if payload is not None
+            else None
+        )
         request_headers = {
             **auth_headers,
             "X-WaveVPN-Tenant-Id": self.config.tenant_id,
@@ -174,14 +180,14 @@ class NodeMtlsTransport:
 
     def _authentication(self, *, certificate_request: bool) -> tuple[dict[str, str], ssl.SSLContext]:
         del certificate_request  # mode and active state fully determine transport authentication
-        active = self.state.active_identity()
         if self.config.auth_mode == "bearer":
             return self._bearer_authentication()
+        active = self.state.active_identity(self.config.expected_identity_uri)
         if self.config.auth_mode == "bootstrap-mtls" and active is None:
             return self._bearer_authentication()
         if active is None:
             raise MtlsClientError("mTLS authentication requires an active local identity")
-        return {}, build_mtls_ssl_context(active)
+        return {}, build_mtls_ssl_context(active, self.config.server_ca_file)
 
     def _bearer_authentication(self) -> tuple[dict[str, str], ssl.SSLContext]:
         if not _valid_bearer(self.config.bearer_token):
@@ -204,8 +210,6 @@ class NodeCertificateLifecycleClient:
         self.transport = transport or NodeMtlsTransport(config, self.state)
 
     def issue_or_rotate(self, agent_version: str) -> CertificateLifecycleResult:
-        if self.config.auth_mode == "bearer":
-            raise MtlsClientError("Bearer-only mode does not request Node certificates")
         pending = self.state.prepare_pending_request()
         idempotency_key = certificate_idempotency_key(
             self.config.node_id,
@@ -222,42 +226,96 @@ class NodeCertificateLifecycleClient:
             headers={"Idempotency-Key": idempotency_key},
             certificate_request=True,
         )
+        return self._activate_delivery(response, pending.request_hash)
+
+    def retrieve(self, credential_id: str) -> CertificateLifecycleResult:
+        pending = self.state.prepare_pending_request()
+        response = self.transport.api_json(
+            "GET",
+            f"internal/v1/nodes/{self.config.node_id}/certificates/{_safe_credential_id(credential_id)}",
+            None,
+            expected=(200,),
+            certificate_request=True,
+        )
+        response_credential_id = _required_safe_id(response, "credential_id")
+        if response_credential_id != credential_id:
+            raise MtlsClientError("SaaS returned another certificate delivery")
+        return self._activate_delivery(response, pending.request_hash)
+
+    def acknowledge(self, credential_id: str) -> datetime:
+        response = self.transport.api_json(
+            "POST",
+            (
+                f"internal/v1/nodes/{self.config.node_id}/certificates/"
+                f"{_safe_credential_id(credential_id)}/acknowledge"
+            ),
+            {},
+            expected=(200, 201),
+            certificate_request=True,
+        )
+        if _safe_credential_id(_required_safe_id(response, "credential_id")) != credential_id:
+            raise MtlsClientError("SaaS acknowledged another certificate delivery")
+        if response.get("lifecycle_status") != "ACKNOWLEDGED":
+            raise MtlsClientError("SaaS returned an invalid acknowledgement state")
+        acknowledged_at = _required_timestamp(response, "acknowledged_at")
+        already_processed = response.get("already_processed")
+        if not isinstance(already_processed, bool):
+            raise MtlsClientError("SaaS acknowledgement replay metadata is invalid")
+        self.state.clear_pending_acknowledgement(credential_id)
+        return acknowledged_at
+
+    def _activate_delivery(
+        self,
+        response: dict[str, Any],
+        request_hash: str,
+    ) -> CertificateLifecycleResult:
         certificate = _required_string(response, "certificate", 128 * 1024)
         chain = _required_string(response, "chain", 128 * 1024)
-        identity_uri = _required_string(response, "identity_uri", 1024)
-        if identity_uri != self.config.expected_identity_uri:
-            raise MtlsClientError("SaaS returned a certificate identity for another Node")
-        credential_id = _required_safe_id(response, "credential_id")
+        credential_id = _safe_credential_id(_required_safe_id(response, "credential_id"))
         expires_at = _required_timestamp(response, "expires_at")
+        delivery_expires_at = _required_timestamp(response, "delivery_expires_at")
         previous_valid_until = _optional_timestamp(response, "previous_valid_until")
+        if response.get("lifecycle_status") != "PENDING_ACKNOWLEDGEMENT":
+            raise MtlsClientError("SaaS certificate response has invalid lifecycle state")
         already_processed = response.get("already_processed")
         if not isinstance(already_processed, bool):
             raise MtlsClientError("SaaS certificate response has invalid replay metadata")
+        if delivery_expires_at > expires_at:
+            raise MtlsClientError("SaaS certificate delivery expiry is invalid")
 
+        self.state.record_pending_acknowledgement(
+            credential_id,
+            request_hash,
+            delivery_expires_at,
+        )
         active = self.state.activate_pending_certificate(
             certificate,
             chain,
-            identity_uri,
+            self.config.expected_identity_uri,
         )
         return CertificateLifecycleResult(
             credential_id=credential_id,
             expires_at=expires_at,
+            delivery_expires_at=delivery_expires_at,
             previous_valid_until=previous_valid_until,
             already_processed=already_processed,
             generation=active.generation,
         )
 
 
-def build_mtls_ssl_context(active: ActiveIdentity) -> ssl.SSLContext:
+def build_mtls_ssl_context(
+    active: ActiveIdentity,
+    server_ca_file: Path | None = None,
+) -> ssl.SSLContext:
     context = ssl.create_default_context(
         purpose=ssl.Purpose.SERVER_AUTH,
-        cafile=str(active.ca_bundle),
+        cafile=str(server_ca_file) if server_ca_file is not None else None,
     )
     context.check_hostname = True
     context.verify_mode = ssl.CERT_REQUIRED
     context.minimum_version = ssl.TLSVersion.TLSv1_2
     context.load_cert_chain(
-        certfile=str(active.certificate),
+        certfile=str(active.certificate_chain),
         keyfile=str(active.private_key),
     )
     return context
@@ -311,6 +369,7 @@ def sanitized_lifecycle_metadata(result: CertificateLifecycleResult) -> dict[str
     return {
         "credential_id": result.credential_id,
         "expires_at": _format_timestamp(result.expires_at),
+        "delivery_expires_at": _format_timestamp(result.delivery_expires_at),
         "previous_valid_until": (
             _format_timestamp(result.previous_valid_until)
             if result.previous_valid_until
@@ -346,6 +405,15 @@ def _required_safe_id(value: dict[str, Any], key: str) -> str:
     if not _safe_id(item):
         raise MtlsClientError(f"SaaS certificate response has invalid {key}")
     return item
+
+
+def _safe_credential_id(value: str) -> str:
+    if not 8 <= len(value) <= 128 or not all(
+        character.isalnum() or character in "_-"
+        for character in value
+    ):
+        raise MtlsClientError("Certificate credential ID is invalid")
+    return value
 
 
 def _required_timestamp(value: dict[str, Any], key: str) -> datetime:
