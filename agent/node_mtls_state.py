@@ -25,6 +25,7 @@ DEFAULT_TLS_ROOT = Path("/etc/wavemesh-agent/tls")
 MAX_PEM_BYTES = 128 * 1024
 SAFE_IDENTITY_PATTERN = re.compile(r"^spiffe://wavevpn/[a-z][a-z0-9-]{1,31}/tenant/[A-Za-z0-9._:%-]{1,256}/node/[A-Za-z0-9._:%-]{1,256}$")
 SHA256_PATTERN = re.compile(r"^[a-f0-9]{64}$")
+PRIVATE_FILE_MODE = 0o600
 
 
 class MtlsStateError(RuntimeError):
@@ -92,7 +93,7 @@ class NodeMtlsState:
                     str(key_temp),
                 ]
             )
-            os.chmod(key_temp, 0o600)
+            os.chmod(key_temp, PRIVATE_FILE_MODE)
             self._fsync_file(key_temp)
             self._run(
                 [
@@ -107,7 +108,7 @@ class NodeMtlsState:
                     str(csr_temp),
                 ]
             )
-            os.chmod(csr_temp, 0o600)
+            os.chmod(csr_temp, PRIVATE_FILE_MODE)
             self._fsync_file(csr_temp)
             request_hash = self._csr_hash(csr_temp)
             public_key_hash = self._private_key_public_hash(key_temp)
@@ -121,7 +122,7 @@ class NodeMtlsState:
                     "public_key_hash": public_key_hash,
                     "request_hash": request_hash,
                 },
-                0o600,
+                PRIVATE_FILE_MODE,
             )
             os.replace(key_temp, self.pending_key)
             os.replace(csr_temp, self.pending_csr)
@@ -151,8 +152,8 @@ class NodeMtlsState:
         certificate_temp = self._temporary_path(self.pending_dir, "certificate")
         ca_temp = self._temporary_path(self.pending_dir, "ca")
         try:
-            atomic_write_bytes(certificate_temp, certificate_bytes, 0o600)
-            atomic_write_bytes(ca_temp, ca_bytes, 0o600)
+            atomic_write_bytes(certificate_temp, certificate_bytes, PRIVATE_FILE_MODE)
+            atomic_write_bytes(ca_temp, ca_bytes, PRIVATE_FILE_MODE)
             self._validate_certificate(
                 certificate_temp,
                 ca_temp,
@@ -168,9 +169,13 @@ class NodeMtlsState:
                 active = self._validate_generation(generation_dir, expected_identity_uri)
             else:
                 generation_dir.mkdir(mode=0o700)
-                atomic_write_bytes(generation_dir / "client.key", self.pending_key.read_bytes(), 0o600)
-                atomic_write_bytes(generation_dir / "client.crt", certificate_bytes, 0o644)
-                atomic_write_bytes(generation_dir / "ca.crt", ca_bytes, 0o644)
+                atomic_write_bytes(
+                    generation_dir / "client.key",
+                    self.pending_key.read_bytes(),
+                    PRIVATE_FILE_MODE,
+                )
+                atomic_write_bytes(generation_dir / "client.crt", certificate_bytes, PRIVATE_FILE_MODE)
+                atomic_write_bytes(generation_dir / "ca.crt", ca_bytes, PRIVATE_FILE_MODE)
                 atomic_write_json(
                     generation_dir / "metadata.json",
                     {
@@ -180,7 +185,7 @@ class NodeMtlsState:
                         "public_key_hash": pending.public_key_hash,
                         "request_hash": pending.request_hash,
                     },
-                    0o600,
+                    PRIVATE_FILE_MODE,
                 )
                 self._fsync_directory(generation_dir)
                 active = self._validate_generation(generation_dir, expected_identity_uri)
@@ -220,9 +225,9 @@ class NodeMtlsState:
         self._fsync_directory(self.pending_dir)
 
     def _load_and_validate_pending(self) -> PendingCertificateRequest:
-        self._ensure_safe_regular_file(self.pending_key, 0o600)
-        self._ensure_safe_regular_file(self.pending_csr, 0o600)
-        self._ensure_safe_regular_file(self.pending_metadata, 0o600)
+        self._ensure_safe_regular_file(self.pending_key)
+        self._ensure_safe_regular_file(self.pending_csr)
+        self._ensure_safe_regular_file(self.pending_metadata)
         self._run(["pkey", "-in", str(self.pending_key), "-check", "-noout"])
         self._run(["req", "-in", str(self.pending_csr), "-verify", "-noout"])
         metadata = read_json_object(self.pending_metadata)
@@ -268,10 +273,10 @@ class NodeMtlsState:
         certificate = directory / "client.crt"
         ca = directory / "ca.crt"
         metadata_path = directory / "metadata.json"
-        self._ensure_safe_regular_file(key, 0o600)
-        self._ensure_safe_regular_file(certificate, 0o644, allow_stricter=True)
-        self._ensure_safe_regular_file(ca, 0o644, allow_stricter=True)
-        self._ensure_safe_regular_file(metadata_path, 0o600)
+        self._ensure_safe_regular_file(key)
+        self._ensure_safe_regular_file(certificate)
+        self._ensure_safe_regular_file(ca)
+        self._ensure_safe_regular_file(metadata_path)
         metadata = read_json_object(metadata_path)
         public_key_hash = require_sha256(metadata, "public_key_hash")
         if public_key_hash != self._private_key_public_hash(key):
@@ -330,14 +335,11 @@ class NodeMtlsState:
             directory.mkdir(exist_ok=True, mode=0o700)
             os.chmod(directory, 0o700)
 
-    def _ensure_safe_regular_file(self, path: Path, expected_mode: int, allow_stricter: bool = False) -> None:
+    def _ensure_safe_regular_file(self, path: Path) -> None:
         if path.is_symlink() or not path.is_file():
             raise MtlsStateError(f"mTLS state file is missing or unsafe: {path.name}")
         actual_mode = path.stat().st_mode & 0o777
-        if allow_stricter:
-            if actual_mode & ~expected_mode:
-                raise MtlsStateError(f"mTLS state file permissions are too broad: {path.name}")
-        elif actual_mode != expected_mode:
+        if actual_mode != PRIVATE_FILE_MODE:
             raise MtlsStateError(f"mTLS state file permissions are invalid: {path.name}")
 
     def _run(self, arguments: list[str]) -> None:
@@ -365,7 +367,7 @@ class NodeMtlsState:
         descriptor, name = tempfile.mkstemp(prefix=f".{label}.", dir=directory)
         os.close(descriptor)
         path = Path(name)
-        os.chmod(path, 0o600)
+        os.chmod(path, PRIVATE_FILE_MODE)
         return path
 
     @staticmethod
@@ -410,6 +412,8 @@ def validate_pem_bundle(value: str) -> bytes:
 
 
 def atomic_write_bytes(path: Path, content: bytes, mode: int) -> None:
+    if mode != PRIVATE_FILE_MODE:
+        raise MtlsStateError("mTLS state files must use mode 0600")
     path.parent.mkdir(parents=True, exist_ok=True)
     descriptor, name = tempfile.mkstemp(prefix=f".{path.name}.", dir=path.parent)
     temporary = Path(name)
@@ -418,7 +422,7 @@ def atomic_write_bytes(path: Path, content: bytes, mode: int) -> None:
             handle.write(content)
             handle.flush()
             os.fsync(handle.fileno())
-        os.chmod(temporary, mode)
+        os.chmod(temporary, PRIVATE_FILE_MODE)
         os.replace(temporary, path)
     finally:
         try:
