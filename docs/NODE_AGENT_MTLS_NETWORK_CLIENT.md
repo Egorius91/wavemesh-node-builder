@@ -133,7 +133,9 @@ Agent restart. Bearer operation remains unchanged and does not require token
 recovery. Do not delete mTLS state during rollback; preserving it keeps the
 operation reversible and avoids generating another identity.
 
-## Deferred work
+## Operational acceptance
 
-Staging deployment, SaaS gate enablement, operational acceptance, and live
-rollback verification remain separate changes.
+The prepared one-Entry-Node procedure and sanitized evidence collector are
+documented in `docs/NODE_AGENT_MTLS_ACCEPTANCE.md`. Staging execution, SaaS
+gate changes, certificate issuance, restarts, and live rollback verification
+remain separate operator-approved actions.

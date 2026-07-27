@@ -56,6 +56,7 @@ for file in node_mtls_client.py node_mtls_runtime.py node_mtls_state.py; do
   [[ "$(stat -c '%a' "$DESTDIR/usr/local/lib/wavemesh-agent/$file")" == 644 ]]
 done
 [[ "$(stat -c '%a' "$DESTDIR/usr/local/lib/wavemesh-agent/node_agent.py")" == 755 ]]
+[[ "$(stat -c '%a' "$DESTDIR/usr/local/lib/wavemesh-agent/acceptance.py")" == 755 ]]
 [[ "$(stat -c '%a' "$DESTDIR/etc/wavemesh-agent/agent.env")" == 600 ]]
 [[ "$(stat -c '%a' "$DESTDIR/etc/wavemesh-agent/tls")" == 700 ]]
 [[ "$(stat -c '%a' "$DESTDIR/etc/wavemesh-agent/tls/pending")" == 700 ]]

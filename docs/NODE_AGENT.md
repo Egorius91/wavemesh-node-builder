@@ -98,7 +98,9 @@ The installer:
 7. enables the unit without starting or restarting it.
 
 Deployment and a controlled service restart remain separate reviewed
-operations. See `docs/NODE_AGENT_INSTALLER.md` for rollback behavior.
+operations. See `docs/NODE_AGENT_INSTALLER.md` for rollback behavior and
+`docs/NODE_AGENT_MTLS_ACCEPTANCE.md` for the prepared one-Entry-Node,
+approval-gated acceptance sequence.
 
 ## Operations
 
@@ -107,6 +109,9 @@ sudo systemctl status wavemesh-node-agent.service --no-pager
 sudo journalctl -u wavemesh-node-agent.service --since "10 minutes ago" --no-pager
 sudo systemctl restart wavemesh-node-agent.service
 ```
+
+Raw journal output is private operator data and must not be copied into shared
+evidence. Use the acceptance collector for sanitized acceptance records.
 
 The logs never print bearer tokens or replacement hashes.
 
