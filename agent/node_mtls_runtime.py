@@ -270,6 +270,26 @@ class NodeMtlsRuntime:
             self._record_failure(type(exc).__name__.upper(), False, current)
         return self.status()
 
+    def api_json(
+        self,
+        method: str,
+        path: str,
+        payload: dict[str, Any] | None,
+        expected: tuple[int, ...],
+    ) -> dict[str, Any]:
+        """Send an authenticated mTLS request after verifying the active identity."""
+        if self.config.mode != "shadow":
+            raise MtlsRuntimeError("mTLS transport is disabled")
+        active = self.state.active_identity(self._expected_identity_uri())
+        if active is None or parse_certificate_expiry(active) <= datetime.now(timezone.utc):
+            raise MtlsRuntimeError("Active mTLS identity is unavailable")
+        return self._mtls_transport().api_json(
+            method,
+            path,
+            payload,
+            expected=expected,
+        )
+
     def _bearer_lifecycle_client(self) -> NodeCertificateLifecycleClient:
         client_config = MtlsClientConfig(
             api_base=self.config.bearer_api_base,

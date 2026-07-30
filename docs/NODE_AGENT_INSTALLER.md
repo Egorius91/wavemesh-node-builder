@@ -14,7 +14,8 @@ The installer:
 
 - requires root for real system paths;
 - installs `node_agent.py`, `node_mtls_client.py`, `node_mtls_runtime.py`, and
-  `node_mtls_state.py`, plus the read-only `acceptance.py` collector;
+  `node_mtls_state.py`, the gated `access_runtime.py`, plus the read-only
+  `acceptance.py` collector;
 - uses same-directory temporary files and atomic rename for every installed
   file;
 - creates `/etc/wavemesh-agent` and its mTLS state tree with mode `0700`;

@@ -1,9 +1,10 @@
 #!/usr/bin/env python3
-"""WaveMesh observe-only Node Agent.
+"""WaveMesh Node Agent with opt-in access lifecycle execution.
 
 The agent sends redacted heartbeat and topology health observations to WaveVPN
-SaaS. It never polls or executes mutation commands. Replacement bearer tokens
-are generated locally; SaaS receives only their SHA-256 hashes.
+SaaS. Access command execution is disabled by default and uses authenticated
+mTLS when explicitly enabled. Replacement bearer tokens are generated locally;
+SaaS receives only their SHA-256 hashes.
 """
 
 from __future__ import annotations
@@ -23,7 +24,7 @@ import time
 from dataclasses import dataclass
 from datetime import datetime, timedelta, timezone
 from typing import Any
-from urllib import error, request
+from urllib import error, parse, request
 
 try:
     from node_mtls_runtime import MtlsRuntimeConfig, NodeMtlsRuntime
@@ -31,7 +32,7 @@ except ImportError:  # Preserve bearer-only compatibility during staged upgrades
     MtlsRuntimeConfig = None  # type: ignore[assignment,misc]
     NodeMtlsRuntime = None  # type: ignore[assignment,misc]
 
-AGENT_VERSION = "0.3.0-mtls-shadow"
+AGENT_VERSION = "0.4.0-access-lifecycle"
 DEFAULT_ENV_PATH = Path("/etc/wavemesh-agent/agent.env")
 DEFAULT_RUNTIME_PATH = Path("/etc/wavemesh-agent/runtime.json")
 NODE_CONFIG_PATH = Path("/etc/wavemesh-node/config.json")
@@ -102,6 +103,9 @@ class AgentConfig:
     mtls_retry_max_seconds: int
     mtls_retry_max_attempts: int
     mtls_retry_jitter_seconds: int
+    command_mode: str
+    access_runtime_path: Path
+    access_state_root: Path
 
     @classmethod
     def load(cls, env_path: Path) -> "AgentConfig":
@@ -149,6 +153,11 @@ class AgentConfig:
             or not mtls_api_base.startswith("https://")
         ):
             raise AgentError("Shadow mode requires an HTTPS WAVEMESH_AGENT_MTLS_API_BASE")
+        command_mode = values.get("WAVEMESH_AGENT_COMMAND_MODE", "disabled")
+        if command_mode not in {"disabled", "access"}:
+            raise AgentError("WAVEMESH_AGENT_COMMAND_MODE must be disabled or access")
+        if command_mode == "access" and mtls_mode != "shadow":
+            raise AgentError("Access command mode requires WAVEMESH_AGENT_MTLS_MODE=shadow")
         return cls(
             env_path=env_path,
             api_base=values["WAVEMESH_API_BASE"].rstrip("/"),
@@ -215,6 +224,19 @@ class AgentConfig:
                 0,
                 300,
             ),
+            command_mode=command_mode,
+            access_runtime_path=Path(
+                values.get(
+                    "WAVEMESH_AGENT_ACCESS_RUNTIME_PATH",
+                    "/usr/local/lib/wavemesh-agent/access_runtime.py",
+                )
+            ),
+            access_state_root=Path(
+                values.get(
+                    "WAVEMESH_AGENT_ACCESS_STATE_ROOT",
+                    "/var/lib/wavemesh-agent/access",
+                )
+            ),
         )
 
     @property
@@ -269,6 +291,7 @@ class NodeAgent:
                 LOG.exception("Credential rotation cycle failed: %s", exc)
 
             self.run_mtls_lifecycle()
+            self.run_access_command_cycle()
 
             if time.monotonic() >= next_observation:
                 try:
@@ -341,6 +364,108 @@ class NodeAgent:
                     "code": safe_error_code(type(exc).__name__),
                 }
             )
+
+    def run_access_command_cycle(self) -> None:
+        if self.config.command_mode != "access":
+            return
+        if self.mtls_runtime is None or self.last_mtls_status.get("state") != "SHADOW_ACTIVE":
+            return
+        command: dict[str, Any] | None = None
+        try:
+            command = self.mtls_runtime.api_json(
+                "GET",
+                f"internal/v1/nodes/{self.config.node_id}/commands/next",
+                None,
+                expected=(200, 204),
+            )
+            if not command:
+                return
+            command_id, attempt, payload = validate_access_command(command, self.config.node_id)
+            self.mtls_runtime.api_json(
+                "POST",
+                f"internal/v1/nodes/{self.config.node_id}/commands/{command_id}/started",
+                {},
+                expected=(204,),
+            )
+            material = self.execute_access_runtime(payload)
+            self.mtls_runtime.api_json(
+                "POST",
+                f"internal/v1/nodes/{self.config.node_id}/accesses/{payload['access_id']}/materialize",
+                material,
+                expected=(200,),
+            )
+            self.mtls_runtime.api_json(
+                "POST",
+                f"internal/v1/nodes/{self.config.node_id}/commands/{command_id}/result",
+                {
+                    "status": "succeeded",
+                    "attempt": attempt,
+                    "observed_version": payload["desired_version"],
+                    "redacted_result": {"access_materialized": True},
+                    "completed_at": format_timestamp(datetime.now(timezone.utc)),
+                },
+                expected=(204,),
+            )
+            LOG.info("Access provisioning command completed")
+        except Exception as exc:  # noqa: BLE001 - isolate command work from health loop
+            LOG.warning("Access provisioning command failed: code=%s", safe_error_code(type(exc).__name__))
+            if command:
+                self.report_access_command_failure(command, safe_error_code(type(exc).__name__))
+
+    def execute_access_runtime(self, payload: dict[str, Any]) -> dict[str, Any]:
+        if not self.config.access_runtime_path.is_file():
+            raise AgentError("Access runtime is not installed")
+        work_root = self.config.env_path.parent
+        work_root.mkdir(parents=True, exist_ok=True)
+        with tempfile.TemporaryDirectory(prefix=".access-command.", dir=work_root) as directory:
+            os.chmod(directory, 0o700)
+            request_path = Path(directory) / "request.json"
+            output_path = Path(directory) / "material.json"
+            write_json_file(request_path, payload)
+            completed = subprocess.run(
+                [
+                    "/usr/bin/python3",
+                    str(self.config.access_runtime_path),
+                    "--request",
+                    str(request_path),
+                    "--state-root",
+                    str(self.config.access_state_root),
+                    "--output",
+                    str(output_path),
+                ],
+                check=False,
+                capture_output=True,
+                text=True,
+                timeout=90,
+                env={**os.environ, "LC_ALL": "C.UTF-8"},
+            )
+            if completed.returncode != 0 or not output_path.is_file():
+                raise AgentError("Access runtime failed")
+            material = read_json_file(output_path, default={})
+            validate_access_material(material, payload["desired_version"])
+            return material
+
+    def report_access_command_failure(self, command: dict[str, Any], code: str) -> None:
+        try:
+            command_id = safe_id(command.get("command_id"), "command_id")
+            attempt = safe_int(command.get("attempt"), 1, 1_000_000)
+            payload = command.get("payload") if isinstance(command.get("payload"), dict) else {}
+            desired_version = safe_int(payload.get("desired_version"), 1, 2_147_483_647)
+            self.mtls_runtime.api_json(
+                "POST",
+                f"internal/v1/nodes/{self.config.node_id}/commands/{command_id}/result",
+                {
+                    "status": "retryable_failed",
+                    "attempt": attempt,
+                    "observed_version": desired_version,
+                    "error_code": code,
+                    "redacted_result": {"access_materialized": False},
+                    "completed_at": format_timestamp(datetime.now(timezone.utc)),
+                },
+                expected=(204,),
+            )
+        except Exception:  # noqa: BLE001 - the next lease expiry remains the recovery path
+            LOG.warning("Could not report access command failure")
 
     def _record_mtls_status(self, status: dict[str, Any]) -> None:
         assert_redacted(status)
@@ -553,10 +678,15 @@ class NodeAgent:
         config = read_json_file(NODE_CONFIG_PATH, default={})
         builder_version = str((config.get("builder") or {}).get("version") or "unknown")
         node_role = str((config.get("node") or {}).get("role") or "unknown")
+        command_ready = (
+            self.config.command_mode == "access"
+            and self.last_mtls_status.get("state") == "SHADOW_ACTIVE"
+        )
         capabilities = {
-            "mode": "observe_only",
-            "command_polling": False,
-            "command_execution": False,
+            "mode": "access_lifecycle" if self.config.command_mode == "access" else "observe_only",
+            "command_polling": command_ready,
+            "command_execution": command_ready,
+            "access_lifecycle": command_ready,
             "node_role": node_role,
             "cascade_routes_total": len(state.get("routes") or []),
             "auto_routes_total": len(state.get("auto_routes") or []),
@@ -903,6 +1033,80 @@ def require_string(value: dict[str, Any], key: str) -> str:
     if not isinstance(item, str) or not item:
         raise AgentError(f"SaaS response is missing {key}")
     return item
+
+
+def safe_id(value: Any, name: str) -> str:
+    item = str(value or "")
+    if not 8 <= len(item) <= 128 or not all(character.isalnum() or character in "_-" for character in item):
+        raise AgentError(f"{name} is invalid")
+    return item
+
+
+def validate_access_command(
+    command: dict[str, Any],
+    node_id: str,
+) -> tuple[str, int, dict[str, Any]]:
+    if command.get("type") != "access.provision":
+        raise AgentError("Unsupported Node command type")
+    if command.get("target_node_id") != node_id or command.get("schema_version") != 1:
+        raise AgentError("Node command target or schema is invalid")
+    command_id = safe_id(command.get("command_id"), "command_id")
+    attempt = safe_int(command.get("attempt"), 1, 1_000_000)
+    if attempt != command.get("attempt"):
+        raise AgentError("Node command attempt is invalid")
+    payload = command.get("payload")
+    if not isinstance(payload, dict) or set(payload) != {
+        "access_id",
+        "desired_version",
+        "enabled",
+        "expires_at",
+        "device_limit",
+        "quota_bytes",
+    }:
+        raise AgentError("Access command payload is invalid")
+    if payload.get("enabled") is not True:
+        raise AgentError("Disabled access provisioning is unsupported")
+    safe_id(payload.get("access_id"), "access_id")
+    desired_version = safe_int(payload.get("desired_version"), 1, 2_147_483_647)
+    if desired_version != payload.get("desired_version"):
+        raise AgentError("Access desired version is invalid")
+    parse_timestamp(require_string(payload, "expires_at"))
+    if isinstance(payload.get("device_limit"), bool):
+        raise AgentError("Access device limit is invalid")
+    if safe_int(payload.get("device_limit"), 0, 10_000) != payload.get("device_limit"):
+        raise AgentError("Access device limit is invalid")
+    quota = payload.get("quota_bytes")
+    if not isinstance(quota, str) or not quota.isdigit() or int(quota) > 9_223_372_036_854_775_807:
+        raise AgentError("Access quota is invalid")
+    return command_id, attempt, dict(payload)
+
+
+def validate_access_material(material: dict[str, Any], desired_version: int) -> None:
+    required = {
+        "desired_version",
+        "panel_email",
+        "client_uuid",
+        "sub_id",
+        "primary_inbound_id",
+        "protocol",
+        "subscription_url",
+    }
+    if set(material) != required or material.get("desired_version") != desired_version:
+        raise AgentError("Access runtime output is invalid")
+    safe_id(material.get("sub_id"), "sub_id")
+    safe_id(material.get("panel_email"), "panel_email")
+    try:
+        import uuid
+        uuid.UUID(str(material.get("client_uuid")), version=4)
+    except (ValueError, AttributeError) as exc:
+        raise AgentError("Access runtime UUID is invalid") from exc
+    if material.get("protocol") != "vless":
+        raise AgentError("Access runtime protocol is invalid")
+    if safe_int(material.get("primary_inbound_id"), 1, 2_147_483_647) != material.get("primary_inbound_id"):
+        raise AgentError("Access runtime inbound is invalid")
+    parsed = parse.urlsplit(require_string(material, "subscription_url"))
+    if parsed.scheme != "https" or not parsed.hostname or parsed.username or parsed.password or parsed.fragment:
+        raise AgentError("Access runtime subscription URL is invalid")
 
 
 def stop_aware_sleep(seconds: float) -> None:

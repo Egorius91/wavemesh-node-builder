@@ -240,6 +240,24 @@ Before enabling command polling or commercial writes, confirm in SaaS that:
 - heartbeats remain fresh;
 - `command_polling=false`;
 - `command_execution=false`;
+
+## Agent 0.4 access lifecycle
+
+Agent 0.4 keeps command execution disabled after installation:
+
+```text
+WAVEMESH_AGENT_COMMAND_MODE=disabled
+```
+
+The only enabled value is `access`. It requires
+`WAVEMESH_AGENT_MTLS_MODE=shadow` and permits only the structured
+`access.provision` command. The Agent rejects unknown command types and extra
+payload fields. It generates the VPN UUID and subscription ID locally, stores
+the durable retry state under `/var/lib/wavemesh-agent/access` with private
+permissions, and sends material to SaaS only through authenticated mTLS.
+
+Activation remains a separate staging rollout step. Installing Agent 0.4 does
+not enable command polling, restart the service, or change a running node.
 - health observations contain no connection material;
 - credential rotation succeeds before expiry;
 - both the old and replacement credentials behave as expected during the short

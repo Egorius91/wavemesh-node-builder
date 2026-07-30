@@ -130,6 +130,7 @@ restore_or_remove node_mtls_client.py "$INSTALL_DIR/node_mtls_client.py" 0644 07
 restore_or_remove node_mtls_runtime.py "$INSTALL_DIR/node_mtls_runtime.py" 0644 0755
 restore_or_remove node_mtls_state.py "$INSTALL_DIR/node_mtls_state.py" 0644 0755
 restore_or_remove acceptance.py "$INSTALL_DIR/acceptance.py" 0755 0755
+restore_or_remove access_runtime.py "$INSTALL_DIR/access_runtime.py" 0755 0755
 restore_or_remove "$SERVICE" "$UNIT_PATH" 0644 0755
 restore_or_remove wavemesh-node-agent-rollback "$ROLLBACK_PATH" 0755 0755
 restore_or_remove agent.env "$ENV_FILE" 0600 0700

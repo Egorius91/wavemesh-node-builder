@@ -55,6 +55,7 @@ for file in node_mtls_client.py node_mtls_runtime.py node_mtls_state.py; do
   [[ -f "$DESTDIR/usr/local/lib/wavemesh-agent/$file" ]]
   [[ "$(stat -c '%a' "$DESTDIR/usr/local/lib/wavemesh-agent/$file")" == 644 ]]
 done
+[[ "$(stat -c '%a' "$DESTDIR/usr/local/lib/wavemesh-agent/access_runtime.py")" == 755 ]]
 [[ "$(stat -c '%a' "$DESTDIR/usr/local/lib/wavemesh-agent/node_agent.py")" == 755 ]]
 [[ "$(stat -c '%a' "$DESTDIR/usr/local/lib/wavemesh-agent/acceptance.py")" == 755 ]]
 [[ "$(stat -c '%a' "$DESTDIR/etc/wavemesh-agent/agent.env")" == 600 ]]
@@ -63,6 +64,8 @@ done
 [[ "$(stat -c '%a' "$DESTDIR/etc/wavemesh-agent/tls/generations")" == 700 ]]
 grep -Fx 'WAVEMESH_AGENT_MTLS_MODE=disabled' "$DESTDIR/etc/wavemesh-agent/agent.env" >/dev/null
 [[ "$(grep -c '^WAVEMESH_AGENT_MTLS_MODE=' "$DESTDIR/etc/wavemesh-agent/agent.env")" == 1 ]]
+grep -Fx 'WAVEMESH_AGENT_COMMAND_MODE=disabled' "$DESTDIR/etc/wavemesh-agent/agent.env" >/dev/null
+[[ "$(grep -c '^WAVEMESH_AGENT_COMMAND_MODE=' "$DESTDIR/etc/wavemesh-agent/agent.env")" == 1 ]]
 if grep -Eq -- '-----BEGIN [A-Z0-9 ]+-----' "$DESTDIR/etc/wavemesh-agent/agent.env"; then
   echo "installer placed PEM material in agent.env" >&2
   exit 1

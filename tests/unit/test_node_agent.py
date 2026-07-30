@@ -26,6 +26,40 @@ def assert_posix_mode(case: unittest.TestCase, path: Path, expected: int) -> Non
 
 
 class NodeAgentTests(unittest.TestCase):
+    def test_access_command_validation_is_allowlisted_and_strict(self) -> None:
+        payload = {
+            "access_id": "access_12345678",
+            "desired_version": 1,
+            "enabled": True,
+            "expires_at": "2026-08-01T00:00:00Z",
+            "device_limit": 1,
+            "quota_bytes": "1073741824",
+        }
+        command = {
+            "command_id": "command_12345678",
+            "schema_version": 1,
+            "target_node_id": "node-12345678",
+            "type": "access.provision",
+            "attempt": 1,
+            "payload": payload,
+        }
+
+        command_id, attempt, validated = agent.validate_access_command(
+            command, "node-12345678"
+        )
+        self.assertEqual(command_id, "command_12345678")
+        self.assertEqual(attempt, 1)
+        self.assertEqual(validated, payload)
+        with self.assertRaises(agent.AgentError):
+            agent.validate_access_command(
+                {**command, "type": "shell.execute"}, "node-12345678"
+            )
+        with self.assertRaises(agent.AgentError):
+            agent.validate_access_command(
+                {**command, "payload": {**payload, "shell": "id"}},
+                "node-12345678",
+            )
+
     def test_build_observation_state_is_redacted(self) -> None:
         route_health = {
             "node_status": "healthy",
