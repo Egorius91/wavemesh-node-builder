@@ -157,9 +157,12 @@ def assert_matching_client(record: dict[str, Any] | None, state: dict[str, Any],
         raise ProvisionError("3X-UI client verification failed")
     client = record.get("client") if isinstance(record.get("client"), dict) else record
     attached = record.get("inboundIds") or client.get("inboundIds") or []
+    client_uuid = client.get("uuid")
+    if not client_uuid and isinstance(client.get("id"), str):
+        client_uuid = client["id"]
     if (
         client.get("email") != state["panel_email"]
-        or client.get("id") != state["client_uuid"]
+        or client_uuid != state["client_uuid"]
         or client.get("subId") != state["sub_id"]
         or not set(inbound_ids).issubset({int(value) for value in attached if str(value).isdigit()})
     ):

@@ -43,6 +43,9 @@ class FakePanel:
         if path == "/panel/api/clients/add":
             self.__class__.add_calls += 1
             client = dict(payload["client"])
+            client_uuid = client.pop("id")
+            client["id"] = 42
+            client["uuid"] = client_uuid
             self.clients[client["email"]] = {
                 "client": client,
                 "inboundIds": list(payload["inboundIds"]),
