@@ -27,7 +27,7 @@ LockPersonality=true
 MemoryDenyWriteExecute=true
 RestrictAddressFamilies=AF_UNIX AF_INET AF_INET6 AF_NETLINK
 CapabilityBoundingSet=CAP_SYS_PTRACE
-ReadWritePaths=/etc/wavemesh-agent /etc/wavemesh-node
+ReadWritePaths=/etc/wavemesh-agent /etc/wavemesh-node /var/lib/wavemesh-agent
 
 [Install]
 WantedBy=multi-user.target
