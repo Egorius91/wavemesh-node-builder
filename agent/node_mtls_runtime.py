@@ -190,9 +190,11 @@ class NodeMtlsRuntime:
             pending_ack = self.state.pending_acknowledgement()
 
             if pending_ack is not None:
-                if pending_ack.delivery_expires_at <= current:
-                    raise MtlsRuntimeError("Pending certificate delivery expired before acknowledgement")
                 if self.state.active_request_hash(active) != pending_ack.request_hash:
+                    if pending_ack.delivery_expires_at <= current:
+                        raise MtlsRuntimeError(
+                            "Pending certificate delivery expired before activation"
+                        )
                     self._transition(MtlsAgentState.ENROLLING)
                     lifecycle = self._bearer_lifecycle_client()
                     lifecycle.retrieve(pending_ack.credential_id)
