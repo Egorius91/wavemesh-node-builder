@@ -107,6 +107,12 @@ contains only bounded correlation metadata. Recovery is deterministic:
 3. If activation finished but acknowledgement did not, the matching active
    request is acknowledged and the journal is cleared.
 
+The third recovery path remains valid after the encrypted delivery payload has
+expired. The Agent attempts a late acknowledgement only when the active local
+identity has the exact request hash recorded in the acknowledgement journal.
+If the identity does not match, an expired delivery remains fail-closed and is
+not retrieved or acknowledged.
+
 Bootstrap, retrieval, and acknowledgement use the still-valid bearer recovery
 path. Rotation issuance uses mTLS once an active certificate exists. This
 preserves recovery without automatically downgrading an individual mTLS

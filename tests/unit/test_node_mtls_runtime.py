@@ -198,6 +198,56 @@ class NodeMtlsRuntimeTests(unittest.TestCase):
                 ("acknowledge", "bearer"),
             ])
 
+    def test_expired_delivery_is_acknowledged_when_matching_identity_is_active(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory) / "tls"
+            state = FakeState(root)
+            state.active = object()
+            state.active_hash = "b" * 64
+            state.pending_ack = SimpleNamespace(
+                credential_id="credential_mtls_123",
+                request_hash="b" * 64,
+                delivery_expires_at=NOW - timedelta(minutes=10),
+            )
+            harness = LifecycleHarness(state)
+            instance = runtime.NodeMtlsRuntime(configured(root), state=state)
+
+            with (
+                mock.patch.object(runtime, "NodeCertificateLifecycleClient", side_effect=harness.factory),
+                mock.patch.object(runtime, "parse_certificate_expiry", return_value=NOW + timedelta(days=1)),
+            ):
+                status = instance.lifecycle_cycle("0.4.0-mtls-shadow", NOW)
+
+            self.assertEqual(status.state, runtime.MtlsAgentState.SHADOW_READY)
+            self.assertEqual([call[0:2] for call in harness.calls], [
+                ("acknowledge", "bearer"),
+            ])
+            self.assertIsNone(state.pending_ack)
+
+    def test_expired_delivery_blocks_when_matching_identity_is_not_active(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory) / "tls"
+            state = FakeState(root)
+            state.active = object()
+            state.active_hash = "a" * 64
+            state.pending_ack = SimpleNamespace(
+                credential_id="credential_mtls_123",
+                request_hash="b" * 64,
+                delivery_expires_at=NOW - timedelta(minutes=10),
+            )
+            harness = LifecycleHarness(state)
+            instance = runtime.NodeMtlsRuntime(configured(root), state=state)
+
+            with (
+                mock.patch.object(runtime, "NodeCertificateLifecycleClient", side_effect=harness.factory),
+                mock.patch.object(runtime, "parse_certificate_expiry", return_value=NOW + timedelta(days=1)),
+            ):
+                status = instance.lifecycle_cycle("0.4.0-mtls-shadow", NOW)
+
+            self.assertEqual(status.state, runtime.MtlsAgentState.BLOCKED)
+            self.assertEqual(harness.calls, [])
+            self.assertIsNotNone(state.pending_ack)
+
     def test_due_rotation_uses_mtls_but_ack_keeps_bearer_recovery(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory) / "tls"
