@@ -102,6 +102,7 @@ CLIENT_SOURCE="$PROJECT_DIR/agent/node_mtls_client.py"
 RUNTIME_SOURCE="$PROJECT_DIR/agent/node_mtls_runtime.py"
 STATE_SOURCE="$PROJECT_DIR/agent/node_mtls_state.py"
 ACCEPTANCE_SOURCE="$PROJECT_DIR/agent/acceptance.py"
+ACCESS_SOURCE="$PROJECT_DIR/agent/access_runtime.py"
 UNIT_SOURCE="$PROJECT_DIR/agent/wavemesh-node-agent.service"
 ROLLBACK_SOURCE="$PROJECT_DIR/agent/rollback.sh"
 
@@ -111,6 +112,7 @@ for source in \
   "$RUNTIME_SOURCE" \
   "$STATE_SOURCE" \
   "$ACCEPTANCE_SOURCE" \
+  "$ACCESS_SOURCE" \
   "$UNIT_SOURCE" \
   "$ROLLBACK_SOURCE"; do
   [[ -f "$source" && ! -L "$source" ]] || fail "Missing or unsafe installer source"
@@ -122,12 +124,15 @@ if grep -Eq -- '-----BEGIN [A-Z0-9 ]+-----' "$ENV_FILE"; then
 fi
 mtls_mode_lines="$(grep -Ec '^WAVEMESH_AGENT_MTLS_MODE=' "$ENV_FILE" || true)"
 [[ "$mtls_mode_lines" -le 1 ]] || fail "Agent environment contains duplicate mTLS mode settings"
+command_mode_lines="$(grep -Ec '^WAVEMESH_AGENT_COMMAND_MODE=' "$ENV_FILE" || true)"
+[[ "$command_mode_lines" -le 1 ]] || fail "Agent environment contains duplicate command mode settings"
 "$PYTHON" "$AGENT_SOURCE" check --env-file "$ENV_FILE" >/dev/null
 
 install_directory 0700 "$ETC_DIR"
 install_directory 0700 "$ETC_DIR/tls"
 install_directory 0700 "$ETC_DIR/tls/pending"
 install_directory 0700 "$ETC_DIR/tls/generations"
+install_directory 0700 "$(root_path /var/lib/wavemesh-agent/access)"
 install_directory 0755 "$INSTALL_DIR"
 install_directory 0700 "$BACKUP_ROOT"
 
@@ -138,6 +143,9 @@ env_migration_required=false
 if [[ "$mtls_mode_lines" -eq 0 ]]; then
   env_migration_required=true
 fi
+if [[ "$command_mode_lines" -eq 0 ]]; then
+  env_migration_required=true
+fi
 
 changed=false
 file_would_change "$AGENT_SOURCE" "$INSTALL_DIR/node_agent.py" && changed=true
@@ -145,6 +153,7 @@ file_would_change "$CLIENT_SOURCE" "$INSTALL_DIR/node_mtls_client.py" && changed
 file_would_change "$RUNTIME_SOURCE" "$INSTALL_DIR/node_mtls_runtime.py" && changed=true
 file_would_change "$STATE_SOURCE" "$INSTALL_DIR/node_mtls_state.py" && changed=true
 file_would_change "$ACCEPTANCE_SOURCE" "$INSTALL_DIR/acceptance.py" && changed=true
+file_would_change "$ACCESS_SOURCE" "$INSTALL_DIR/access_runtime.py" && changed=true
 file_would_change "$UNIT_SOURCE" "$UNIT_PATH" && changed=true
 file_would_change "$ROLLBACK_SOURCE" "$ROLLBACK_PATH" && changed=true
 [[ "$env_migration_required" == false ]] || changed=true
@@ -162,6 +171,7 @@ if [[ "$changed" == true ]]; then
   backup_file "$INSTALL_DIR/node_mtls_runtime.py" "$backup_dir" node_mtls_runtime.py 0644
   backup_file "$INSTALL_DIR/node_mtls_state.py" "$backup_dir" node_mtls_state.py 0644
   backup_file "$INSTALL_DIR/acceptance.py" "$backup_dir" acceptance.py 0755
+  backup_file "$INSTALL_DIR/access_runtime.py" "$backup_dir" access_runtime.py 0755
   backup_file "$UNIT_PATH" "$backup_dir" "$SERVICE" 0644
   backup_file "$ROLLBACK_PATH" "$backup_dir" wavemesh-node-agent-rollback 0755
   backup_file "$ENV_FILE" "$backup_dir" agent.env 0600
@@ -173,7 +183,8 @@ fi
 if [[ "$env_migration_required" == true ]]; then
   env_temporary="$(mktemp "$ETC_DIR/.agent.env.migrate.XXXXXX")"
   install -m 0600 "$ENV_FILE" "$env_temporary"
-  printf '\nWAVEMESH_AGENT_MTLS_MODE=disabled\n' >> "$env_temporary"
+  [[ "$mtls_mode_lines" -ne 0 ]] || printf '\nWAVEMESH_AGENT_MTLS_MODE=disabled\n' >> "$env_temporary"
+  [[ "$command_mode_lines" -ne 0 ]] || printf 'WAVEMESH_AGENT_COMMAND_MODE=disabled\n' >> "$env_temporary"
   [[ -n "$DESTDIR" ]] || chown root:root "$env_temporary"
   mv -fT "$env_temporary" "$ENV_FILE"
 fi
@@ -183,6 +194,7 @@ atomic_install_file "$CLIENT_SOURCE" "$INSTALL_DIR/node_mtls_client.py" 0644
 atomic_install_file "$RUNTIME_SOURCE" "$INSTALL_DIR/node_mtls_runtime.py" 0644
 atomic_install_file "$STATE_SOURCE" "$INSTALL_DIR/node_mtls_state.py" 0644
 atomic_install_file "$ACCEPTANCE_SOURCE" "$INSTALL_DIR/acceptance.py" 0755
+atomic_install_file "$ACCESS_SOURCE" "$INSTALL_DIR/access_runtime.py" 0755
 atomic_install_file "$UNIT_SOURCE" "$UNIT_PATH" 0644
 atomic_install_file "$ROLLBACK_SOURCE" "$ROLLBACK_PATH" 0755
 
@@ -195,15 +207,17 @@ fi
   "$INSTALL_DIR/node_mtls_client.py" \
   "$INSTALL_DIR/node_mtls_runtime.py" \
   "$INSTALL_DIR/node_mtls_state.py" \
-  "$INSTALL_DIR/acceptance.py"
+  "$INSTALL_DIR/acceptance.py" \
+  "$INSTALL_DIR/access_runtime.py"
 
 if [[ "$unit_changed" == true ]]; then
   "$SYSTEMCTL" daemon-reload
 fi
 "$SYSTEMCTL" enable "$SERVICE" >/dev/null
 
-ok "Observe-only Node Agent files prepared; service was not started or restarted"
+ok "Node Agent files prepared; service was not started or restarted"
 ok "mTLS mode remains disabled unless explicitly configured by an operator"
+ok "Access command mode remains disabled unless explicitly configured by an operator"
 if [[ -n "$backup_dir" ]]; then
   ok "Previous installation backed up under the private backup root"
 else

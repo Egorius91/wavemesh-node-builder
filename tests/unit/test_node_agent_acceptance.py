@@ -60,6 +60,7 @@ class Fixture:
         for name in ("node_mtls_client.py", "node_mtls_runtime.py", "node_mtls_state.py"):
             self._write(self.install / name, "# installed module\n", 0o644)
         self._write(self.install / "acceptance.py", "#!/usr/bin/env python3\n", 0o755)
+        self._write(self.install / "access_runtime.py", "#!/usr/bin/env python3\n", 0o755)
         self._write(self.rollback, "#!/usr/bin/env bash\n", 0o755)
         unit = "\n".join(acceptance.REQUIRED_HARDENING) + "\n"
         self._write(self.unit, unit, 0o644)

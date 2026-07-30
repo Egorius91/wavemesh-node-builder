@@ -234,6 +234,7 @@ class AcceptanceCollector:
                     "mtls_runtime": (self.paths.install_dir / "node_mtls_runtime.py", 0o644),
                     "mtls_state": (self.paths.install_dir / "node_mtls_state.py", 0o644),
                     "acceptance": (self.paths.install_dir / "acceptance.py", 0o755),
+                    "access_runtime": (self.paths.install_dir / "access_runtime.py", 0o755),
                     "rollback": (self.paths.rollback_file, 0o755),
                 }
             )
