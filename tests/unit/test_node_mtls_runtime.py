@@ -157,7 +157,7 @@ class NodeMtlsRuntimeTests(unittest.TestCase):
             self.assertEqual(status.state, runtime.MtlsAgentState.SHADOW_READY)
             self.assertEqual([call[0:2] for call in harness.calls], [
                 ("issue", "bearer"),
-                ("acknowledge", "bearer"),
+                ("acknowledge", "mtls"),
             ])
             self.assertIsNone(state.pending_ack)
 
@@ -195,7 +195,7 @@ class NodeMtlsRuntimeTests(unittest.TestCase):
             self.assertEqual(status.state, runtime.MtlsAgentState.SHADOW_READY)
             self.assertEqual([call[0:2] for call in harness.calls], [
                 ("retrieve", "bearer"),
-                ("acknowledge", "bearer"),
+                ("acknowledge", "mtls"),
             ])
 
     def test_expired_delivery_is_acknowledged_when_matching_identity_is_active(self) -> None:
@@ -220,7 +220,7 @@ class NodeMtlsRuntimeTests(unittest.TestCase):
 
             self.assertEqual(status.state, runtime.MtlsAgentState.SHADOW_READY)
             self.assertEqual([call[0:2] for call in harness.calls], [
-                ("acknowledge", "bearer"),
+                ("acknowledge", "mtls"),
             ])
             self.assertIsNone(state.pending_ack)
 
@@ -248,7 +248,7 @@ class NodeMtlsRuntimeTests(unittest.TestCase):
             self.assertEqual(harness.calls, [])
             self.assertIsNotNone(state.pending_ack)
 
-    def test_due_rotation_uses_mtls_but_ack_keeps_bearer_recovery(self) -> None:
+    def test_due_rotation_uses_mtls_for_issue_and_acknowledgement(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory) / "tls"
             state = FakeState(root)
@@ -269,7 +269,7 @@ class NodeMtlsRuntimeTests(unittest.TestCase):
             self.assertEqual(status.state, runtime.MtlsAgentState.SHADOW_READY)
             self.assertEqual([call[0:2] for call in harness.calls], [
                 ("issue", "mtls"),
-                ("acknowledge", "bearer"),
+                ("acknowledge", "mtls"),
             ])
 
     def test_retryable_failure_has_finite_zero_jitter_backoff_then_blocks(self) -> None:

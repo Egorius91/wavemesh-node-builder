@@ -198,14 +198,14 @@ class NodeMtlsRuntime:
                     self._transition(MtlsAgentState.ENROLLING)
                     lifecycle = self._bearer_lifecycle_client()
                     lifecycle.retrieve(pending_ack.credential_id)
-                self._bearer_lifecycle_client().acknowledge(pending_ack.credential_id)
+                self._mtls_lifecycle_client().acknowledge(pending_ack.credential_id)
                 self._clear_retry(MtlsAgentState.SHADOW_READY)
                 return self.status()
 
             if active is None or active_expiry is None or active_expiry <= current:
                 self._transition(MtlsAgentState.ENROLLING)
                 result = self._bearer_lifecycle_client().issue_or_rotate(agent_version)
-                self._bearer_lifecycle_client().acknowledge(result.credential_id)
+                self._mtls_lifecycle_client().acknowledge(result.credential_id)
                 self._clear_retry(MtlsAgentState.SHADOW_READY)
                 return self.status()
 
@@ -225,7 +225,7 @@ class NodeMtlsRuntime:
 
             self._transition(MtlsAgentState.ROTATING)
             result = self._mtls_lifecycle_client().issue_or_rotate(agent_version)
-            self._bearer_lifecycle_client().acknowledge(result.credential_id)
+            self._mtls_lifecycle_client().acknowledge(result.credential_id)
             self._clear_retry(MtlsAgentState.SHADOW_READY)
             return self.status()
         except MtlsApiError as exc:
