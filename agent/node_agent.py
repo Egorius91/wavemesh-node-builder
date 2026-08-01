@@ -298,7 +298,9 @@ class NodeAgent:
                     self.collect_and_send_observation()
                     next_observation = time.monotonic() + self.config.observation_seconds
                 except ApiError as exc:
-                    self.mark_health_degraded()
+                    # Local collection already updated last_health_state. A bearer
+                    # delivery failure must not make the succeeding mTLS heartbeat
+                    # advertise a healthy command-ready node as degraded.
                     next_observation = time.monotonic() + min(60, self.config.observation_seconds)
                     LOG.warning(
                         "Health observation failed: status=%s code=%s retryable=%s",
