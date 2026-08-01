@@ -382,7 +382,9 @@ class NodeAgent:
             )
             if not command:
                 return
-            command_id, attempt, payload = validate_access_command(command, self.config.node_id)
+            command_id, attempt, command_type, payload = validate_access_command(
+                command, self.config.node_id
+            )
             self.mtls_runtime.api_json(
                 "POST",
                 f"internal/v1/nodes/{self.config.node_id}/commands/{command_id}/started",
@@ -396,6 +398,8 @@ class NodeAgent:
                 material,
                 expected=(200,),
             )
+            if command_type == "access.replace_credential":
+                self.cleanup_replaced_access_runtime(payload)
             self.mtls_runtime.api_json(
                 "POST",
                 f"internal/v1/nodes/{self.config.node_id}/commands/{command_id}/result",
@@ -408,7 +412,7 @@ class NodeAgent:
                 },
                 expected=(204,),
             )
-            LOG.info("Access provisioning command completed")
+            LOG.info("Access command completed: type=%s", command_type)
         except Exception as exc:  # noqa: BLE001 - isolate command work from health loop
             LOG.warning("Access provisioning command failed: code=%s", safe_error_code(type(exc).__name__))
             if command:
@@ -446,6 +450,32 @@ class NodeAgent:
             material = read_json_file(output_path, default={})
             validate_access_material(material, payload["desired_version"])
             return material
+
+    def cleanup_replaced_access_runtime(self, payload: dict[str, Any]) -> None:
+        work_root = self.config.env_path.parent
+        work_root.mkdir(parents=True, exist_ok=True)
+        with tempfile.TemporaryDirectory(prefix=".access-cleanup.", dir=work_root) as directory:
+            os.chmod(directory, 0o700)
+            request_path = Path(directory) / "request.json"
+            write_json_file(request_path, payload)
+            completed = subprocess.run(
+                [
+                    "/usr/bin/python3",
+                    str(self.config.access_runtime_path),
+                    "--request",
+                    str(request_path),
+                    "--state-root",
+                    str(self.config.access_state_root),
+                    "--cleanup-previous",
+                ],
+                check=False,
+                capture_output=True,
+                text=True,
+                timeout=90,
+                env={**os.environ, "LC_ALL": "C.UTF-8"},
+            )
+            if completed.returncode != 0:
+                raise AgentError("Replaced access cleanup failed")
 
     def report_access_command_failure(self, command: dict[str, Any], code: str) -> None:
         try:
@@ -1047,8 +1077,9 @@ def safe_id(value: Any, name: str) -> str:
 def validate_access_command(
     command: dict[str, Any],
     node_id: str,
-) -> tuple[str, int, dict[str, Any]]:
-    if command.get("type") != "access.provision":
+) -> tuple[str, int, str, dict[str, Any]]:
+    command_type = command.get("type")
+    if command_type not in {"access.provision", "access.replace_credential"}:
         raise AgentError("Unsupported Node command type")
     if command.get("target_node_id") != node_id or command.get("schema_version") != 1:
         raise AgentError("Node command target or schema is invalid")
@@ -1080,7 +1111,7 @@ def validate_access_command(
     quota = payload.get("quota_bytes")
     if not isinstance(quota, str) or not quota.isdigit() or int(quota) > 9_223_372_036_854_775_807:
         raise AgentError("Access quota is invalid")
-    return command_id, attempt, dict(payload)
+    return command_id, attempt, str(command_type), dict(payload)
 
 
 def validate_access_material(material: dict[str, Any], desired_version: int) -> None:

@@ -130,6 +130,41 @@ def provision(request_value: dict[str, Any], config: dict[str, Any], state_root:
     }
 
 
+def cleanup_previous(request_value: dict[str, Any], config: dict[str, Any], state_root: Path) -> int:
+    """Remove only older durable identities after SaaS accepted the replacement."""
+    access_id = safe_id(request_value.get("access_id"), "access_id")
+    desired_version = integer(request_value.get("desired_version"), 2, 2_147_483_647)
+    current_path = state_root / f"{access_id}.{desired_version}.json"
+    current = load_private_state(current_path)
+    if current is None:
+        raise ProvisionError("Replacement durable state is missing")
+    validate_state(current, access_id, desired_version)
+
+    panel = PanelClient(config)
+    removed = 0
+    for state_path in sorted(state_root.glob(f"{access_id}.*.json")):
+        if state_path == current_path:
+            continue
+        state = load_private_state(state_path)
+        if state is None or state.get("access_id") != access_id:
+            continue
+        version = integer(state.get("desired_version"), 1, 2_147_483_647)
+        if version >= desired_version:
+            continue
+        email = str(state.get("panel_email") or "")
+        if not re.fullmatch(r"[A-Za-z0-9_-]{3,128}", email):
+            raise ProvisionError("Previous durable panel identity is invalid")
+        if get_client(panel, email) is not None:
+            panel.call(
+                "POST",
+                f"/panel/api/clients/del/{parse.quote(email, safe='')}",
+            )
+            if get_client(panel, email) is not None:
+                raise ProvisionError("Previous 3X-UI client cleanup was not verified")
+            removed += 1
+    return removed
+
+
 def visible_vless_inbound_ids(response: dict[str, Any]) -> list[int]:
     result = []
     for item in response.get("obj") or []:
@@ -250,11 +285,18 @@ def main() -> int:
     parser.add_argument("--request", required=True, type=Path)
     parser.add_argument("--config", type=Path, default=Path("/etc/wavemesh-node/config.json"))
     parser.add_argument("--state-root", type=Path, default=Path("/var/lib/wavemesh-agent/access"))
-    parser.add_argument("--output", required=True, type=Path)
+    parser.add_argument("--output", type=Path)
+    parser.add_argument("--cleanup-previous", action="store_true")
     args = parser.parse_args()
     try:
         command = json.loads(args.request.read_text(encoding="utf-8"))
         config = json.loads(args.config.read_text(encoding="utf-8"))
+        if args.cleanup_previous:
+            removed = cleanup_previous(command, config, args.state_root)
+            print(f"access_cleanup=PASS removed={removed}")
+            return 0
+        if args.output is None:
+            raise ProvisionError("output is required for provisioning")
         result = provision(command, config, args.state_root)
         atomic_json(args.output, result)
         print("access_provision=PASS")

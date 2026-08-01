@@ -53,6 +53,10 @@ class FakePanel:
             return {"success": True}
         if path.startswith("/panel/api/clients/subLinks/"):
             return {"success": True, "obj": ["vless://not-logged"]}
+        if path.startswith("/panel/api/clients/del/"):
+            email = path.rsplit("/", 1)[-1]
+            self.clients.pop(email, None)
+            return {"success": True}
         raise AssertionError(path)
 
 
@@ -109,6 +113,36 @@ class AccessRuntimeTests(unittest.TestCase):
             ]
         })
         self.assertEqual(result, [1])
+
+    def test_replacement_cleanup_removes_only_older_material(self):
+        command = {
+            "access_id": "access_12345678",
+            "desired_version": 1,
+            "enabled": True,
+            "expires_at": (datetime.now(timezone.utc) + timedelta(days=1)).isoformat(),
+            "device_limit": 1,
+            "quota_bytes": "1073741824",
+        }
+        config = {
+            "panel": {"listen_port": 54321, "path": "/opaque-panel/", "api_auth": {"token": "safe_token_12345678"}},
+            "server": {"domain": "entry.example.invalid"},
+            "network": {"subscription": {"backend": "xui-native", "path": "/opaque/subscription/"}},
+        }
+        with tempfile.TemporaryDirectory() as directory, mock.patch.object(
+            runtime, "PanelClient", FakePanel
+        ):
+            root = Path(directory)
+            first = runtime.provision(command, config, root)
+            second_command = {**command, "desired_version": 2}
+            second = runtime.provision(second_command, config, root)
+            removed = runtime.cleanup_previous(second_command, config, root)
+            replay_removed = runtime.cleanup_previous(second_command, config, root)
+
+        self.assertNotEqual(first["panel_email"], second["panel_email"])
+        self.assertEqual(removed, 1)
+        self.assertEqual(replay_removed, 0)
+        self.assertNotIn(first["panel_email"], FakePanel.clients)
+        self.assertIn(second["panel_email"], FakePanel.clients)
 
 
 if __name__ == "__main__":
