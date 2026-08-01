@@ -352,6 +352,90 @@ class NodeAgentTests(unittest.TestCase):
             self.assertEqual(config.agent_token, token)
             self.assertIsNone(agent.build_mtls_runtime(config))
 
+    def test_bearer_observation_failure_preserves_health_for_mtls_heartbeat(self) -> None:
+        class FakeStatus:
+            def capability(self):
+                return {
+                    "mode": "shadow",
+                    "state": "SHADOW_ACTIVE",
+                    "retry_attempts": 0,
+                    "retry_at": None,
+                    "code": None,
+                }
+
+        class FakeMtlsRuntime:
+            def __init__(self):
+                self.heartbeats = []
+
+            def lifecycle_cycle(self, version):
+                return FakeStatus()
+
+            def api_json(self, method, path, payload, expected):
+                return {}
+
+            def shadow_heartbeat(self, payload):
+                self.heartbeats.append(payload)
+                return FakeStatus()
+
+        with tempfile.TemporaryDirectory() as directory:
+            env_path = Path(directory) / "agent.env"
+            runtime_path = Path(directory) / "runtime.json"
+            agent.write_env_file(
+                env_path,
+                {
+                    "WAVEMESH_API_BASE": "https://example.invalid/api",
+                    "WAVEMESH_NODE_ID": "node-12345678",
+                    "WAVEMESH_TENANT_ID": "tenant-12345678",
+                    "WAVEMESH_AGENT_TOKEN": agent.generate_token(),
+                    "WAVEMESH_AGENT_TOKEN_EXPIRES_AT": agent.format_timestamp(
+                        datetime.now(timezone.utc) + timedelta(hours=24)
+                    ),
+                    "WAVEMESH_AGENT_MODE": "observe-only",
+                    "WAVEMESH_AGENT_RUNTIME_PATH": str(runtime_path),
+                    "WAVEMESH_AGENT_MTLS_MODE": "shadow",
+                    "WAVEMESH_AGENT_MTLS_API_BASE": "https://mtls.example.invalid/api",
+                    "WAVEMESH_AGENT_COMMAND_MODE": "access",
+                },
+            )
+            mtls_runtime = FakeMtlsRuntime()
+            instance = agent.NodeAgent(
+                agent.AgentConfig.load(env_path),
+                mtls_runtime=mtls_runtime,
+            )
+
+            def fail_bearer_observation_delivery():
+                instance.last_health_state = {
+                    "mode": "observe_only",
+                    "node_status": "healthy",
+                    "healthy_exits": 1,
+                    "total_exits": 1,
+                    "routes": [],
+                    "auto_routes": [],
+                }
+                raise agent.ApiError(401, "UNAUTHORIZED", False)
+
+            with (
+                mock.patch.object(instance, "rotate_if_due"),
+                mock.patch.object(
+                    instance,
+                    "collect_and_send_observation",
+                    side_effect=fail_bearer_observation_delivery,
+                ),
+                mock.patch.object(
+                    instance,
+                    "send_heartbeat",
+                    side_effect=agent.ApiError(401, "UNAUTHORIZED", False),
+                ),
+            ):
+                instance.run(once=True)
+
+            self.assertEqual(len(mtls_runtime.heartbeats), 1)
+            heartbeat = mtls_runtime.heartbeats[0]
+            self.assertEqual(heartbeat["status"], "active")
+            self.assertTrue(heartbeat["capabilities"]["command_polling"])
+            self.assertTrue(heartbeat["capabilities"]["command_execution"])
+            self.assertEqual(instance.last_health_state["node_status"], "healthy")
+
     def test_shadow_failure_does_not_block_bearer_foreground_cycle(self) -> None:
         class FakeStatus:
             def __init__(self, state):
