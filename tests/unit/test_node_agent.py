@@ -44,12 +44,17 @@ class NodeAgentTests(unittest.TestCase):
             "payload": payload,
         }
 
-        command_id, attempt, validated = agent.validate_access_command(
+        command_id, attempt, command_type, validated = agent.validate_access_command(
             command, "node-12345678"
         )
         self.assertEqual(command_id, "command_12345678")
         self.assertEqual(attempt, 1)
+        self.assertEqual(command_type, "access.provision")
         self.assertEqual(validated, payload)
+        replacement = agent.validate_access_command(
+            {**command, "type": "access.replace_credential"}, "node-12345678"
+        )
+        self.assertEqual(replacement[2], "access.replace_credential")
         with self.assertRaises(agent.AgentError):
             agent.validate_access_command(
                 {**command, "type": "shell.execute"}, "node-12345678"
