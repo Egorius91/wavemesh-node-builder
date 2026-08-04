@@ -249,6 +249,22 @@ class NodeMtlsState:
             raise MtlsStateError("Active mTLS identity points outside the generations directory")
         return self._validate_generation(target, expected_identity_uri=expected_identity_uri)
 
+    def deactivate_active_identity(self) -> str | None:
+        """Remove only the active selector while retaining immutable generations for audit."""
+        self._ensure_layout()
+        if not self.active_link.exists() and not self.active_link.is_symlink():
+            return None
+        if not self.active_link.is_symlink():
+            raise MtlsStateError("Active mTLS identity path is not a symlink")
+        raw_target = os.readlink(self.active_link)
+        target = (self.root / raw_target).resolve()
+        generations_root = self.generations_dir.resolve()
+        if target.parent != generations_root or not re.fullmatch(r"[a-f0-9]{24}", target.name):
+            raise MtlsStateError("Active mTLS identity points outside the generations directory")
+        self.active_link.unlink()
+        self._fsync_directory(self.root)
+        return target.name
+
     def active_request_hash(self, active: ActiveIdentity | None = None) -> str | None:
         identity = active or self.active_identity()
         if identity is None:
