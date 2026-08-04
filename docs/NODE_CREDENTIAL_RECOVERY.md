@@ -59,7 +59,8 @@ The wrapper:
 10. resets the mTLS runtime to `BEARER_ONLY`;
 11. starts the Agent;
 12. waits for a newly issued identity and `SHADOW_ACTIVE`;
-13. destroys the one-time recovery token and pending bearer file.
+13. destroys the working one-time recovery token, pending bearer and acceptance marker;
+14. destroys the backup copy of the recovery token only after full `SHADOW_ACTIVE` acceptance and refreshes the backup checksum manifest.
 
 ## Crash safety
 
@@ -80,9 +81,11 @@ This closes the server-commit/local-activation window:
 When the apply phase is ambiguous, the wrapper:
 
 - leaves the Agent stopped;
-- preserves the token, pending bearer and backup;
+- preserves the token, pending bearer and private token backup for the same safe retry;
 - prints only the private diagnostic path;
 - reports that rerunning the same command is safe.
+
+The private token backup is retained only while recovery is incomplete. It is removed after the Agent reaches `SHADOW_ACTIVE` and all success checks pass.
 
 Do not restore the old `agent.env` after the server has accepted recovery. The server transaction revokes the old credentials. Re-run the recovery command with the retained private state instead.
 
@@ -98,7 +101,7 @@ and proves:
 
 - Agent service is active;
 - mTLS runtime is `SHADOW_ACTIVE`;
-- one-time token is destroyed;
+- working and backup copies of the one-time token are destroyed;
 - pending bearer and acceptance marker are destroyed;
 - old certificate generations remain available for forensic review.
 
