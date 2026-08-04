@@ -5,6 +5,7 @@ from datetime import datetime, timedelta, timezone
 import json
 import os
 from pathlib import Path
+import stat
 from types import SimpleNamespace
 import sys
 import tempfile
@@ -198,9 +199,14 @@ class NodeRecoveryTests(unittest.TestCase):
         )
 
     def test_recovery_token_requires_exact_private_permissions(self) -> None:
-        os.chmod(self.token_file, 0o640)
-        with self.assertRaisesRegex(recovery.RecoveryError, "permissions must be 0600"):
-            self.client().check()
+        unsafe_metadata = SimpleNamespace(st_mode=stat.S_IFREG | 0o640)
+        with mock.patch.object(Path, "lstat", return_value=unsafe_metadata):
+            with self.assertRaisesRegex(recovery.RecoveryError, "permissions must be 0600"):
+                recovery.read_restricted_token(
+                    self.token_file,
+                    recovery.RECOVERY_TOKEN_PATTERN,
+                    "Recovery token",
+                )
 
 
 if __name__ == "__main__":
