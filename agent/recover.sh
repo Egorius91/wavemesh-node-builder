@@ -144,6 +144,17 @@ chmod 0600 "$backup_dir/service.after.txt"
 [[ ! -e /etc/wavemesh-agent/recovery.pending && ! -L /etc/wavemesh-agent/recovery.pending ]] || fail recovery_pending_not_destroyed
 [[ ! -e /etc/wavemesh-agent/recovery.accepted.json && ! -L /etc/wavemesh-agent/recovery.accepted.json ]] || fail recovery_marker_not_destroyed
 
+[[ -f "$backup_dir/recovery.token.before" && ! -L "$backup_dir/recovery.token.before" ]] || fail recovery_backup_token_missing
+rm -f -- "$backup_dir/recovery.token.before"
+[[ ! -e "$backup_dir/recovery.token.before" && ! -L "$backup_dir/recovery.token.before" ]] || fail recovery_backup_token_not_destroyed
+(
+  cd "$backup_dir"
+  find . -type f ! -name SHA256SUMS -print0 | sort -z | xargs -0 sha256sum > SHA256SUMS.next
+  chmod 0600 SHA256SUMS.next
+  mv -fT SHA256SUMS.next SHA256SUMS
+)
+printf 'node_recovery_backup_token_destroyed=yes\n'
+
 printf 'node_recovery_service_active=yes\n'
 printf 'node_recovery_mtls_state=SHADOW_ACTIVE\n'
 printf 'node_recovery_one_time_token_destroyed=yes\n'
