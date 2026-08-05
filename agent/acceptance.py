@@ -27,7 +27,7 @@ REQUIRED_HARDENING = (
     "NoNewPrivileges=true",
     "ProtectSystem=strict",
     "ProtectHome=true",
-    "ReadWritePaths=/etc/wavemesh-agent /etc/wavemesh-node",
+    "ReadWritePaths=/etc/wavemesh-agent /etc/wavemesh-node /var/lib/wavemesh-agent",
 )
 LEAK_PATTERNS = {
     "bearer_token": re.compile(r"\bwvn_[A-Za-z0-9_-]{20,}\b"),
