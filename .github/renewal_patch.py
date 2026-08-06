@@ -34,10 +34,12 @@ replace_once(
 )
 replace_once(
     agent,
-    '''            write_json_file(request_path, payload)
+    '''            output_path = Path(directory) / "material.json"
+            write_json_file(request_path, payload)
             completed = subprocess.run(
 ''',
-    '''            write_json_file(
+    '''            output_path = Path(directory) / "material.json"
+            write_json_file(
                 request_path,
                 {**payload, "operation": command_type},
             )
@@ -122,9 +124,9 @@ def update_entitlements(
             "totalGB": quota_bytes,
             "expiryTime": int(expires_at.timestamp() * 1000),
             "enable": True,
-            "tgId": integer(client.get("tgId", 0), 0, 9_223_372_036_854_775_807),
+            "tgId": integer(client.get("tgId") or 0, 0, 9_223_372_036_854_775_807),
             "subId": state["sub_id"],
-            "reset": integer(client.get("reset", 0), 0, 2_147_483_647),
+            "reset": integer(client.get("reset") or 0, 0, 2_147_483_647),
             "id": state["client_uuid"],
             "flow": str(client.get("flow") or ""),
         }
