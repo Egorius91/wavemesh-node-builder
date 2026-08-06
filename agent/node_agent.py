@@ -32,7 +32,7 @@ except ImportError:  # Preserve bearer-only compatibility during staged upgrades
     MtlsRuntimeConfig = None  # type: ignore[assignment,misc]
     NodeMtlsRuntime = None  # type: ignore[assignment,misc]
 
-AGENT_VERSION = "0.4.0-access-lifecycle"
+AGENT_VERSION = "0.5.0-access-entitlements"
 DEFAULT_ENV_PATH = Path("/etc/wavemesh-agent/agent.env")
 DEFAULT_RUNTIME_PATH = Path("/etc/wavemesh-agent/runtime.json")
 NODE_CONFIG_PATH = Path("/etc/wavemesh-node/config.json")
@@ -391,7 +391,7 @@ class NodeAgent:
                 {},
                 expected=(204,),
             )
-            material = self.execute_access_runtime(payload)
+            material = self.execute_access_runtime(command_type, payload)
             self.mtls_runtime.api_json(
                 "POST",
                 f"internal/v1/nodes/{self.config.node_id}/accesses/{payload['access_id']}/materialize",
@@ -418,7 +418,11 @@ class NodeAgent:
             if command:
                 self.report_access_command_failure(command, safe_error_code(type(exc).__name__))
 
-    def execute_access_runtime(self, payload: dict[str, Any]) -> dict[str, Any]:
+    def execute_access_runtime(
+        self,
+        command_type: str,
+        payload: dict[str, Any],
+    ) -> dict[str, Any]:
         if not self.config.access_runtime_path.is_file():
             raise AgentError("Access runtime is not installed")
         work_root = self.config.env_path.parent
@@ -427,7 +431,10 @@ class NodeAgent:
             os.chmod(directory, 0o700)
             request_path = Path(directory) / "request.json"
             output_path = Path(directory) / "material.json"
-            write_json_file(request_path, payload)
+            write_json_file(
+                request_path,
+                {**payload, "operation": command_type},
+            )
             completed = subprocess.run(
                 [
                     "/usr/bin/python3",
@@ -1079,7 +1086,11 @@ def validate_access_command(
     node_id: str,
 ) -> tuple[str, int, str, dict[str, Any]]:
     command_type = command.get("type")
-    if command_type not in {"access.provision", "access.replace_credential"}:
+    if command_type not in {
+        "access.provision",
+        "access.replace_credential",
+        "access.update_entitlements",
+    }:
         raise AgentError("Unsupported Node command type")
     if command.get("target_node_id") != node_id or command.get("schema_version") != 1:
         raise AgentError("Node command target or schema is invalid")
