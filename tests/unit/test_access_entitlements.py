@@ -35,6 +35,8 @@ AGENT_SPEC.loader.exec_module(node_agent)
 class FakePanel:
     clients: dict[str, dict] = {}
     updates: list[tuple[str, dict]] = []
+    adjustments: list[dict] = []
+    sticky_update_fields: set[str] = set()
 
     def __init__(self, _config, timeout=20):
         self.timeout = timeout
@@ -55,9 +57,30 @@ class FakePanel:
             return {"success": True, "obj": {"client": dict(client), "inboundIds": [3]}}
         if method == "POST" and path.startswith("/panel/api/clients/update/"):
             email = path.rsplit("/", 1)[-1]
-            self.updates.append((email, dict(payload or {})))
-            self.clients[email] = dict(payload or {})
+            incoming = dict(payload or {})
+            self.updates.append((email, dict(incoming)))
+            previous = dict(self.clients.get(email) or {})
+            for key in self.sticky_update_fields:
+                if key in previous:
+                    incoming[key] = previous[key]
+            previous.update(incoming)
+            self.clients[email] = previous
             return {"success": True, "obj": {}}
+        if method == "POST" and path == "/panel/api/clients/bulkAdjust":
+            adjustment = dict(payload or {})
+            self.adjustments.append(adjustment)
+            emails = adjustment.get("emails") or []
+            add_days = int(adjustment.get("addDays") or 0)
+            add_bytes = int(adjustment.get("addBytes") or 0)
+            adjusted = 0
+            for email in emails:
+                client = self.clients.get(email)
+                if client is None:
+                    continue
+                client["expiryTime"] = int(client.get("expiryTime") or 0) + add_days * runtime.DAY_MILLISECONDS
+                client["totalGB"] = max(0, int(client.get("totalGB") or 0) + add_bytes)
+                adjusted += 1
+            return {"success": True, "obj": {"adjusted": adjusted}}
         if method == "GET" and path.startswith("/panel/api/clients/subLinks/"):
             return {"success": True, "obj": ["vless://redacted"]}
         raise AssertionError((method, path, payload))
@@ -67,46 +90,67 @@ class AccessEntitlementTests(unittest.TestCase):
     def setUp(self) -> None:
         FakePanel.clients = {}
         FakePanel.updates = []
+        FakePanel.adjustments = []
+        FakePanel.sticky_update_fields = set()
+
+    @staticmethod
+    def previous_state() -> dict:
+        return {
+            "access_id": "access_12345678",
+            "desired_version": 3,
+            "panel_email": "wm_access_12345678_3",
+            "client_uuid": "65fecc02-7371-4e2c-b8dc-049c99a5f090",
+            "sub_id": "subscription_12345678",
+        }
+
+    @staticmethod
+    def config() -> dict:
+        return {
+            "network": {
+                "subscription": {"backend": "xui-native", "path": "sub-secure-native"},
+            },
+            "server": {"domain": "entry.example.invalid"},
+        }
+
+    @staticmethod
+    def request(*, device_limit=2, quota_bytes="2147483648") -> dict:
+        return {
+            "operation": "access.update_entitlements",
+            "access_id": "access_12345678",
+            "desired_version": 4,
+            "enabled": True,
+            "expires_at": "2026-10-05T09:19:08.033Z",
+            "device_limit": device_limit,
+            "quota_bytes": quota_bytes,
+        }
+
+    def seed(self, state_root: Path, *, expiry_ms: int, limit_ip: int, total_gb: int) -> dict:
+        previous = self.previous_state()
+        runtime.atomic_json(state_root / "access_12345678.3.json", previous)
+        FakePanel.clients[previous["panel_email"]] = {
+            "email": previous["panel_email"],
+            "id": previous["client_uuid"],
+            "subId": previous["sub_id"],
+            "limitIp": limit_ip,
+            "totalGB": total_gb,
+            "expiryTime": expiry_ms,
+            "enable": True,
+            "flow": "",
+        }
+        return previous
 
     def test_runtime_updates_entitlements_without_rotating_identity(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
             state_root = Path(directory)
-            previous = {
-                "access_id": "access_12345678",
-                "desired_version": 3,
-                "panel_email": "wm_access_12345678_3",
-                "client_uuid": "65fecc02-7371-4e2c-b8dc-049c99a5f090",
-                "sub_id": "subscription_12345678",
-            }
-            runtime.atomic_json(state_root / "access_12345678.3.json", previous)
-            FakePanel.clients[previous["panel_email"]] = {
-                "email": previous["panel_email"],
-                "id": previous["client_uuid"],
-                "subId": previous["sub_id"],
-                "limitIp": 1,
-                "totalGB": 1073741824,
-                "expiryTime": int(datetime(2026, 9, 5, tzinfo=timezone.utc).timestamp() * 1000),
-                "enable": True,
-                "flow": "",
-            }
-            request_value = {
-                "operation": "access.update_entitlements",
-                "access_id": "access_12345678",
-                "desired_version": 4,
-                "enabled": True,
-                "expires_at": "2026-10-05T09:19:08.033Z",
-                "device_limit": 2,
-                "quota_bytes": "2147483648",
-            }
-            config = {
-                "network": {
-                    "subscription": {"backend": "xui-native", "path": "sub-secure-native"},
-                },
-                "server": {"domain": "entry.example.invalid"},
-            }
+            previous = self.seed(
+                state_root,
+                expiry_ms=int(datetime(2026, 9, 5, tzinfo=timezone.utc).timestamp() * 1000),
+                limit_ip=1,
+                total_gb=1073741824,
+            )
 
             with mock.patch.object(runtime, "PanelClient", FakePanel):
-                material = runtime.update_entitlements(request_value, config, state_root)
+                material = runtime.update_entitlements(self.request(), self.config(), state_root)
 
             current = json.loads((state_root / "access_12345678.4.json").read_text())
             self.assertEqual(current["panel_email"], previous["panel_email"])
@@ -115,6 +159,7 @@ class AccessEntitlementTests(unittest.TestCase):
             self.assertEqual(material["desired_version"], 4)
             self.assertEqual(material["client_uuid"], previous["client_uuid"])
             self.assertEqual(len(FakePanel.updates), 1)
+            self.assertEqual(FakePanel.adjustments, [])
             update = FakePanel.updates[0][1]
             self.assertEqual(update["limitIp"], 2)
             self.assertEqual(update["totalGB"], 2147483648)
@@ -122,6 +167,96 @@ class AccessEntitlementTests(unittest.TestCase):
                 update["expiryTime"],
                 int(datetime.fromisoformat("2026-10-05T09:19:08.033+00:00").timestamp() * 1000),
             )
+
+    def test_runtime_retry_is_read_only_when_entitlements_already_match(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            state_root = Path(directory)
+            target_expiry = int(
+                datetime.fromisoformat("2026-10-05T09:19:08.033+00:00").timestamp() * 1000
+            )
+            previous = self.seed(
+                state_root,
+                expiry_ms=target_expiry,
+                limit_ip=1,
+                total_gb=0,
+            )
+
+            with mock.patch.object(runtime, "PanelClient", FakePanel):
+                material = runtime.update_entitlements(
+                    self.request(device_limit=1, quota_bytes="0"),
+                    self.config(),
+                    state_root,
+                )
+
+            self.assertEqual(material["client_uuid"], previous["client_uuid"])
+            self.assertEqual(FakePanel.updates, [])
+            self.assertEqual(FakePanel.adjustments, [])
+
+    def test_runtime_repairs_sticky_expiry_and_limited_to_unlimited_quota(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            state_root = Path(directory)
+            old_expiry = int(
+                datetime.fromisoformat("2026-09-05T09:19:08.033+00:00").timestamp() * 1000
+            )
+            target_expiry = int(
+                datetime.fromisoformat("2026-10-05T09:19:08.033+00:00").timestamp() * 1000
+            )
+            previous = self.seed(
+                state_root,
+                expiry_ms=old_expiry,
+                limit_ip=1,
+                total_gb=1073741824,
+            )
+            FakePanel.sticky_update_fields = {"expiryTime", "totalGB"}
+
+            with mock.patch.object(runtime, "PanelClient", FakePanel):
+                material = runtime.update_entitlements(
+                    self.request(device_limit=1, quota_bytes="0"),
+                    self.config(),
+                    state_root,
+                )
+
+            self.assertEqual(material["client_uuid"], previous["client_uuid"])
+            self.assertEqual(len(FakePanel.updates), 1)
+            self.assertEqual(
+                FakePanel.adjustments,
+                [{
+                    "emails": [previous["panel_email"]],
+                    "addDays": 30,
+                    "addBytes": -1073741824,
+                }],
+            )
+            final = FakePanel.clients[previous["panel_email"]]
+            self.assertEqual(final["expiryTime"], target_expiry)
+            self.assertEqual(final["limitIp"], 1)
+            self.assertEqual(final["totalGB"], 0)
+            self.assertEqual(final["id"], previous["client_uuid"])
+            self.assertEqual(final["subId"], previous["sub_id"])
+
+    def test_runtime_refuses_bulk_repair_when_expiry_delta_is_not_whole_days(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            state_root = Path(directory)
+            old_expiry = int(
+                datetime.fromisoformat("2026-09-05T10:19:08.033+00:00").timestamp() * 1000
+            )
+            self.seed(
+                state_root,
+                expiry_ms=old_expiry,
+                limit_ip=1,
+                total_gb=0,
+            )
+            FakePanel.sticky_update_fields = {"expiryTime"}
+
+            with mock.patch.object(runtime, "PanelClient", FakePanel):
+                with self.assertRaises(runtime.ProvisionError):
+                    runtime.update_entitlements(
+                        self.request(device_limit=1, quota_bytes="0"),
+                        self.config(),
+                        state_root,
+                    )
+
+            self.assertEqual(len(FakePanel.updates), 1)
+            self.assertEqual(FakePanel.adjustments, [])
 
     def test_agent_allowlists_entitlement_command_and_passes_operation_to_runtime(self) -> None:
         payload = {

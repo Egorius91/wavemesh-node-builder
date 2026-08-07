@@ -16,6 +16,7 @@ from urllib import error, parse, request
 import uuid
 
 SAFE_ID = re.compile(r"^[A-Za-z0-9_-]{8,128}$")
+DAY_MILLISECONDS = 24 * 60 * 60 * 1000
 
 
 class ProvisionError(RuntimeError):
@@ -141,6 +142,7 @@ def update_entitlements(
     expires_at = parse_time(request_value.get("expires_at"))
     device_limit = integer(request_value.get("device_limit"), 0, 10_000)
     quota_bytes = integer(request_value.get("quota_bytes"), 0, 9_223_372_036_854_775_807)
+    expires_at_ms = int(expires_at.timestamp() * 1000)
     if request_value.get("enabled") is not True:
         raise ProvisionError("Disabled entitlement updates are unsupported")
 
@@ -174,37 +176,82 @@ def update_entitlements(
     existing = get_client(panel, email)
     assert_matching_client(existing, state, inbound_ids)
 
-    raw_client = existing.get("client") if isinstance(existing, dict) else None
-    client = dict(raw_client if isinstance(raw_client, dict) else existing or {})
-    client.pop("uuid", None)
-    client.pop("inboundIds", None)
-    client.update(
-        {
-            "email": email,
-            "limitIp": device_limit,
-            "totalGB": quota_bytes,
-            "expiryTime": int(expires_at.timestamp() * 1000),
-            "enable": True,
-            "tgId": integer(client.get("tgId") or 0, 0, 9_223_372_036_854_775_807),
-            "subId": state["sub_id"],
-            "reset": integer(client.get("reset") or 0, 0, 2_147_483_647),
-            "id": state["client_uuid"],
-            "flow": str(client.get("flow") or ""),
-        }
-    )
-    panel.call(
-        "POST",
-        f"/panel/api/clients/update/{parse.quote(email, safe='')}",
-        client,
-    )
-    verified = get_client(panel, email)
-    assert_matching_client(verified, state, inbound_ids)
-    assert_entitlements(
-        verified,
-        expires_at_ms=int(expires_at.timestamp() * 1000),
+    verified = existing
+    if not entitlements_match(
+        existing,
+        expires_at_ms=expires_at_ms,
         device_limit=device_limit,
         quota_bytes=quota_bytes,
-    )
+    ):
+        raw_client = existing.get("client") if isinstance(existing, dict) else None
+        client = dict(raw_client if isinstance(raw_client, dict) else existing or {})
+        client.pop("uuid", None)
+        client.pop("inboundIds", None)
+        client.update(
+            {
+                "email": email,
+                "limitIp": device_limit,
+                "totalGB": quota_bytes,
+                "expiryTime": expires_at_ms,
+                "enable": True,
+                "tgId": integer(client.get("tgId") or 0, 0, 9_223_372_036_854_775_807),
+                "subId": state["sub_id"],
+                "reset": integer(client.get("reset") or 0, 0, 2_147_483_647),
+                "id": state["client_uuid"],
+                "flow": str(client.get("flow") or ""),
+            }
+        )
+        update_error: ProvisionError | None = None
+        try:
+            panel.call(
+                "POST",
+                f"/panel/api/clients/update/{parse.quote(email, safe='')}",
+                client,
+            )
+        except ProvisionError as exc:
+            update_error = exc
+
+        verified = get_client(panel, email)
+        assert_matching_client(verified, state, inbound_ids)
+        if not entitlements_match(
+            verified,
+            expires_at_ms=expires_at_ms,
+            device_limit=device_limit,
+            quota_bytes=quota_bytes,
+        ):
+            adjustment = safe_bulk_entitlement_adjustment(
+                verified,
+                expires_at_ms=expires_at_ms,
+                device_limit=device_limit,
+                quota_bytes=quota_bytes,
+            )
+            if adjustment is not None:
+                add_days, add_bytes = adjustment
+                if add_days != 0 or add_bytes != 0:
+                    panel.call(
+                        "POST",
+                        "/panel/api/clients/bulkAdjust",
+                        {
+                            "emails": [email],
+                            "addDays": add_days,
+                            "addBytes": add_bytes,
+                        },
+                    )
+                    verified = get_client(panel, email)
+                    assert_matching_client(verified, state, inbound_ids)
+
+        try:
+            assert_entitlements(
+                verified,
+                expires_at_ms=expires_at_ms,
+                device_limit=device_limit,
+                quota_bytes=quota_bytes,
+            )
+        except ProvisionError:
+            if update_error is not None:
+                raise update_error
+            raise
+
     links = panel.call(
         "GET",
         f"/panel/api/clients/subLinks/{parse.quote(str(state['sub_id']), safe='')}",
@@ -260,6 +307,59 @@ def assert_entitlements(
         or integer(client.get("totalGB"), 0, 9_223_372_036_854_775_807) != quota_bytes
     ):
         raise ProvisionError("3X-UI entitlement update was not verified")
+
+
+def entitlements_match(
+    record: dict[str, Any] | None,
+    *,
+    expires_at_ms: int,
+    device_limit: int,
+    quota_bytes: int,
+) -> bool:
+    try:
+        assert_entitlements(
+            record,
+            expires_at_ms=expires_at_ms,
+            device_limit=device_limit,
+            quota_bytes=quota_bytes,
+        )
+    except ProvisionError:
+        return False
+    return True
+
+
+def safe_bulk_entitlement_adjustment(
+    record: dict[str, Any] | None,
+    *,
+    expires_at_ms: int,
+    device_limit: int,
+    quota_bytes: int,
+) -> tuple[int, int] | None:
+    """Return an additive 3X-UI repair only when its semantics are unambiguous."""
+    if not record:
+        return None
+    client = record.get("client") if isinstance(record.get("client"), dict) else record
+    if client.get("enable") is not True:
+        return None
+    if integer(client.get("limitIp"), 0, 10_000) != device_limit:
+        return None
+
+    current_expiry_ms = integer(client.get("expiryTime"), 0, 9_223_372_036_854_775_807)
+    expiry_delta_ms = expires_at_ms - current_expiry_ms
+    if expiry_delta_ms % DAY_MILLISECONDS != 0:
+        return None
+    add_days = expiry_delta_ms // DAY_MILLISECONDS
+    if not -3650 <= add_days <= 3650:
+        return None
+
+    current_quota_bytes = integer(client.get("totalGB"), 0, 9_223_372_036_854_775_807)
+    if current_quota_bytes == quota_bytes:
+        add_bytes = 0
+    elif quota_bytes == 0 and current_quota_bytes > 0:
+        add_bytes = -current_quota_bytes
+    else:
+        return None
+    return add_days, add_bytes
 
 
 def cleanup_previous(request_value: dict[str, Any], config: dict[str, Any], state_root: Path) -> int:
