@@ -11,6 +11,9 @@ BACKUP_ROOT="${WAVEMESH_RECOVERY_BACKUP_ROOT:-/var/lib/wavemesh-agent/recovery-b
 LOCK_FILE="${WAVEMESH_RECOVERY_LOCK_FILE:-/run/lock/wavemesh-node-recovery.lock}"
 RECOVERY_CLIENT="$INSTALL_DIR/node_recovery.py"
 AGENT="$INSTALL_DIR/node_agent.py"
+STATE_DIR="$(dirname "$ENV_FILE")"
+RECOVERY_PENDING="$STATE_DIR/recovery.pending"
+LEGACY_ACCEPTED="$STATE_DIR/recovery.accepted.json"
 TLS_RUNTIME="/etc/wavemesh-agent/tls/runtime.json"
 
 fail() {
@@ -24,9 +27,17 @@ fail() {
 [[ -f "$RECOVERY_CLIENT" && ! -L "$RECOVERY_CLIENT" ]] || fail recovery_client_missing
 [[ -f "$AGENT" && ! -L "$AGENT" ]] || fail agent_missing
 [[ -f "$ENV_FILE" && ! -L "$ENV_FILE" ]] || fail agent_environment_missing
-[[ -f "$TOKEN_FILE" && ! -L "$TOKEN_FILE" ]] || fail recovery_token_missing
 [[ "$(stat -c '%a' "$ENV_FILE")" == "600" ]] || fail agent_environment_permissions
-[[ "$(stat -c '%a' "$TOKEN_FILE")" == "600" ]] || fail recovery_token_permissions
+[[ ! -e "$LEGACY_ACCEPTED" && ! -L "$LEGACY_ACCEPTED" ]] || fail legacy_recovery_state_present
+
+token_present=no
+if [[ -e "$TOKEN_FILE" || -L "$TOKEN_FILE" ]]; then
+  [[ -f "$TOKEN_FILE" && ! -L "$TOKEN_FILE" ]] || fail recovery_token_unsafe
+  [[ "$(stat -c '%a' "$TOKEN_FILE")" == "600" ]] || fail recovery_token_permissions
+  token_present=yes
+else
+  [[ -f "$RECOVERY_PENDING" && ! -L "$RECOVERY_PENDING" ]] || fail recovery_token_missing
+fi
 
 install -d -o root -g root -m 0700 "$(dirname "$LOCK_FILE")" "$BACKUP_ROOT"
 exec 9>"$LOCK_FILE"
@@ -47,15 +58,16 @@ fi
 printf 'node_recovery_service_was_active=%s\n' "$service_was_active"
 
 install -o root -g root -m 0600 "$ENV_FILE" "$backup_dir/agent.env.before"
-install -o root -g root -m 0600 "$TOKEN_FILE" "$backup_dir/recovery.token.before"
+if [[ "$token_present" == yes ]]; then
+  install -o root -g root -m 0600 "$TOKEN_FILE" "$backup_dir/recovery.token.before"
+fi
 if [[ -d /etc/wavemesh-agent/tls && ! -L /etc/wavemesh-agent/tls ]]; then
   tar --numeric-owner --xattrs --acls -C /etc/wavemesh-agent -cpf "$backup_dir/tls.before.tar" tls
   chmod 0600 "$backup_dir/tls.before.tar"
 fi
 for state_file in \
   /etc/wavemesh-agent/rotation.pending \
-  /etc/wavemesh-agent/recovery.pending \
-  /etc/wavemesh-agent/recovery.accepted.json; do
+  "$RECOVERY_PENDING"; do
   if [[ -f "$state_file" && ! -L "$state_file" ]]; then
     install -o root -g root -m 0600 "$state_file" "$backup_dir/${state_file##*/}.before"
   fi
@@ -141,11 +153,12 @@ systemctl show "$SERVICE" --property=ActiveState,SubState,MainPID,NRestarts > "$
 chmod 0600 "$backup_dir/service.after.txt"
 
 [[ ! -e "$TOKEN_FILE" && ! -L "$TOKEN_FILE" ]] || fail recovery_token_not_destroyed
-[[ ! -e /etc/wavemesh-agent/recovery.pending && ! -L /etc/wavemesh-agent/recovery.pending ]] || fail recovery_pending_not_destroyed
-[[ ! -e /etc/wavemesh-agent/recovery.accepted.json && ! -L /etc/wavemesh-agent/recovery.accepted.json ]] || fail recovery_marker_not_destroyed
+[[ ! -e "$RECOVERY_PENDING" && ! -L "$RECOVERY_PENDING" ]] || fail recovery_pending_not_destroyed
+[[ ! -e "$LEGACY_ACCEPTED" && ! -L "$LEGACY_ACCEPTED" ]] || fail legacy_recovery_state_present
 
-[[ -f "$backup_dir/recovery.token.before" && ! -L "$backup_dir/recovery.token.before" ]] || fail recovery_backup_token_missing
-rm -f -- "$backup_dir/recovery.token.before"
+if [[ -f "$backup_dir/recovery.token.before" && ! -L "$backup_dir/recovery.token.before" ]]; then
+  rm -f -- "$backup_dir/recovery.token.before"
+fi
 [[ ! -e "$backup_dir/recovery.token.before" && ! -L "$backup_dir/recovery.token.before" ]] || fail recovery_backup_token_not_destroyed
 (
   cd "$backup_dir"
@@ -158,6 +171,6 @@ printf 'node_recovery_backup_token_destroyed=yes\n'
 printf 'node_recovery_service_active=yes\n'
 printf 'node_recovery_mtls_state=SHADOW_ACTIVE\n'
 printf 'node_recovery_one_time_token_destroyed=yes\n'
-printf 'node_recovery_pending_secret_destroyed=yes\n'
+printf 'node_recovery_pending_state_destroyed=yes\n'
 printf 'node_recovery_old_generations_retained=yes\n'
 printf 'NODE_SCOPED_CREDENTIAL_RECOVERY=PASS\n'
