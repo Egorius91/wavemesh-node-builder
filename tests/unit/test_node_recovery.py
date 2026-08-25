@@ -333,6 +333,7 @@ class NodeRecoveryTests(unittest.TestCase):
 
     def test_restart_after_delivery_binding_retrieves_same_credential_then_acks(self) -> None:
         first = self.client()
+        initial_delivery = self.delivery()
 
         def crash_before_activation(*_args, **_kwargs):
             raise RuntimeError("simulated crash")
@@ -341,7 +342,7 @@ class NodeRecoveryTests(unittest.TestCase):
         with mock.patch.object(
             recovery.request,
             "urlopen",
-            return_value=FakeResponse(self.delivery(), 201),
+            return_value=FakeResponse(initial_delivery, 201),
         ):
             with self.assertRaisesRegex(RuntimeError, "simulated crash"):
                 first.apply()
@@ -359,7 +360,8 @@ class NodeRecoveryTests(unittest.TestCase):
             if req.method == "GET" and req.full_url.endswith(
                 f"/recover/certificates/{CREDENTIAL_ID}"
             ):
-                return FakeResponse(self.delivery(already_processed=True), 200)
+                replay = {**initial_delivery, "already_processed": True}
+                return FakeResponse(replay, 200)
             if req.method == "POST" and req.full_url.endswith(
                 f"/{CREDENTIAL_ID}/acknowledge"
             ):
