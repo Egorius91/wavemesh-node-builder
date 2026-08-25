@@ -23,10 +23,16 @@ TENANT_ID = "tenant_12345678"
 EXTERNAL_NODE_ID = "ru-spb1"
 OLD_TOKEN = "wvn_" + "o" * 40
 RECOVERY_TOKEN = "wvr_" + "r" * 40
+CSR = "-----BEGIN CERTIFICATE REQUEST-----\n" + "Q" * 96 + "\n-----END CERTIFICATE REQUEST-----\n"
+REQUEST_HASH = "a" * 64
+PUBLIC_KEY_HASH = "b" * 64
+CREDENTIAL_ID = "credential_12345678"
+CERTIFICATE = "-----BEGIN CERTIFICATE-----\nTEST\n-----END CERTIFICATE-----\n"
+CHAIN = "-----BEGIN CERTIFICATE-----\nCHAIN\n-----END CERTIFICATE-----\n"
 
 
 class FakeResponse:
-    def __init__(self, payload: dict[str, object], status: int = 201) -> None:
+    def __init__(self, payload: dict[str, object], status: int) -> None:
         self.status = status
         self.payload = payload
 
@@ -36,31 +42,143 @@ class FakeResponse:
     def __exit__(self, *_args):
         return False
 
-    def read(self) -> bytes:
-        return json.dumps(self.payload).encode("utf-8")
+    def read(self, amount: int = -1) -> bytes:
+        raw = json.dumps(self.payload).encode("utf-8")
+        return raw if amount < 0 else raw[:amount]
 
 
 class FakeMtlsState:
     def __init__(self, root: Path) -> None:
         self.root = root
-        self.deactivated = False
-        self.pending_ack = SimpleNamespace(credential_id="credential_12345678")
-        self.ack_cleared = False
+        self.pending_dir = root / "pending"
+        self.pending_dir.mkdir(parents=True, exist_ok=True)
+        self.pending_key = self.pending_dir / "client.key"
+        self.pending_csr = self.pending_dir / "client.csr"
+        self.pending_metadata = self.pending_dir / "metadata.json"
+        self.ack_path = root / "acknowledgement.pending.json"
+        self.active_path = root / "fake-active.json"
 
     def prepare_pending_request(self):
-        return SimpleNamespace(public_key_hash="b" * 64)
+        existing = [
+            self.pending_key.exists(),
+            self.pending_csr.exists(),
+            self.pending_metadata.exists(),
+        ]
+        if any(existing) and not all(existing):
+            raise RuntimeError("partial pending state")
+        if not any(existing):
+            self.pending_key.write_text("PRIVATE-KEY-PLACEHOLDER", encoding="utf-8")
+            self.pending_csr.write_text(CSR, encoding="utf-8")
+            self.pending_metadata.write_text(
+                json.dumps(
+                    {
+                        "request_hash": REQUEST_HASH,
+                        "public_key_hash": PUBLIC_KEY_HASH,
+                        "created_at": "2026-08-25T12:00:00.000Z",
+                    }
+                ),
+                encoding="utf-8",
+            )
+        metadata = json.loads(self.pending_metadata.read_text(encoding="utf-8"))
+        return SimpleNamespace(
+            csr_pem=self.pending_csr.read_text(encoding="utf-8"),
+            request_hash=metadata["request_hash"],
+            public_key_hash=metadata["public_key_hash"],
+            created_at=metadata["created_at"],
+        )
+
+    def record_pending_acknowledgement(
+        self,
+        credential_id: str,
+        request_hash: str,
+        delivery_expires_at: datetime,
+    ):
+        existing = self.pending_acknowledgement()
+        if existing is not None:
+            if (
+                existing.credential_id != credential_id
+                or existing.request_hash != request_hash
+                or existing.delivery_expires_at != delivery_expires_at
+            ):
+                raise RuntimeError("conflicting acknowledgement")
+            return existing
+        self.ack_path.write_text(
+            json.dumps(
+                {
+                    "credential_id": credential_id,
+                    "request_hash": request_hash,
+                    "delivery_expires_at": recovery.format_timestamp(delivery_expires_at),
+                }
+            ),
+            encoding="utf-8",
+        )
+        return self.pending_acknowledgement()
 
     def pending_acknowledgement(self):
-        return None if self.ack_cleared else self.pending_ack
+        if not self.ack_path.exists():
+            return None
+        value = json.loads(self.ack_path.read_text(encoding="utf-8"))
+        return SimpleNamespace(
+            credential_id=value["credential_id"],
+            request_hash=value["request_hash"],
+            delivery_expires_at=recovery.parse_timestamp(value["delivery_expires_at"]),
+        )
 
     def clear_pending_acknowledgement(self, credential_id: str):
-        if credential_id != self.pending_ack.credential_id:
+        pending = self.pending_acknowledgement()
+        if pending is None:
+            return
+        if pending.credential_id != credential_id:
             raise AssertionError("wrong acknowledgement")
-        self.ack_cleared = True
+        self.ack_path.unlink()
 
-    def deactivate_active_identity(self):
-        self.deactivated = True
-        return "c" * 24
+    def activate_pending_certificate(
+        self,
+        certificate_pem: str,
+        ca_bundle_pem: str,
+        expected_identity_uri: str,
+    ):
+        self.assert_delivery(certificate_pem, ca_bundle_pem, expected_identity_uri)
+        metadata = json.loads(self.pending_metadata.read_text(encoding="utf-8"))
+        self.active_path.write_text(
+            json.dumps(
+                {
+                    "generation": "c" * 24,
+                    "request_hash": metadata["request_hash"],
+                    "identity_uri": expected_identity_uri,
+                }
+            ),
+            encoding="utf-8",
+        )
+        self.pending_key.unlink()
+        self.pending_csr.unlink()
+        self.pending_metadata.unlink()
+        return SimpleNamespace(generation="c" * 24)
+
+    def assert_delivery(
+        self,
+        certificate_pem: str,
+        ca_bundle_pem: str,
+        expected_identity_uri: str,
+    ) -> None:
+        if certificate_pem != CERTIFICATE or ca_bundle_pem != CHAIN:
+            raise AssertionError("unexpected certificate delivery")
+        if not expected_identity_uri.endswith(f"/tenant/{TENANT_ID}/node/{NODE_ID}"):
+            raise AssertionError("unexpected identity URI")
+
+    def active_identity(self, expected_identity_uri: str | None = None):
+        if not self.active_path.exists():
+            return None
+        value = json.loads(self.active_path.read_text(encoding="utf-8"))
+        if expected_identity_uri is not None and value["identity_uri"] != expected_identity_uri:
+            raise RuntimeError("identity mismatch")
+        return SimpleNamespace(generation=value["generation"])
+
+    def active_request_hash(self, active=None):
+        del active
+        if not self.active_path.exists():
+            return None
+        return json.loads(self.active_path.read_text(encoding="utf-8"))["request_hash"]
 
 
 class NodeRecoveryTests(unittest.TestCase):
@@ -70,23 +188,31 @@ class NodeRecoveryTests(unittest.TestCase):
         self.env_file = self.root / "agent.env"
         self.token_file = self.root / "recovery.token"
         self.tls_root = self.root / "tls"
-        recovery.write_env_file(
-            self.env_file,
-            {
-                "WAVEMESH_API_BASE": "https://api.example.invalid/api",
-                "WAVEMESH_NODE_ID": NODE_ID,
-                "WAVEMESH_TENANT_ID": TENANT_ID,
-                "WAVEMESH_AGENT_TOKEN": OLD_TOKEN,
-                "WAVEMESH_AGENT_TOKEN_EXPIRES_AT": "2026-08-01T00:00:00.000Z",
-                "WAVEMESH_AGENT_MTLS_MODE": "shadow",
-                "WAVEMESH_AGENT_MTLS_STATE_ROOT": str(self.tls_root),
-            },
-        )
+        self._write_env()
         self.token_file.write_text(f"{RECOVERY_TOKEN}\n", encoding="utf-8")
         os.chmod(self.token_file, 0o600)
 
     def tearDown(self) -> None:
         self.temporary.cleanup()
+
+    def _write_env(self) -> None:
+        self.env_file.write_text(
+            "\n".join(
+                [
+                    "WAVEMESH_API_BASE=https://api.example.invalid/api",
+                    f"WAVEMESH_NODE_ID={NODE_ID}",
+                    f"WAVEMESH_TENANT_ID={TENANT_ID}",
+                    f"WAVEMESH_AGENT_TOKEN={OLD_TOKEN}",
+                    "WAVEMESH_AGENT_TOKEN_EXPIRES_AT=2026-08-01T00:00:00.000Z",
+                    "WAVEMESH_AGENT_MTLS_MODE=shadow",
+                    "WAVEMESH_AGENT_MTLS_ENVIRONMENT=staging",
+                    f"WAVEMESH_AGENT_MTLS_STATE_ROOT={self.tls_root}",
+                    "",
+                ]
+            ),
+            encoding="utf-8",
+        )
+        os.chmod(self.env_file, 0o600)
 
     def client(self) -> recovery.RecoveryClient:
         client = recovery.RecoveryClient(
@@ -97,106 +223,232 @@ class NodeRecoveryTests(unittest.TestCase):
         client.state = FakeMtlsState(self.tls_root)
         return client
 
-    def response(self, **overrides):
+    def delivery(self, **overrides):
+        now = datetime.now(timezone.utc)
         values: dict[str, object] = {
-            "node_id": NODE_ID,
-            "tenant_id": TENANT_ID,
-            "auth_mode": "temporary_bearer",
-            "expires_at": recovery.format_timestamp(
-                datetime.now(timezone.utc) + timedelta(hours=2)
-            ),
-            "recovery_state": "ENROLLING",
+            "credential_id": CREDENTIAL_ID,
+            "certificate": CERTIFICATE,
+            "chain": CHAIN,
+            "issuer_key_id": "issuer-key-12345678",
+            "lifecycle_status": "PENDING_ACKNOWLEDGEMENT",
+            "recovery_reason": "LOST_KEY",
+            "not_before": recovery.format_timestamp(now - timedelta(minutes=1)),
+            "expires_at": recovery.format_timestamp(now + timedelta(hours=24)),
+            "delivery_expires_at": recovery.format_timestamp(now + timedelta(minutes=15)),
+            "previous_valid_until": None,
             "already_processed": False,
         }
         values.update(overrides)
         return values
 
-    def test_apply_generates_bearer_locally_and_never_sends_raw_bearer(self) -> None:
-        captured = {}
+    def acknowledgement(self, **overrides):
+        values: dict[str, object] = {
+            "credential_id": CREDENTIAL_ID,
+            "lifecycle_status": "ACKNOWLEDGED",
+            "acknowledged_at": recovery.format_timestamp(datetime.now(timezone.utc)),
+            "already_processed": False,
+        }
+        values.update(overrides)
+        return values
+
+    def test_apply_posts_exact_csr_then_acknowledges_without_bearer_mutation(self) -> None:
+        captured: list[dict[str, object]] = []
 
         def open_request(req, timeout):
-            captured["authorization"] = req.headers.get("Authorization")
-            captured["body"] = json.loads(req.data.decode("utf-8"))
-            captured["timeout"] = timeout
-            return FakeResponse(self.response())
+            captured.append(
+                {
+                    "method": req.method,
+                    "url": req.full_url,
+                    "authorization": req.headers.get("Authorization"),
+                    "body": json.loads(req.data.decode("utf-8")) if req.data else None,
+                    "timeout": timeout,
+                }
+            )
+            if req.full_url.endswith("/recover/certificates"):
+                return FakeResponse(self.delivery(), 201)
+            if req.full_url.endswith(f"/{CREDENTIAL_ID}/acknowledge"):
+                return FakeResponse(self.acknowledgement(), 201)
+            raise AssertionError(f"unexpected URL: {req.full_url}")
 
         client = self.client()
         with mock.patch.object(recovery.request, "urlopen", side_effect=open_request):
             result = client.apply()
 
-        values = recovery.read_env_file(self.env_file)
-        new_token = values["WAVEMESH_AGENT_TOKEN"]
-        self.assertTrue(recovery.valid_token(new_token))
-        self.assertNotEqual(new_token, OLD_TOKEN)
-        self.assertEqual(captured["authorization"], f"Bearer {RECOVERY_TOKEN}")
-        self.assertEqual(captured["body"]["next_token_hash"], recovery.token_hash(new_token))
-        self.assertNotIn(new_token, json.dumps(captured["body"]))
-        self.assertEqual(captured["body"]["public_key_hash"], "b" * 64)
-        self.assertEqual(result["mtls_runtime_state"], "BEARER_ONLY")
-        self.assertTrue(result["active_generation_deactivated"])
+        self.assertEqual(
+            captured[0]["body"],
+            {"tenant_id": TENANT_ID, "node_id": NODE_ID, "csr": CSR},
+        )
+        self.assertEqual(captured[0]["method"], "POST")
+        self.assertEqual(captured[1]["method"], "POST")
+        self.assertEqual(captured[1]["body"], {})
+        self.assertTrue(
+            all(item["authorization"] == f"Bearer {RECOVERY_TOKEN}" for item in captured)
+        )
+        self.assertIn(f"WAVEMESH_AGENT_TOKEN={OLD_TOKEN}", self.env_file.read_text(encoding="utf-8"))
         self.assertFalse(self.token_file.exists())
-        self.assertFalse(client.pending_token_file.exists())
-        self.assertFalse(client.accepted_file.exists())
+        self.assertFalse(client.pending_file.exists())
+        self.assertIsNone(client.state.pending_acknowledgement())
         runtime = json.loads((self.tls_root / "runtime.json").read_text(encoding="utf-8"))
-        self.assertEqual(runtime["state"], "BEARER_ONLY")
+        self.assertEqual(runtime["state"], "SHADOW_READY")
+        rendered = json.dumps(result)
+        self.assertNotIn(RECOVERY_TOKEN, rendered)
+        self.assertNotIn(CSR, rendered)
+        self.assertNotIn(CERTIFICATE, rendered)
+        self.assertNotIn(CHAIN, rendered)
+        self.assertEqual(result["credential_id"], CREDENTIAL_ID)
 
-    def test_network_failure_keeps_same_private_pending_token_for_safe_retry(self) -> None:
-        client = self.client()
+    def test_ambiguous_post_keeps_same_csr_and_marker_for_retry(self) -> None:
+        first = self.client()
         with mock.patch.object(
             recovery.request,
             "urlopen",
             side_effect=recovery.error.URLError("offline"),
         ):
             with self.assertRaisesRegex(recovery.RecoveryError, "temporarily unreachable"):
+                first.apply()
+
+        marker = json.loads(first.pending_file.read_text(encoding="utf-8"))
+        first_csr = first.state.pending_csr.read_text(encoding="utf-8")
+        self.assertEqual(marker["request_hash"], REQUEST_HASH)
+        self.assertTrue(self.token_file.exists())
+
+        captured_bodies: list[dict[str, object]] = []
+
+        def retry(req, timeout):
+            del timeout
+            if req.full_url.endswith("/recover/certificates"):
+                body = json.loads(req.data.decode("utf-8"))
+                captured_bodies.append(body)
+                return FakeResponse(self.delivery(already_processed=True), 201)
+            if req.full_url.endswith(f"/{CREDENTIAL_ID}/acknowledge"):
+                return FakeResponse(self.acknowledgement(), 201)
+            raise AssertionError("unexpected recovery URL")
+
+        restarted = self.client()
+        with mock.patch.object(recovery.request, "urlopen", side_effect=retry):
+            restarted.apply()
+
+        self.assertEqual(captured_bodies, [{"tenant_id": TENANT_ID, "node_id": NODE_ID, "csr": first_csr}])
+        self.assertEqual(first_csr, CSR)
+
+    def test_restart_after_delivery_binding_retrieves_same_credential_then_acks(self) -> None:
+        first = self.client()
+
+        def crash_before_activation(*_args, **_kwargs):
+            raise RuntimeError("simulated crash")
+
+        first.state.activate_pending_certificate = crash_before_activation
+        with mock.patch.object(
+            recovery.request,
+            "urlopen",
+            return_value=FakeResponse(self.delivery(), 201),
+        ):
+            with self.assertRaisesRegex(RuntimeError, "simulated crash"):
+                first.apply()
+
+        marker = json.loads(first.pending_file.read_text(encoding="utf-8"))
+        self.assertEqual(marker["credential_id"], CREDENTIAL_ID)
+        self.assertIsNotNone(first.state.pending_acknowledgement())
+        self.assertTrue(first.state.pending_csr.exists())
+
+        calls: list[tuple[str, str]] = []
+
+        def resume(req, timeout):
+            del timeout
+            calls.append((req.method, req.full_url))
+            if req.method == "GET" and req.full_url.endswith(
+                f"/recover/certificates/{CREDENTIAL_ID}"
+            ):
+                return FakeResponse(self.delivery(already_processed=True), 200)
+            if req.method == "POST" and req.full_url.endswith(
+                f"/{CREDENTIAL_ID}/acknowledge"
+            ):
+                return FakeResponse(self.acknowledgement(), 201)
+            raise AssertionError("resume attempted a new certificate request")
+
+        restarted = self.client()
+        with mock.patch.object(recovery.request, "urlopen", side_effect=resume):
+            restarted.apply()
+
+        self.assertEqual([method for method, _ in calls], ["GET", "POST"])
+        self.assertFalse(self.token_file.exists())
+
+    def test_lost_ack_response_retries_only_same_ack_after_restart(self) -> None:
+        first = self.client()
+        calls = 0
+
+        def first_run(req, timeout):
+            nonlocal calls
+            del timeout
+            calls += 1
+            if req.full_url.endswith("/recover/certificates"):
+                return FakeResponse(self.delivery(), 201)
+            if req.full_url.endswith(f"/{CREDENTIAL_ID}/acknowledge"):
+                raise recovery.error.URLError("ack response lost")
+            raise AssertionError("unexpected URL")
+
+        with mock.patch.object(recovery.request, "urlopen", side_effect=first_run):
+            with self.assertRaisesRegex(recovery.RecoveryError, "temporarily unreachable"):
+                first.apply()
+
+        self.assertEqual(calls, 2)
+        self.assertFalse(first.state.pending_csr.exists())
+        self.assertIsNotNone(first.state.pending_acknowledgement())
+        self.assertTrue(first.pending_file.exists())
+        self.assertTrue(self.token_file.exists())
+        self.assertIsNotNone(first.state.active_identity(first.expected_identity_uri))
+
+        resumed_calls: list[str] = []
+
+        def retry_ack(req, timeout):
+            del timeout
+            resumed_calls.append(req.full_url)
+            if req.full_url.endswith(f"/{CREDENTIAL_ID}/acknowledge"):
+                return FakeResponse(
+                    self.acknowledgement(already_processed=True),
+                    200,
+                )
+            raise AssertionError("retry attempted certificate issuance or retrieval")
+
+        restarted = self.client()
+        with mock.patch.object(recovery.request, "urlopen", side_effect=retry_ack):
+            result = restarted.apply()
+
+        self.assertEqual(len(resumed_calls), 1)
+        self.assertTrue(resumed_calls[0].endswith(f"/{CREDENTIAL_ID}/acknowledge"))
+        self.assertTrue(result["acknowledgement_replayed"])
+        self.assertFalse(self.token_file.exists())
+        self.assertFalse(restarted.pending_file.exists())
+
+    def test_marker_request_hash_conflict_fails_before_network(self) -> None:
+        client = self.client()
+        with mock.patch.object(
+            recovery.request,
+            "urlopen",
+            side_effect=recovery.error.URLError("offline"),
+        ):
+            with self.assertRaises(recovery.RecoveryError):
                 client.apply()
 
-        first_pending = recovery.read_env_file(client.pending_token_file)[
-            "WAVEMESH_PENDING_RECOVERY_AGENT_TOKEN"
-        ]
-        self.assertTrue(self.token_file.exists())
-        self.assertFalse(client.accepted_file.exists())
+        marker = json.loads(client.pending_file.read_text(encoding="utf-8"))
+        marker["request_hash"] = "f" * 64
+        recovery.atomic_write_json(client.pending_file, marker, 0o600)
 
-        captured_hashes = []
-
-        def successful_retry(req, timeout):
-            del timeout
-            captured_hashes.append(json.loads(req.data.decode("utf-8"))["next_token_hash"])
-            return FakeResponse(self.response(already_processed=True))
-
-        with mock.patch.object(recovery.request, "urlopen", side_effect=successful_retry):
-            client.apply()
-
-        values = recovery.read_env_file(self.env_file)
-        self.assertEqual(values["WAVEMESH_AGENT_TOKEN"], first_pending)
-        self.assertEqual(captured_hashes, [recovery.token_hash(first_pending)])
-
-    def test_accepted_marker_finishes_locally_without_a_second_network_call(self) -> None:
-        client = self.client()
-        pending = recovery.generate_token()
-        recovery.write_env_file(
-            client.pending_token_file,
-            {"WAVEMESH_PENDING_RECOVERY_AGENT_TOKEN": pending},
-        )
-        accepted = {
-            "accepted_at": recovery.format_timestamp(datetime.now(timezone.utc)),
-            "already_processed": False,
-            "expires_at": recovery.format_timestamp(
-                datetime.now(timezone.utc) + timedelta(hours=2)
-            ),
-            "next_token_hash": recovery.token_hash(pending),
-            "node_id": NODE_ID,
-            "tenant_id": TENANT_ID,
-            "version": 1,
-        }
-        recovery.atomic_write_json(client.accepted_file, accepted, 0o600)
-
+        restarted = self.client()
         with mock.patch.object(recovery.request, "urlopen") as urlopen:
-            client.apply()
+            with self.assertRaisesRegex(
+                recovery.RecoveryError,
+                "does not match the pending CSR/private key",
+            ):
+                restarted.apply()
         urlopen.assert_not_called()
-        self.assertEqual(
-            recovery.read_env_file(self.env_file)["WAVEMESH_AGENT_TOKEN"],
-            pending,
-        )
+
+    def test_legacy_temporary_bearer_marker_fails_closed(self) -> None:
+        client = self.client()
+        client.legacy_accepted_file.write_text('{"version":1}', encoding="utf-8")
+        os.chmod(client.legacy_accepted_file, 0o600)
+        with self.assertRaisesRegex(recovery.RecoveryError, "Legacy temporary-bearer"):
+            client.check()
 
     def test_recovery_token_requires_exact_private_permissions(self) -> None:
         unsafe_metadata = SimpleNamespace(st_mode=stat.S_IFREG | 0o640)
