@@ -29,7 +29,7 @@ try:
         atomic_write_json,
         read_json_object,
     )
-except ImportError:  # pragma: no cover - package-style import in tests/tools
+except ImportError:  # pragma: no cover - package-style imports in tests/tools
     from .node_mtls_client import (
         CertificateLifecycleResult,
         MtlsApiError,
@@ -68,13 +68,14 @@ class MtlsAgentState(str, Enum):
 @dataclass(frozen=True)
 class MtlsRuntimeConfig:
     mode: str
-    bearer_api_base: str
+    bearer_api_base: str | None
     mtls_api_base: str | None
     node_id: str
     tenant_id: str
     environment: str
-    bearer_token: str
+    bearer_token: str | None
     state_root: Path
+    bearer_bootstrap_enabled: bool = True
     server_ca_file: Path | None = None
     request_timeout_seconds: int = 30
     rotate_before_seconds: int = 6 * 60 * 60
@@ -100,16 +101,19 @@ class MtlsRuntimeConfig:
             raise MtlsRuntimeError("Agent mTLS retry attempt limit is invalid")
         if not 0 <= self.retry_jitter_seconds <= 300:
             raise MtlsRuntimeError("Agent mTLS retry jitter is invalid")
-        MtlsClientConfig(
-            api_base=self.bearer_api_base,
-            node_id=self.node_id,
-            tenant_id=self.tenant_id,
-            environment=self.environment,
-            auth_mode="bearer",
-            bearer_token=self.bearer_token,
-            request_timeout_seconds=self.request_timeout_seconds,
-            state_root=self.state_root,
-        )
+        if self.bearer_bootstrap_enabled:
+            if not self.bearer_api_base:
+                raise MtlsRuntimeError("Bearer bootstrap API base is unavailable")
+            MtlsClientConfig(
+                api_base=self.bearer_api_base,
+                node_id=self.node_id,
+                tenant_id=self.tenant_id,
+                environment=self.environment,
+                auth_mode="bearer",
+                bearer_token=self.bearer_token,
+                request_timeout_seconds=self.request_timeout_seconds,
+                state_root=self.state_root,
+            )
         MtlsClientConfig(
             api_base=self.mtls_api_base,
             node_id=self.node_id,
@@ -148,7 +152,7 @@ class MtlsRuntimeStatus:
 
 
 class NodeMtlsRuntime:
-    """Orchestrate lifecycle work without owning the bearer Agent loop."""
+    """Orchestrate certificate lifecycle and authenticated mTLS transport."""
 
     def __init__(
         self,
@@ -196,13 +200,24 @@ class NodeMtlsRuntime:
                             "Pending certificate delivery expired before activation"
                         )
                     self._transition(MtlsAgentState.ENROLLING)
-                    lifecycle = self._bearer_lifecycle_client()
+                    lifecycle = (
+                        self._mtls_lifecycle_client()
+                        if not self.config.bearer_bootstrap_enabled
+                        and active is not None
+                        and active_expiry is not None
+                        and active_expiry > current
+                        else self._bearer_lifecycle_client()
+                    )
                     lifecycle.retrieve(pending_ack.credential_id)
                 self._mtls_lifecycle_client().acknowledge(pending_ack.credential_id)
                 self._clear_retry(MtlsAgentState.SHADOW_READY)
                 return self.status()
 
             if active is None or active_expiry is None or active_expiry <= current:
+                if not self.config.bearer_bootstrap_enabled:
+                    raise MtlsRuntimeError(
+                        "mTLS-only mode requires an active local identity; use node-scoped recovery"
+                    )
                 self._transition(MtlsAgentState.ENROLLING)
                 result = self._bearer_lifecycle_client().issue_or_rotate(agent_version)
                 self._mtls_lifecycle_client().acknowledge(result.credential_id)
@@ -232,7 +247,7 @@ class NodeMtlsRuntime:
             self._record_failure(exc.code, exc.retryable, current)
         except (MtlsClientError, MtlsRuntimeError) as exc:
             self._record_failure(type(exc).__name__.upper(), False, current)
-        except Exception as exc:  # noqa: BLE001 - isolate mTLS from bearer health
+        except Exception as exc:  # noqa: BLE001 - isolate lifecycle state from caller
             self._record_failure(type(exc).__name__.upper(), False, current)
         return self.status()
 
@@ -268,7 +283,7 @@ class NodeMtlsRuntime:
             self._record_failure(exc.code, exc.retryable, current)
         except (MtlsClientError, MtlsRuntimeError) as exc:
             self._record_failure(type(exc).__name__.upper(), False, current)
-        except Exception as exc:  # noqa: BLE001 - isolate mTLS from bearer health
+        except Exception as exc:  # noqa: BLE001 - isolate shadow heartbeat state
             self._record_failure(type(exc).__name__.upper(), False, current)
         return self.status()
 
@@ -278,6 +293,7 @@ class NodeMtlsRuntime:
         path: str,
         payload: dict[str, Any] | None,
         expected: tuple[int, ...],
+        headers: dict[str, str] | None = None,
     ) -> dict[str, Any]:
         """Send an authenticated mTLS request after verifying the active identity."""
         if self.config.mode != "shadow":
@@ -290,9 +306,16 @@ class NodeMtlsRuntime:
             path,
             payload,
             expected=expected,
+            headers=headers,
         )
 
     def _bearer_lifecycle_client(self) -> NodeCertificateLifecycleClient:
+        if (
+            not self.config.bearer_bootstrap_enabled
+            or not self.config.bearer_api_base
+            or not self.config.bearer_token
+        ):
+            raise MtlsRuntimeError("Bearer bootstrap is disabled for mTLS-only mode")
         client_config = MtlsClientConfig(
             api_base=self.config.bearer_api_base,
             node_id=self.config.node_id,

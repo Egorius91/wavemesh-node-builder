@@ -3,8 +3,8 @@
 
 The agent sends redacted heartbeat and topology health observations to WaveVPN
 SaaS. Access command execution is disabled by default and uses authenticated
-mTLS when explicitly enabled. Replacement bearer tokens are generated locally;
-SaaS receives only their SHA-256 hashes.
+mTLS when explicitly enabled. Bearer remains the compatibility default while
+primary mTLS mode never downgrades network requests to bearer.
 """
 
 from __future__ import annotations
@@ -27,16 +27,18 @@ from typing import Any
 from urllib import error, parse, request
 
 try:
-    from node_mtls_runtime import MtlsRuntimeConfig, NodeMtlsRuntime
+    from node_mtls_runtime import MtlsRuntimeConfig, MtlsRuntimeError, NodeMtlsRuntime
 except ImportError:  # Preserve bearer-only compatibility during staged upgrades.
     MtlsRuntimeConfig = None  # type: ignore[assignment,misc]
     NodeMtlsRuntime = None  # type: ignore[assignment,misc]
+    MtlsRuntimeError = RuntimeError  # type: ignore[assignment,misc]
 
-AGENT_VERSION = "0.5.0-access-entitlements"
+AGENT_VERSION = "0.6.0-mtls-primary"
 DEFAULT_ENV_PATH = Path("/etc/wavemesh-agent/agent.env")
 DEFAULT_RUNTIME_PATH = Path("/etc/wavemesh-agent/runtime.json")
 NODE_CONFIG_PATH = Path("/etc/wavemesh-node/config.json")
 TOKEN_PREFIX = "wvn_"
+AUTH_MODES = {"bearer", "bootstrap-mtls", "mtls"}
 FORBIDDEN_KEY_PARTS = (
     "authorization",
     "cookie",
@@ -81,8 +83,9 @@ class AgentConfig:
     api_base: str
     node_id: str
     tenant_id: str
-    agent_token: str
-    token_expires_at: datetime
+    auth_mode: str
+    agent_token: str | None
+    token_expires_at: datetime | None
     mode: str
     observed_version: int
     heartbeat_seconds: int
@@ -114,8 +117,6 @@ class AgentConfig:
             "WAVEMESH_API_BASE",
             "WAVEMESH_NODE_ID",
             "WAVEMESH_TENANT_ID",
-            "WAVEMESH_AGENT_TOKEN",
-            "WAVEMESH_AGENT_TOKEN_EXPIRES_AT",
         )
         missing = [key for key in required if not values.get(key)]
         if missing:
@@ -125,9 +126,26 @@ class AgentConfig:
         if mode != "observe-only":
             raise AgentError("Only WAVEMESH_AGENT_MODE=observe-only is supported")
 
-        token = values["WAVEMESH_AGENT_TOKEN"]
-        if not valid_token(token):
+        auth_mode = values.get("WAVEMESH_AGENT_AUTH_MODE", "bearer")
+        if auth_mode not in AUTH_MODES:
+            raise AgentError(
+                "WAVEMESH_AGENT_AUTH_MODE must be bearer, bootstrap-mtls or mtls"
+            )
+
+        token_raw = values.get("WAVEMESH_AGENT_TOKEN") or None
+        expiry_raw = values.get("WAVEMESH_AGENT_TOKEN_EXPIRES_AT") or None
+        bearer_required = auth_mode in {"bearer", "bootstrap-mtls"}
+        if bearer_required and (not token_raw or not expiry_raw):
+            raise AgentError(
+                "Bearer/bootstrap authentication requires WAVEMESH_AGENT_TOKEN and WAVEMESH_AGENT_TOKEN_EXPIRES_AT"
+            )
+        if bool(token_raw) != bool(expiry_raw):
+            raise AgentError("Bearer token and expiry must be configured together")
+        if token_raw and not valid_token(token_raw):
             raise AgentError("WAVEMESH_AGENT_TOKEN has an invalid format")
+
+        agent_token = token_raw if bearer_required else None
+        token_expires_at = parse_timestamp(expiry_raw) if bearer_required and expiry_raw else None
 
         retry_base = bounded_int(
             values.get("WAVEMESH_AGENT_ROTATION_RETRY_BASE_SECONDS"),
@@ -147,6 +165,8 @@ class AgentConfig:
         mtls_mode = values.get("WAVEMESH_AGENT_MTLS_MODE", "disabled")
         if mtls_mode not in {"disabled", "shadow"}:
             raise AgentError("WAVEMESH_AGENT_MTLS_MODE must be disabled or shadow")
+        if auth_mode in {"bootstrap-mtls", "mtls"} and mtls_mode != "shadow":
+            raise AgentError("mTLS primary authentication requires WAVEMESH_AGENT_MTLS_MODE=shadow")
         mtls_api_base = values.get("WAVEMESH_AGENT_MTLS_API_BASE") or None
         if mtls_mode == "shadow" and (
             not mtls_api_base
@@ -163,8 +183,9 @@ class AgentConfig:
             api_base=values["WAVEMESH_API_BASE"].rstrip("/"),
             node_id=values["WAVEMESH_NODE_ID"],
             tenant_id=values["WAVEMESH_TENANT_ID"],
-            agent_token=token,
-            token_expires_at=parse_timestamp(values["WAVEMESH_AGENT_TOKEN_EXPIRES_AT"]),
+            auth_mode=auth_mode,
+            agent_token=agent_token,
+            token_expires_at=token_expires_at,
             mode=mode,
             observed_version=bounded_int(values.get("WAVEMESH_OBSERVED_VERSION"), 0, 0, 2_147_483_647),
             heartbeat_seconds=bounded_int(values.get("WAVEMESH_AGENT_HEARTBEAT_SECONDS"), 60, 15, 3600),
@@ -244,6 +265,8 @@ class AgentConfig:
         return self.env_path.with_name("rotation.pending")
 
     def save_rotated_token(self, token: str, expires_at: datetime) -> None:
+        if self.auth_mode == "mtls":
+            raise AgentError("Bearer credential rotation is disabled in mTLS-only mode")
         values = read_env_file(self.env_path)
         values["WAVEMESH_AGENT_TOKEN"] = token
         values["WAVEMESH_AGENT_TOKEN_EXPIRES_AT"] = format_timestamp(expires_at)
@@ -298,9 +321,6 @@ class NodeAgent:
                     self.collect_and_send_observation()
                     next_observation = time.monotonic() + self.config.observation_seconds
                 except ApiError as exc:
-                    # Local collection already updated last_health_state. A bearer
-                    # delivery failure must not make the succeeding mTLS heartbeat
-                    # advertise a healthy command-ready node as degraded.
                     next_observation = time.monotonic() + min(60, self.config.observation_seconds)
                     LOG.warning(
                         "Health observation failed: status=%s code=%s retryable=%s",
@@ -339,7 +359,7 @@ class NodeAgent:
         try:
             status = self.mtls_runtime.lifecycle_cycle(AGENT_VERSION)
             self._record_mtls_status(status.capability())
-        except Exception as exc:  # noqa: BLE001 - bearer health must remain independent
+        except Exception as exc:  # noqa: BLE001 - network loop isolation
             self._record_mtls_status(
                 {
                     "mode": "shadow",
@@ -351,12 +371,12 @@ class NodeAgent:
             )
 
     def run_mtls_shadow_heartbeat(self, payload: dict[str, Any]) -> None:
-        if self.mtls_runtime is None:
+        if self.config.auth_mode != "bearer" or self.mtls_runtime is None:
             return
         try:
             status = self.mtls_runtime.shadow_heartbeat(payload)
             self._record_mtls_status(status.capability())
-        except Exception as exc:  # noqa: BLE001 - bearer health must remain independent
+        except Exception as exc:  # noqa: BLE001 - bearer compatibility isolation
             self._record_mtls_status(
                 {
                     "mode": "shadow",
@@ -512,31 +532,40 @@ class NodeAgent:
             return
         self.last_mtls_status = dict(status)
         LOG.info(
-            "mTLS shadow state changed: state=%s retry_attempts=%s code=%s",
+            "mTLS state changed: state=%s retry_attempts=%s code=%s",
             safe_text(status.get("state"), 32),
             safe_int(status.get("retry_attempts"), 0, 32),
             safe_text(status.get("code"), 96) or "none",
         )
 
+    def _bearer_expiry(self) -> datetime:
+        if self.config.token_expires_at is None:
+            raise AgentError("Bearer token expiry is unavailable")
+        return self.config.token_expires_at
+
     def rotation_schedule_jitter_seconds(self) -> int:
         return deterministic_jitter_seconds(
             self.config.node_id,
-            self.config.token_expires_at,
+            self._bearer_expiry(),
             self.config.rotation_jitter_seconds,
             namespace="rotation-schedule",
         )
 
     def rotation_due_at(self) -> datetime:
-        return self.config.token_expires_at - timedelta(seconds=self.config.rotate_before_seconds) + timedelta(
+        return self._bearer_expiry() - timedelta(seconds=self.config.rotate_before_seconds) + timedelta(
             seconds=self.rotation_schedule_jitter_seconds()
         )
 
     def rotation_is_due(self, now: datetime) -> bool:
+        if self.config.auth_mode == "mtls":
+            return False
         if self.config.pending_rotation_path.is_file():
             return True
         return now >= self.rotation_due_at()
 
     def rotate_if_due(self) -> None:
+        if self.config.auth_mode == "mtls":
+            return
         now = datetime.now(timezone.utc)
         self.record_rotation_schedule()
         if not self.rotation_is_due(now):
@@ -581,7 +610,10 @@ class NodeAgent:
         LOG.info("Node credential rotated; expires_at=%s", format_timestamp(expires_at))
 
     def record_rotation_schedule(self) -> None:
-        expires_at = format_timestamp(self.config.token_expires_at)
+        if self.config.auth_mode == "mtls":
+            return
+        expires_at_value = self._bearer_expiry()
+        expires_at = format_timestamp(expires_at_value)
         due_at = format_timestamp(self.rotation_due_at())
         jitter = self.rotation_schedule_jitter_seconds()
         changed = any(
@@ -599,7 +631,9 @@ class NodeAgent:
         write_json_file(self.config.runtime_path, self.runtime)
 
     def rotation_retry_at(self) -> datetime | None:
-        current_expiry = format_timestamp(self.config.token_expires_at)
+        if self.config.auth_mode == "mtls":
+            return None
+        current_expiry = format_timestamp(self._bearer_expiry())
         if self.runtime.get("rotation_retry_credential_expires_at") != current_expiry:
             self.clear_rotation_retry_state()
             return None
@@ -613,7 +647,10 @@ class NodeAgent:
             return None
 
     def schedule_rotation_retry(self, now: datetime, code: str, retryable: bool) -> None:
-        current_expiry = format_timestamp(self.config.token_expires_at)
+        if self.config.auth_mode == "mtls":
+            raise AgentError("Bearer rotation retry is disabled in mTLS-only mode")
+        expires_at = self._bearer_expiry()
+        current_expiry = format_timestamp(expires_at)
         previous_attempts = 0
         if self.runtime.get("rotation_retry_credential_expires_at") == current_expiry:
             previous_attempts = safe_int(self.runtime.get("rotation_retry_attempts"), 0, 1_000_000)
@@ -624,7 +661,7 @@ class NodeAgent:
                 self.config.rotation_retry_max_seconds,
                 attempts,
                 self.config.node_id,
-                self.config.token_expires_at,
+                expires_at,
             )
         else:
             delay = self.config.rotation_retry_max_seconds
@@ -656,6 +693,8 @@ class NodeAgent:
             write_json_file(self.config.runtime_path, self.runtime)
 
     def load_or_create_pending_replacement(self) -> str:
+        if self.config.auth_mode == "mtls":
+            raise AgentError("Bearer replacement is disabled in mTLS-only mode")
         path = self.config.pending_rotation_path
         if path.is_file():
             values = read_env_file(path)
@@ -723,6 +762,7 @@ class NodeAgent:
         )
         capabilities = {
             "mode": "access_lifecycle" if self.config.command_mode == "access" else "observe_only",
+            "auth_mode": self.config.auth_mode,
             "command_polling": command_ready,
             "command_execution": command_ready,
             "access_lifecycle": command_ready,
@@ -759,6 +799,32 @@ class NodeAgent:
         expected: tuple[int, ...],
         headers: dict[str, str] | None = None,
     ) -> dict[str, Any]:
+        if self.config.auth_mode in {"bootstrap-mtls", "mtls"}:
+            if self.mtls_runtime is None:
+                raise AgentError("mTLS primary transport is not configured")
+            if self.config.auth_mode == "mtls":
+                return self.mtls_runtime.api_json(
+                    method,
+                    path,
+                    payload,
+                    expected=expected,
+                    headers=headers,
+                )
+            try:
+                return self.mtls_runtime.api_json(
+                    method,
+                    path,
+                    payload,
+                    expected=expected,
+                    headers=headers,
+                )
+            except MtlsRuntimeError:
+                # Bootstrap mode may use bearer only while no usable mTLS identity exists.
+                # TLS/auth/network failures from an active identity are not downgraded.
+                pass
+
+        if not self.config.agent_token:
+            raise AgentError("Bearer authentication is unavailable")
         body = json.dumps(payload, separators=(",", ":"), ensure_ascii=False).encode("utf-8")
         request_headers = {
             "Authorization": f"Bearer {self.config.agent_token}",
@@ -1046,13 +1112,14 @@ def build_mtls_runtime(config: AgentConfig) -> Any | None:
     return NodeMtlsRuntime(
         MtlsRuntimeConfig(
             mode=config.mtls_mode,
-            bearer_api_base=config.api_base,
+            bearer_api_base=(config.api_base if config.auth_mode != "mtls" else None),
             mtls_api_base=config.mtls_api_base,
             node_id=config.node_id,
             tenant_id=config.tenant_id,
             environment=config.mtls_environment,
             bearer_token=config.agent_token,
             state_root=config.mtls_state_root,
+            bearer_bootstrap_enabled=config.auth_mode != "mtls",
             server_ca_file=config.mtls_server_ca_file,
             request_timeout_seconds=config.request_timeout_seconds,
             rotate_before_seconds=config.mtls_rotate_before_seconds,
@@ -1107,7 +1174,7 @@ def validate_access_command(
         "device_limit",
         "quota_bytes",
     }:
-        raise AgentError("Access command payload is invalid")
+        raise AgentError("Node command payload is invalid")
     if payload.get("enabled") is not True:
         raise AgentError("Disabled access provisioning is unsupported")
     safe_id(payload.get("access_id"), "access_id")
@@ -1185,9 +1252,14 @@ def main() -> int:
                 {
                     "ok": True,
                     "mode": config.mode,
+                    "auth_mode": config.auth_mode,
                     "node_id": config.node_id,
                     "tenant_id": config.tenant_id,
-                    "token_expires_at": format_timestamp(config.token_expires_at),
+                    "token_expires_at": (
+                        format_timestamp(config.token_expires_at)
+                        if config.token_expires_at is not None
+                        else None
+                    ),
                     "rotation_jitter_seconds": config.rotation_jitter_seconds,
                     "rotation_retry_base_seconds": config.rotation_retry_base_seconds,
                     "rotation_retry_max_seconds": config.rotation_retry_max_seconds,
