@@ -71,9 +71,15 @@ ENV_FILE="${WAVEMESH_AGENT_ENV:-$ETC_DIR/agent.env}"
 
 if [[ "$BACKUP_ID" == latest ]]; then
   shopt -s nullglob
-  backups=("$BACKUP_ROOT"/*)
+  backups=()
+  for candidate in "$BACKUP_ROOT"/*; do
+    backup_name="${candidate##*/}"
+    [[ -d "$candidate" && ! -L "$candidate" ]] || continue
+    [[ "$backup_name" =~ ^[0-9]{8}T[0-9]{6}Z-[0-9]+$ ]] || continue
+    backups+=("$candidate")
+  done
   shopt -u nullglob
-  [[ "${#backups[@]}" -gt 0 ]] || fail "No Agent backups are available"
+  [[ "${#backups[@]}" -gt 0 ]] || fail "No canonical Agent backups are available"
   backup_dir="${backups[${#backups[@]}-1]}"
 else
   [[ "$BACKUP_ID" =~ ^[0-9]{8}T[0-9]{6}Z-[0-9]+$ ]] || fail "Backup ID is invalid"

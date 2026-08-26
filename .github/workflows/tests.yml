@@ -34,6 +34,7 @@ jobs:
           bash tests/integration/test_xui_api.sh
           bash tests/smoke/node_agent_unit_hardening.sh
           bash tests/smoke/node_agent_installer.sh
+          bash tests/smoke/node_agent_rollback_latest.sh
           bash -n bin/wavemesh agent/*.sh scripts/commands/*.sh scripts/lib/*.sh
       - name: Patch hygiene
         run: git diff --check
