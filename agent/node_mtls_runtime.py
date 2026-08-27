@@ -116,7 +116,7 @@ class MtlsRuntimeConfig:
             )
         MtlsClientConfig(
             api_base=self.mtls_api_base,
-            node_id=self.config.node_id if False else self.node_id,
+            node_id=self.node_id,
             tenant_id=self.tenant_id,
             environment=self.environment,
             auth_mode="mtls",
