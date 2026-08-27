@@ -301,13 +301,21 @@ class NodeMtlsRuntime:
         active = self.state.active_identity(self._expected_identity_uri())
         if active is None or parse_certificate_expiry(active) <= datetime.now(timezone.utc):
             raise MtlsRuntimeError("Active mTLS identity is unavailable")
-        return self._mtls_transport().api_json(
+        response = self._mtls_transport().api_json(
             method,
             path,
             payload,
             expected=expected,
             headers=headers,
         )
+        heartbeat_path = f"internal/v1/nodes/{self.config.node_id}/heartbeat"
+        if (
+            method.upper() == "POST"
+            and path.lstrip("/") == heartbeat_path
+            and self.status().state == MtlsAgentState.SHADOW_READY
+        ):
+            self._clear_retry(MtlsAgentState.SHADOW_ACTIVE)
+        return response
 
     def _bearer_lifecycle_client(self) -> NodeCertificateLifecycleClient:
         if (
