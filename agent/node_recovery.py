@@ -388,7 +388,11 @@ class RecoveryClient:
         if not isinstance(already_processed, bool):
             raise RecoveryError("Recovery replay metadata is invalid")
         recovery_reason = response.get("recovery_reason")
-        if recovery_reason is not None and recovery_reason not in {"LOST_KEY", "COMPROMISED_KEY"}:
+        if recovery_reason is not None and recovery_reason not in {
+            "LOST_KEY",
+            "COMPROMISED_KEY",
+            "CERTIFICATE_EXPIRED",
+        }:
             raise RecoveryError("Recovery reason metadata is invalid")
         return {
             "credential_id": credential_id,
