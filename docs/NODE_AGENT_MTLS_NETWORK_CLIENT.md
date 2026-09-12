@@ -42,9 +42,19 @@ BLOCKED
 
 Failures in the mTLS lifecycle or shadow heartbeat are isolated from bearer
 token rotation, observation, and heartbeat. A retryable failure uses bounded
-exponential backoff. The attempt limit moves the mTLS state to
-`BLOCKED`; there is no infinite request loop. Retry jitter defaults to
-zero and, when enabled, is deterministic for Node ID and attempt number.
+exponential backoff. When lifecycle work has a valid local mTLS identity,
+exhausting the burst attempt limit schedules further attempts at the configured
+maximum retry interval. The capped attempt count and next retry time survive
+restart. Each cooldown attempt revalidates the local identity; an expired or
+missing identity blocks before any request, including bearer bootstrap.
+Pending CSR/key and acknowledgement handling remain unchanged, so a retry
+continues the persisted request rather than creating a replacement operation.
+
+Nonretryable failures, initial enrollment without a valid identity, and shadow
+heartbeat retry exhaustion still enter `BLOCKED`. Existing persisted `BLOCKED`
+states are not reset by this change and require diagnosis through the applicable
+recovery procedure. Retry jitter before cooldown defaults to zero and, when
+enabled, is deterministic for Node ID and attempt number.
 
 ## Configuration
 
