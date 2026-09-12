@@ -188,9 +188,13 @@ class NodeMtlsRuntime:
         if not self._retry_due(current):
             return self.status()
 
+        renewal_retry = False
         try:
             active = self.state.active_identity(self._expected_identity_uri())
             active_expiry = parse_certificate_expiry(active) if active else None
+            renewal_retry = active_expiry is not None and active_expiry > current
+            if self.status().retry_attempts >= self.config.retry_max_attempts and not renewal_retry:
+                raise MtlsRuntimeError("Renewal retry requires a valid local mTLS identity")
             pending_ack = self.state.pending_acknowledgement()
 
             if pending_ack is not None:
@@ -244,7 +248,7 @@ class NodeMtlsRuntime:
             self._clear_retry(MtlsAgentState.SHADOW_READY)
             return self.status()
         except MtlsApiError as exc:
-            self._record_failure(exc.code, exc.retryable, current)
+            self._record_failure(exc.code, exc.retryable, current, renewal_retry=renewal_retry)
         except (MtlsClientError, MtlsRuntimeError) as exc:
             self._record_failure(type(exc).__name__.upper(), False, current)
         except Exception as exc:  # noqa: BLE001 - isolate lifecycle state from caller
@@ -367,15 +371,28 @@ class NodeMtlsRuntime:
             return False
         return status.retry_at is None or now >= status.retry_at
 
-    def _record_failure(self, code: str, retryable: bool, now: datetime) -> None:
+    def _record_failure(
+        self, code: str, retryable: bool, now: datetime, *, renewal_retry: bool = False,
+    ) -> None:
         safe_code = sanitize_code(code)
         previous = self.status().retry_attempts
         attempts = previous + 1
-        if not retryable or attempts >= self.config.retry_max_attempts:
+        if not retryable or (attempts >= self.config.retry_max_attempts and not renewal_retry):
             self._write_runtime(
                 MtlsAgentState.BLOCKED,
                 attempts=min(attempts, self.config.retry_max_attempts),
                 retry_at=None,
+                code=safe_code,
+            )
+            return
+
+        # A valid identity permits paced renewal recovery after the burst budget.
+        # Keep the counter bounded and persist the cooldown across restarts.
+        if attempts >= self.config.retry_max_attempts:
+            self._write_runtime(
+                MtlsAgentState.FALLBACK,
+                attempts=self.config.retry_max_attempts,
+                retry_at=now + timedelta(seconds=self.config.retry_max_seconds),
                 code=safe_code,
             )
             return

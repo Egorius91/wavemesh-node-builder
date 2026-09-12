@@ -4,9 +4,12 @@ from __future__ import annotations
 from datetime import datetime, timedelta, timezone
 import importlib.util
 import json
+import os
 from pathlib import Path
+import shutil
 import ssl
 import sys
+import tempfile
 import unittest
 from unittest import mock
 from urllib import error
@@ -102,6 +105,31 @@ def config(auth_mode="bearer", bearer=TOKEN):
 
 
 class NodeMtlsClientTests(unittest.TestCase):
+    @unittest.skipUnless(os.environ.get("OPENSSL_BINARY") or shutil.which("openssl"), "OpenSSL is required")
+    def test_lost_response_reuses_persisted_csr_and_idempotency_key_after_restart(self) -> None:
+        openssl = os.environ.get("OPENSSL_BINARY") or shutil.which("openssl")
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory) / "tls"
+            state = state_module.NodeMtlsState(root, openssl_binary=openssl)
+            transport = mock.Mock()
+            transport.api_json.side_effect = client.MtlsApiError(0, "NETWORK_OR_TLS_ERROR", True)
+            lifecycle = client.NodeCertificateLifecycleClient(config("mtls", None), state=state, transport=transport)
+            with self.assertRaises(client.MtlsApiError):
+                lifecycle.issue_or_rotate("0.6.0-test")
+            paths = (state.pending_key, state.pending_csr, state.pending_metadata)
+            persisted = tuple(path.read_bytes() for path in paths)
+
+            # Recreate both client and on-disk state reader after a lost response.
+            restarted_state = state_module.NodeMtlsState(root, openssl_binary=openssl)
+            lifecycle = client.NodeCertificateLifecycleClient(
+                config("mtls", None), state=restarted_state, transport=transport,
+            )
+            with self.assertRaises(client.MtlsApiError):
+                lifecycle.issue_or_rotate("0.6.0-test")
+            self.assertEqual(transport.api_json.call_count, 2)
+            self.assertEqual(transport.api_json.call_args_list[0], transport.api_json.call_args_list[1])
+            self.assertEqual(persisted, tuple(path.read_bytes() for path in paths))
+
     def test_current_bearer_default_and_pure_mtls_modes_remain_distinct(self) -> None:
         configured = config()
         self.assertEqual(configured.auth_mode, "bearer")

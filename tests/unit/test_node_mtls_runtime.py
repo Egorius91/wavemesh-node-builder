@@ -309,6 +309,80 @@ class NodeMtlsRuntimeTests(unittest.TestCase):
             self.assertNotIn(TOKEN, encoded)
             self.assertNotIn("BEGIN CERTIFICATE", encoded)
 
+    def test_renewal_cooldown_survives_restart_and_recovers(self) -> None:
+        for pending in (False, True):
+            with self.subTest(pending_ack=pending), tempfile.TemporaryDirectory() as directory:
+                root = Path(directory) / "tls"
+                state = FakeState(root)
+                state.active = object()
+                state.active_hash = "b" * 64
+                if pending:
+                    state.pending_ack = SimpleNamespace(
+                        credential_id="credential_mtls_123", request_hash="b" * 64,
+                        delivery_expires_at=NOW + timedelta(minutes=15),
+                    )
+                harness = LifecycleHarness(state, runtime.MtlsApiError(503, "ISSUER_UNAVAILABLE", True))
+                config = configured(root, bearer_bootstrap_enabled=False)
+                instance = runtime.NodeMtlsRuntime(config, state=state)
+                with (
+                    mock.patch.object(runtime, "NodeCertificateLifecycleClient", side_effect=harness.factory),
+                    mock.patch.object(runtime, "parse_certificate_expiry", return_value=NOW + timedelta(hours=1)),
+                ):
+                    for seconds in (0, 5, 15, 45):
+                        status = instance.lifecycle_cycle("test", NOW + timedelta(seconds=seconds))
+                    self.assertEqual(status.state, runtime.MtlsAgentState.FALLBACK)
+                    self.assertEqual(status.retry_attempts, 3)
+                    self.assertEqual(status.retry_at, NOW + timedelta(seconds=75))
+                    self.assertEqual(len(harness.calls), 4)
+                    instance = runtime.NodeMtlsRuntime(config, state=state)
+                    harness.failure = None
+                    instance.lifecycle_cycle("test", NOW + timedelta(seconds=74))
+                    self.assertEqual(len(harness.calls), 4)
+                    status = instance.lifecycle_cycle("test", NOW + timedelta(seconds=75))
+                self.assertEqual(status.state, runtime.MtlsAgentState.SHADOW_READY)
+                self.assertEqual(status.retry_attempts, 0)
+                self.assertIsNone(status.retry_at)
+                self.assertTrue(all(call[1] == "mtls" for call in harness.calls))
+                if pending:
+                    self.assertTrue(all(call[0] == "acknowledge" for call in harness.calls))
+
+    def test_renewal_cooldown_blocks_at_expiry_without_bootstrap(self) -> None:
+        for bootstrap in (False, True):
+            with self.subTest(bootstrap=bootstrap), tempfile.TemporaryDirectory() as directory:
+                root = Path(directory) / "tls"
+                state = FakeState(root)
+                state.active = object()
+                harness = LifecycleHarness(state, runtime.MtlsApiError(503, "ISSUER_UNAVAILABLE", True))
+                instance = runtime.NodeMtlsRuntime(configured(root, bearer_bootstrap_enabled=bootstrap), state=state)
+                with (
+                    mock.patch.object(runtime, "NodeCertificateLifecycleClient", side_effect=harness.factory),
+                    mock.patch.object(runtime, "parse_certificate_expiry", return_value=NOW + timedelta(seconds=40)),
+                ):
+                    for seconds in (0, 5, 15, 45):
+                        status = instance.lifecycle_cycle("test", NOW + timedelta(seconds=seconds))
+                self.assertEqual(status.state, runtime.MtlsAgentState.BLOCKED)
+                self.assertEqual(len(harness.calls), 3)
+                self.assertTrue(all(call[1] == "mtls" for call in harness.calls))
+
+    def test_permanent_renewal_failure_remains_blocked_with_valid_identity(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory) / "tls"
+            state = FakeState(root)
+            state.active = object()
+            harness = LifecycleHarness(state, runtime.MtlsApiError(409, "REQUEST_CONFLICT", False))
+            config = configured(root, bearer_bootstrap_enabled=False)
+            instance = runtime.NodeMtlsRuntime(config, state=state)
+            with (
+                mock.patch.object(runtime, "NodeCertificateLifecycleClient", side_effect=harness.factory),
+                mock.patch.object(runtime, "parse_certificate_expiry", return_value=NOW + timedelta(hours=1)),
+            ):
+                instance.lifecycle_cycle("test", NOW)
+                harness.failure = None
+                instance = runtime.NodeMtlsRuntime(config, state=state)
+                status = instance.lifecycle_cycle("test", NOW + timedelta(minutes=10))
+            self.assertEqual(status.state, runtime.MtlsAgentState.BLOCKED)
+            self.assertEqual(len(harness.calls), 1)
+
     def test_nonretryable_failure_blocks_without_request_loop(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory) / "tls"
