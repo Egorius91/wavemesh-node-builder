@@ -144,10 +144,17 @@ The integration does not log or place in general runtime:
 
 ## Rollback
 
-Set `WAVEMESH_AGENT_MTLS_MODE=disabled` and perform the separately approved
-Agent restart. Bearer operation remains unchanged and does not require token
-recovery. Do not delete mTLS state during rollback; preserving it keeps the
-operation reversible and avoids generating another identity.
+For an mTLS-only Node, restore the verified previous compatible Agent package
+through the approved rollback procedure and separately approve its activation.
+Preserve the mTLS auth mode, current valid identity, pending CSR/key, ACK journal
+and runtime state. Never restore an expired certificate or reset `BLOCKED` as a
+code rollback. Verify the selected backup and its environment before use: a
+backup from the earlier bearer rollout is not a valid mTLS-only rollback target.
+
+Disabling `WAVEMESH_AGENT_MTLS_MODE` is only applicable to the legacy bearer plus
+shadow rollout while bearer authentication remains explicitly enabled and
+accepted. It is not a rollback for an mTLS-only Node. The original shadow
+acceptance document below must not be replayed as an mTLS-only upgrade procedure.
 
 ## Operational acceptance
 
