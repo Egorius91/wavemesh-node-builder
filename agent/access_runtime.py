@@ -507,10 +507,23 @@ def visible_vless_inbound_ids(response: dict[str, Any]) -> list[int]:
 def get_client(panel: PanelClient, email: str) -> dict[str, Any] | None:
     try:
         value = panel.call("GET", f"/panel/api/clients/get/{parse.quote(email, safe='')}")
-    except ProvisionError:
+    except ProvisionError as lookup_error:
+        # A failed GET may be an outage or payload-building failure, not absence.
+        # The unpaginated list endpoint must independently prove nonexistence.
+        listing = panel.call("GET", "/panel/api/clients/list")
+        rows = listing.get("obj")
+        if listing.get("success") is not True or not isinstance(rows, list):
+            raise ProvisionError("Client absence could not be verified") from lookup_error
+        for row in rows:
+            if not isinstance(row, dict) or not isinstance(row.get("email"), str) or not row["email"]:
+                raise ProvisionError("Client list is incomplete or invalid") from lookup_error
+            if row["email"].casefold() == email.casefold():
+                raise ProvisionError("Existing client could not be read") from lookup_error
         return None
     obj = value.get("obj")
-    return obj if isinstance(obj, dict) else None
+    if value.get("success") is not True or not isinstance(obj, dict):
+        raise ProvisionError("Client readback is invalid")
+    return obj
 
 
 def assert_matching_client(record: dict[str, Any] | None, state: dict[str, Any], inbound_ids: list[int]) -> None:
