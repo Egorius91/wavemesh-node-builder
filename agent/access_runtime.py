@@ -79,12 +79,15 @@ def fenced_access(operation: str):
                     raise ProvisionError("Access command version is stale")
                 if operation != "cleanup":
                     effective_operation = request_value.get("operation", operation)
-                    allowed = ({"access.provision", "access.replace_credential"}
+                    allowed = ({"access.provision", "access.replace_credential", "access.prepare_replacement"}
                                if operation == "access.provision" else {operation})
                     if effective_operation not in allowed:
                         raise ProvisionError("Access operation mismatch")
                     enabled = request_value.get("enabled", operation == "access.provision")
-                    if type(enabled) is not bool or (operation == "access.provision" and not enabled):
+                    preparing = effective_operation == "access.prepare_replacement"
+                    if type(enabled) is not bool or (preparing and enabled) or (
+                        operation == "access.provision" and not preparing and not enabled
+                    ):
                         raise ProvisionError("Access enabled state is invalid")
                     canonical = {
                         "operation": effective_operation, "access_id": access_id,
@@ -93,6 +96,8 @@ def fenced_access(operation: str):
                         "device_limit": integer(request_value.get("device_limit"), 0, 10_000),
                         "quota_bytes": integer(request_value.get("quota_bytes"), 0, 9_223_372_036_854_775_807),
                     }
+                    if preparing:
+                        canonical["replacement_id"] = safe_id(request_value.get("replacement_id"), "replacement_id")
                     digest = hashlib.sha256(json.dumps(canonical, sort_keys=True).encode()).hexdigest()
                     if version == highest:
                         if fence is None or fence.get("version") != version or fence["payload_hash"] != digest:
@@ -146,6 +151,7 @@ class PanelClient:
 def provision(request_value: dict[str, Any], config: dict[str, Any], state_root: Path) -> dict[str, Any]:
     access_id = safe_id(request_value.get("access_id"), "access_id")
     desired_version = integer(request_value.get("desired_version"), 1, 2_147_483_647)
+    enabled = request_value.get("enabled", True)
     expires_at = parse_time(request_value.get("expires_at"))
     device_limit = integer(request_value.get("device_limit"), 0, 10_000)
     quota_bytes = integer(request_value.get("quota_bytes"), 0, 9_223_372_036_854_775_807)
@@ -186,7 +192,7 @@ def provision(request_value: dict[str, Any], config: dict[str, Any], state_root:
                     "limitIp": device_limit,
                     "totalGB": quota_bytes,
                     "expiryTime": int(expires_at.timestamp() * 1000),
-                    "enable": True,
+                    "enable": enabled,
                     "tgId": 0,
                     "subId": state["sub_id"],
                     "reset": 0,
@@ -198,12 +204,13 @@ def provision(request_value: dict[str, Any], config: dict[str, Any], state_root:
         )
         existing = get_client(panel, email)
     assert_matching_client(existing, state, inbound_ids)
-    reconcile_entitlements(panel, existing, state, inbound_ids, enabled=True,
+    reconcile_entitlements(panel, existing, state, inbound_ids, enabled=enabled,
                            expires_at_ms=int(expires_at.timestamp() * 1000),
                            device_limit=device_limit, quota_bytes=quota_bytes)
-    links = panel.call("GET", f"/panel/api/clients/subLinks/{parse.quote(str(state['sub_id']), safe='')}")
-    if not subscription_links_ready(links):
-        raise ProvisionError("Native subscription links are not ready")
+    if enabled:
+        links = panel.call("GET", f"/panel/api/clients/subLinks/{parse.quote(str(state['sub_id']), safe='')}")
+        if not subscription_links_ready(links):
+            raise ProvisionError("Native subscription links are not ready")
 
     return {
         "desired_version": desired_version,
@@ -657,7 +664,7 @@ def main() -> int:
         operation = str(command.get("operation") or "access.provision")
         if operation == "access.update_entitlements":
             result = update_entitlements(command, config, args.state_root)
-        elif operation in {"access.provision", "access.replace_credential"}:
+        elif operation in {"access.provision", "access.replace_credential", "access.prepare_replacement"}:
             result = provision(command, config, args.state_root)
         else:
             raise ProvisionError("Unsupported access lifecycle operation")
