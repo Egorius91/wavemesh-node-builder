@@ -412,9 +412,13 @@ class NodeAgent:
                 expected=(204,),
             )
             material = self.execute_access_runtime(command_type, payload)
+            material_path = (
+                f"internal/v1/nodes/{self.config.node_id}/replacements/{payload['replacement_id']}/materialize"
+                if command_type == "access.prepare_replacement" else
+                f"internal/v1/nodes/{self.config.node_id}/accesses/{payload['access_id']}/materialize"
+            )
             self.mtls_runtime.api_json(
-                "POST",
-                f"internal/v1/nodes/{self.config.node_id}/accesses/{payload['access_id']}/materialize",
+                "POST", material_path,
                 material,
                 expected=(200,),
             )
@@ -427,7 +431,11 @@ class NodeAgent:
                     "status": "succeeded",
                     "attempt": attempt,
                     "observed_version": payload["desired_version"],
-                    "redacted_result": {"access_materialized": True},
+                    "redacted_result": (
+                        {"replacement_prepared": True}
+                        if command_type == "access.prepare_replacement"
+                        else {"access_materialized": True}
+                    ),
                     "completed_at": format_timestamp(datetime.now(timezone.utc)),
                 },
                 expected=(204,),
@@ -767,6 +775,7 @@ class NodeAgent:
             "command_execution": command_ready,
             "access_lifecycle": command_ready,
             "access_entitlements_v2": command_ready,
+            "access_replacement_prepare_v1": command_ready,
             "node_role": node_role,
             "cascade_routes_total": len(state.get("routes") or []),
             "auto_routes_total": len(state.get("auto_routes") or []),
@@ -1158,6 +1167,7 @@ def validate_access_command(
         "access.provision",
         "access.replace_credential",
         "access.update_entitlements",
+        "access.prepare_replacement",
     }:
         raise AgentError("Unsupported Node command type")
     if command.get("target_node_id") != node_id or command.get("schema_version") != 1:
@@ -1167,17 +1177,24 @@ def validate_access_command(
     if attempt != command.get("attempt"):
         raise AgentError("Node command attempt is invalid")
     payload = command.get("payload")
-    if not isinstance(payload, dict) or set(payload) != {
+    required = {
         "access_id",
         "desired_version",
         "enabled",
         "expires_at",
         "device_limit",
         "quota_bytes",
-    }:
+    }
+    if command_type == "access.prepare_replacement":
+        required.add("replacement_id")
+    if not isinstance(payload, dict) or set(payload) != required:
         raise AgentError("Node command payload is invalid")
+    if command_type == "access.prepare_replacement":
+        safe_id(payload.get("replacement_id"), "replacement_id")
+        if payload.get("enabled") is not False:
+            raise AgentError("Replacement preparation must be disabled")
     if type(payload.get("enabled")) is not bool or (
-        payload["enabled"] is False and command_type != "access.update_entitlements"
+        payload["enabled"] is False and command_type not in {"access.update_entitlements", "access.prepare_replacement"}
     ):
         raise AgentError("Access enabled state is invalid for this operation")
     safe_id(payload.get("access_id"), "access_id")
