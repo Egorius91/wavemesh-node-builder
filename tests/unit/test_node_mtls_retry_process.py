@@ -169,4 +169,4 @@ if __name__ == "__main__":
     if len(sys.argv) > 1 and sys.argv[1] == "--worker":
         worker(Path(sys.argv[2]), sys.argv[3], sys.argv[4])
     else:
-        unittest.main()
+        unittest.main(verbosity=2)
