@@ -4,6 +4,9 @@
 from __future__ import annotations
 
 import argparse
+from contextlib import contextmanager
+from functools import wraps
+import hashlib
 from datetime import datetime
 import json
 import os
@@ -21,6 +24,84 @@ DAY_MILLISECONDS = 24 * 60 * 60 * 1000
 
 class ProvisionError(RuntimeError):
     pass
+
+
+@contextmanager
+def access_lock(state_root: Path, access_id: str):
+    """Serialize executors; process death releases the operating-system lock."""
+    state_root.mkdir(parents=True, exist_ok=True, mode=0o700)
+    if state_root.is_symlink():
+        raise ProvisionError("Access state root is unsafe")
+    path = state_root / f"{access_id}.lock"
+    if path.is_symlink():
+        raise ProvisionError("Access lock path is unsafe")
+    fd = os.open(path, os.O_RDWR | os.O_CREAT | getattr(os, "O_NOFOLLOW", 0), 0o600)
+    try:
+        if os.name == "nt":
+            import msvcrt
+            if os.fstat(fd).st_size == 0:
+                os.write(fd, b"0")
+            os.lseek(fd, 0, os.SEEK_SET)
+            msvcrt.locking(fd, msvcrt.LK_NBLCK, 1)
+        else:
+            import fcntl
+            fcntl.flock(fd, fcntl.LOCK_EX | fcntl.LOCK_NB)
+        yield
+    finally:
+        os.close(fd)
+
+
+def fenced_access(operation: str):
+    def decorate(function):
+        @wraps(function)
+        def execute(request_value, config, state_root):
+            access_id = safe_id(request_value.get("access_id"), "access_id")
+            version = integer(request_value.get("desired_version"), 1, 2_147_483_647)
+            with access_lock(state_root, access_id):
+                fence_path = state_root / f"{access_id}.fence"
+                fence = load_private_state(fence_path)
+                highest = 0
+                for path in state_root.glob(f"{access_id}.*.json"):
+                    state = load_private_state(path)
+                    if state is None:
+                        raise ProvisionError("Durable access state disappeared")
+                    candidate = integer(state.get("desired_version"), 1, 2_147_483_647)
+                    validate_state(state, access_id, candidate)
+                    if path.name != f"{access_id}.{candidate}.json":
+                        raise ProvisionError("Durable access state filename is invalid")
+                    highest = max(highest, candidate)
+                if fence is not None:
+                    if (fence.get("access_id") != access_id or
+                            not re.fullmatch(r"[a-f0-9]{64}", str(fence.get("payload_hash") or ""))):
+                        raise ProvisionError("Access command fence is invalid")
+                    highest = max(highest, integer(fence.get("version"), 1, 2_147_483_647))
+                if version < highest:
+                    raise ProvisionError("Access command version is stale")
+                if operation != "cleanup":
+                    effective_operation = request_value.get("operation", operation)
+                    allowed = ({"access.provision", "access.replace_credential"}
+                               if operation == "access.provision" else {operation})
+                    if effective_operation not in allowed:
+                        raise ProvisionError("Access operation mismatch")
+                    enabled = request_value.get("enabled", operation == "access.provision")
+                    if enabled is not True:
+                        raise ProvisionError("Disabled entitlement updates are unsupported")
+                    canonical = {
+                        "operation": effective_operation, "access_id": access_id,
+                        "version": version, "enabled": enabled,
+                        "expires_at_ms": int(parse_time(request_value.get("expires_at")).timestamp() * 1000),
+                        "device_limit": integer(request_value.get("device_limit"), 0, 10_000),
+                        "quota_bytes": integer(request_value.get("quota_bytes"), 0, 9_223_372_036_854_775_807),
+                    }
+                    digest = hashlib.sha256(json.dumps(canonical, sort_keys=True).encode()).hexdigest()
+                    if version == highest:
+                        if fence is None or fence.get("version") != version or fence["payload_hash"] != digest:
+                            raise ProvisionError("Access command replay cannot be verified")
+                    else:
+                        atomic_json(fence_path, {"access_id": access_id, "version": version, "payload_hash": digest})
+                return function(request_value, config, state_root)
+        return execute
+    return decorate
 
 
 class PanelClient:
@@ -61,6 +142,7 @@ class PanelClient:
         return value
 
 
+@fenced_access("access.provision")
 def provision(request_value: dict[str, Any], config: dict[str, Any], state_root: Path) -> dict[str, Any]:
     access_id = safe_id(request_value.get("access_id"), "access_id")
     desired_version = integer(request_value.get("desired_version"), 1, 2_147_483_647)
@@ -131,6 +213,7 @@ def provision(request_value: dict[str, Any], config: dict[str, Any], state_root:
     }
 
 
+@fenced_access("access.update_entitlements")
 def update_entitlements(
     request_value: dict[str, Any],
     config: dict[str, Any],
@@ -362,6 +445,7 @@ def safe_bulk_entitlement_adjustment(
     return add_days, add_bytes
 
 
+@fenced_access("cleanup")
 def cleanup_previous(request_value: dict[str, Any], config: dict[str, Any], state_root: Path) -> int:
     """Remove only older durable identities after SaaS accepted the replacement."""
     access_id = safe_id(request_value.get("access_id"), "access_id")
@@ -384,6 +468,8 @@ def cleanup_previous(request_value: dict[str, Any], config: dict[str, Any], stat
         if version >= desired_version:
             continue
         email = str(state.get("panel_email") or "")
+        if email == current.get("panel_email"):
+            continue
         if not re.fullmatch(r"[A-Za-z0-9_-]{3,128}", email):
             raise ProvisionError("Previous durable panel identity is invalid")
         if get_client(panel, email) is not None:
@@ -474,6 +560,12 @@ def atomic_json(path: Path, value: dict[str, Any]) -> None:
             os.fsync(handle.fileno())
         os.chmod(name, 0o600)
         os.replace(name, path)
+        if os.name != "nt":
+            parent_fd = os.open(path.parent, os.O_RDONLY | os.O_DIRECTORY)
+            try:
+                os.fsync(parent_fd)
+            finally:
+                os.close(parent_fd)
     finally:
         if os.path.exists(name):
             os.unlink(name)
