@@ -42,6 +42,8 @@ class FakePanel:
         self.timeout = timeout
 
     def call(self, method, path, payload=None):
+        if path == "/panel/api/clients/list":
+            return {"success": True, "obj": [{"email": email} for email in self.clients]}
         if method == "GET" and path == "/panel/api/inbounds/list":
             return {
                 "success": True,
