@@ -84,8 +84,8 @@ def fenced_access(operation: str):
                     if effective_operation not in allowed:
                         raise ProvisionError("Access operation mismatch")
                     enabled = request_value.get("enabled", operation == "access.provision")
-                    if enabled is not True:
-                        raise ProvisionError("Disabled entitlement updates are unsupported")
+                    if type(enabled) is not bool or (operation == "access.provision" and not enabled):
+                        raise ProvisionError("Access enabled state is invalid")
                     canonical = {
                         "operation": effective_operation, "access_id": access_id,
                         "version": version, "enabled": enabled,
@@ -226,8 +226,9 @@ def update_entitlements(
     device_limit = integer(request_value.get("device_limit"), 0, 10_000)
     quota_bytes = integer(request_value.get("quota_bytes"), 0, 9_223_372_036_854_775_807)
     expires_at_ms = int(expires_at.timestamp() * 1000)
-    if request_value.get("enabled") is not True:
-        raise ProvisionError("Disabled entitlement updates are unsupported")
+    enabled = request_value.get("enabled")
+    if type(enabled) is not bool:
+        raise ProvisionError("Access enabled state is invalid")
 
     state_path = state_root / f"{access_id}.{desired_version}.json"
     state = load_private_state(state_path)
@@ -262,6 +263,7 @@ def update_entitlements(
     verified = existing
     if not entitlements_match(
         existing,
+        enabled=enabled,
         expires_at_ms=expires_at_ms,
         device_limit=device_limit,
         quota_bytes=quota_bytes,
@@ -276,7 +278,7 @@ def update_entitlements(
                 "limitIp": device_limit,
                 "totalGB": quota_bytes,
                 "expiryTime": expires_at_ms,
-                "enable": True,
+                "enable": enabled,
                 "tgId": integer(client.get("tgId") or 0, 0, 9_223_372_036_854_775_807),
                 "subId": state["sub_id"],
                 "reset": integer(client.get("reset") or 0, 0, 2_147_483_647),
@@ -298,6 +300,7 @@ def update_entitlements(
         assert_matching_client(verified, state, inbound_ids)
         if not entitlements_match(
             verified,
+            enabled=enabled,
             expires_at_ms=expires_at_ms,
             device_limit=device_limit,
             quota_bytes=quota_bytes,
@@ -307,7 +310,7 @@ def update_entitlements(
                 expires_at_ms=expires_at_ms,
                 device_limit=device_limit,
                 quota_bytes=quota_bytes,
-            )
+            ) if enabled else None
             if adjustment is not None:
                 add_days, add_bytes = adjustment
                 if add_days != 0 or add_bytes != 0:
@@ -326,6 +329,7 @@ def update_entitlements(
         try:
             assert_entitlements(
                 verified,
+                enabled=enabled,
                 expires_at_ms=expires_at_ms,
                 device_limit=device_limit,
                 quota_bytes=quota_bytes,
@@ -335,12 +339,13 @@ def update_entitlements(
                 raise update_error
             raise
 
-    links = panel.call(
-        "GET",
-        f"/panel/api/clients/subLinks/{parse.quote(str(state['sub_id']), safe='')}",
-    )
-    if not subscription_links_ready(links):
-        raise ProvisionError("Native subscription links are not ready")
+    if enabled:
+        links = panel.call(
+            "GET",
+            f"/panel/api/clients/subLinks/{parse.quote(str(state['sub_id']), safe='')}",
+        )
+        if not subscription_links_ready(links):
+            raise ProvisionError("Native subscription links are not ready")
 
     return {
         "desired_version": desired_version,
@@ -376,6 +381,7 @@ def latest_previous_state(
 def assert_entitlements(
     record: dict[str, Any] | None,
     *,
+    enabled: bool = True,
     expires_at_ms: int,
     device_limit: int,
     quota_bytes: int,
@@ -384,7 +390,7 @@ def assert_entitlements(
         raise ProvisionError("3X-UI entitlement verification failed")
     client = record.get("client") if isinstance(record.get("client"), dict) else record
     if (
-        client.get("enable") is not True
+        client.get("enable") is not enabled
         or integer(client.get("expiryTime"), 0, 9_223_372_036_854_775_807) != expires_at_ms
         or integer(client.get("limitIp"), 0, 10_000) != device_limit
         or integer(client.get("totalGB"), 0, 9_223_372_036_854_775_807) != quota_bytes
@@ -395,6 +401,7 @@ def assert_entitlements(
 def entitlements_match(
     record: dict[str, Any] | None,
     *,
+    enabled: bool = True,
     expires_at_ms: int,
     device_limit: int,
     quota_bytes: int,
@@ -402,6 +409,7 @@ def entitlements_match(
     try:
         assert_entitlements(
             record,
+            enabled=enabled,
             expires_at_ms=expires_at_ms,
             device_limit=device_limit,
             quota_bytes=quota_bytes,
