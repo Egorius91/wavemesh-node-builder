@@ -198,6 +198,9 @@ def provision(request_value: dict[str, Any], config: dict[str, Any], state_root:
         )
         existing = get_client(panel, email)
     assert_matching_client(existing, state, inbound_ids)
+    reconcile_entitlements(panel, existing, state, inbound_ids, enabled=True,
+                           expires_at_ms=int(expires_at.timestamp() * 1000),
+                           device_limit=device_limit, quota_bytes=quota_bytes)
     links = panel.call("GET", f"/panel/api/clients/subLinks/{parse.quote(str(state['sub_id']), safe='')}")
     if not subscription_links_ready(links):
         raise ProvisionError("Native subscription links are not ready")
@@ -260,6 +263,33 @@ def update_entitlements(
     existing = get_client(panel, email)
     assert_matching_client(existing, state, inbound_ids)
 
+    reconcile_entitlements(panel, existing, state, inbound_ids, enabled=enabled,
+                           expires_at_ms=expires_at_ms, device_limit=device_limit, quota_bytes=quota_bytes)
+
+    if enabled:
+        links = panel.call(
+            "GET",
+            f"/panel/api/clients/subLinks/{parse.quote(str(state['sub_id']), safe='')}",
+        )
+        if not subscription_links_ready(links):
+            raise ProvisionError("Native subscription links are not ready")
+
+    return {
+        "desired_version": desired_version,
+        "panel_email": email,
+        "client_uuid": state["client_uuid"],
+        "sub_id": state["sub_id"],
+        "primary_inbound_id": inbound_ids[0],
+        "protocol": "vless",
+        "subscription_url": f"https://{domain}{sub_path}{state['sub_id']}",
+    }
+
+
+def reconcile_entitlements(panel: PanelClient, existing: dict[str, Any] | None,
+                           state: dict[str, Any], inbound_ids: list[int], *, enabled: bool,
+                           expires_at_ms: int, device_limit: int, quota_bytes: int) -> None:
+    """Apply and verify the same absolute entitlements for initial provision and renewal."""
+    email = str(state["panel_email"])
     verified = existing
     if not entitlements_match(
         existing,
@@ -338,24 +368,6 @@ def update_entitlements(
             if update_error is not None:
                 raise update_error
             raise
-
-    if enabled:
-        links = panel.call(
-            "GET",
-            f"/panel/api/clients/subLinks/{parse.quote(str(state['sub_id']), safe='')}",
-        )
-        if not subscription_links_ready(links):
-            raise ProvisionError("Native subscription links are not ready")
-
-    return {
-        "desired_version": desired_version,
-        "panel_email": email,
-        "client_uuid": state["client_uuid"],
-        "sub_id": state["sub_id"],
-        "primary_inbound_id": inbound_ids[0],
-        "protocol": "vless",
-        "subscription_url": f"https://{domain}{sub_path}{state['sub_id']}",
-    }
 
 
 def latest_previous_state(
