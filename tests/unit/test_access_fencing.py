@@ -1,4 +1,5 @@
 from pathlib import Path
+import json
 import subprocess
 import sys
 import tempfile
@@ -66,6 +67,31 @@ class AccessFencingTests(unittest.TestCase):
                 runtime.update_entitlements(self.request, self.config, self.root)
             panel.assert_not_called()
         self.execute({**self.request, "desired_version": 5})
+
+    def test_process_death_after_fence_persistence_keeps_replay_binding(self):
+        code = """
+import importlib.util, json, os, pathlib, sys
+spec = importlib.util.spec_from_file_location('worker_runtime', sys.argv[1])
+module = importlib.util.module_from_spec(spec)
+spec.loader.exec_module(module)
+module.PanelClient = lambda config: os._exit(17)
+module.update_entitlements(json.loads(sys.argv[3]), json.loads(sys.argv[4]), pathlib.Path(sys.argv[2]))
+"""
+        child = subprocess.run([sys.executable, "-c", code, runtime.__file__, str(self.root),
+                                json.dumps(self.request), json.dumps(self.config)],
+                               capture_output=True, timeout=10)
+        self.assertEqual(child.returncode, 17)
+        with self.assertRaises(runtime.ProvisionError):
+            self.execute({**self.request, "device_limit": 3})
+        self.execute()
+        self.assertEqual(len(fixtures.FakePanel.updates), 1)
+
+    def test_corrupt_fence_never_falls_back_to_panel(self):
+        (self.root / "access_12345678.fence").write_text('{"version":4}', encoding="utf-8")
+        with mock.patch.object(runtime, "PanelClient") as panel:
+            with self.assertRaises(runtime.ProvisionError):
+                runtime.update_entitlements(self.request, self.config, self.root)
+            panel.assert_not_called()
 
     def test_cleanup_does_not_delete_identity_shared_with_older_entitlement_version(self):
         self.execute()
