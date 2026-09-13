@@ -766,6 +766,7 @@ class NodeAgent:
             "command_polling": command_ready,
             "command_execution": command_ready,
             "access_lifecycle": command_ready,
+            "access_entitlements_v2": command_ready,
             "node_role": node_role,
             "cascade_routes_total": len(state.get("routes") or []),
             "auto_routes_total": len(state.get("auto_routes") or []),
@@ -1175,8 +1176,10 @@ def validate_access_command(
         "quota_bytes",
     }:
         raise AgentError("Node command payload is invalid")
-    if payload.get("enabled") is not True:
-        raise AgentError("Disabled access provisioning is unsupported")
+    if type(payload.get("enabled")) is not bool or (
+        payload["enabled"] is False and command_type != "access.update_entitlements"
+    ):
+        raise AgentError("Access enabled state is invalid for this operation")
     safe_id(payload.get("access_id"), "access_id")
     desired_version = safe_int(payload.get("desired_version"), 1, 2_147_483_647)
     if desired_version != payload.get("desired_version"):
