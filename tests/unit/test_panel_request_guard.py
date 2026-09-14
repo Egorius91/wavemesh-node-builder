@@ -19,7 +19,7 @@ import access_runtime as runtime
 
 class ContractTests(unittest.TestCase):
     def test_allowlist_and_read_only_post_contract(self):
-        for path in ("/panel/api/clients/add", "/panel/api/clients/update/synthetic_client",
+        for path in ("/panel/api/clients/add", "/panel/api/clients/addDisabled", "/panel/api/clients/update/synthetic_client",
                      "/panel/api/inbounds/update/1", "/panel/api/xray/update",
                      "/panel/api/setting/apiTokens/create"):
             self.assertTrue(guard.mutation("POST", path))

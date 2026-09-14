@@ -49,7 +49,7 @@ class ReplacementPrepareTests(unittest.TestCase):
         class Panel(fixtures.FakePanel):
             def call(self, method, path, payload=None):
                 result = super().call(method, path, payload)
-                if path == "/panel/api/clients/add":
+                if path == "/panel/api/clients/addDisabled":
                     raise runtime.ProvisionError("lost response")
                 return result
         with self.assertRaises(runtime.ProvisionError):
@@ -57,6 +57,32 @@ class ReplacementPrepareTests(unittest.TestCase):
         material = self.execute(Panel)
         self.assertEqual(Panel.add_calls, 1)
         self.assertIs(Panel.clients[material["panel_email"]]["client"]["enable"], False)
+
+    def test_legacy_panel_is_rejected_without_unsafe_create_or_fallback(self):
+        calls = []
+        class LegacyPanel(fixtures.FakePanel):
+            def call(self, method, path, payload=None):
+                calls.append((method, path))
+                if path == "/panel/api/clients/addDisabled":
+                    raise runtime.ProvisionError("404 unsupported")
+                return super().call(method, path, payload)
+        with self.assertRaises(runtime.ProvisionError):
+            self.execute(LegacyPanel)
+        self.assertEqual(LegacyPanel.clients, {})
+        self.assertEqual(LegacyPanel.add_calls, 0)
+        self.assertEqual([path for method, path in calls if method == "POST"],
+                         ["/panel/api/clients/addDisabled"])
+
+    def test_enabled_readback_is_not_silently_compensated_and_accepted(self):
+        class BrokenPanel(fixtures.FakePanel):
+            def call(self, method, path, payload=None):
+                if path == "/panel/api/clients/addDisabled":
+                    return super().call(method, "/panel/api/clients/add", payload)
+                if method == "POST":
+                    raise AssertionError("must not hide an enabled creation with a later disable")
+                return super().call(method, path, payload)
+        with self.assertRaisesRegex(runtime.ProvisionError, "Disabled creation contract violated"):
+            self.execute(BrokenPanel)
 
     def test_enabled_or_missing_operation_identity_rejected_before_panel(self):
         for patch in ({"enabled": True}, {"enabled": 0}, {"replacement_id": "../unsafe"}, {"replacement_id": None}):
