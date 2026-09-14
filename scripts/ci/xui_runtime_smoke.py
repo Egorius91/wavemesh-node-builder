@@ -235,6 +235,13 @@ class Smoke:
                 require(len(matches) == 1 and matches[0][2] == client["id"]
                         and bool(matches[0][3]) == (True if name == "control" else enabled), "CLIENT_STATE_MISMATCH")
             require(db.execute("SELECT count(*) FROM client_inbounds").fetchone()[0] == 2, "DUPLICATE_BINDING")
+            settings = db.execute("SELECT settings FROM inbounds WHERE id=?", (self.inbound_id,)).fetchone()
+            configured = json.loads(settings[0])["clients"]
+            require(len(configured) == 2, "DUPLICATE_INBOUND_CLIENT")
+            for name, client in self.clients.items():
+                matches = [row for row in configured if row.get("email") == client["email"]]
+                require(len(matches) == 1 and matches[0]["id"] == client["id"]
+                        and matches[0]["enable"] is (True if name == "control" else enabled), "INBOUND_CLIENT_STATE_MISMATCH")
             return [(row[0], row[1], row[2]) for row in rows]
 
     def setup_clients(self):
@@ -350,7 +357,7 @@ def main():
     except Exception as exc:
         # Fixed stage/type only: provider/panel/HTTP errors can contain tokens.
         report.update(stage=smoke.stage if smoke else "ISOLATION_OR_ARTIFACT",
-                      error_type=type(exc).__name__)
+                      error_type=type(exc).__name__, checks=smoke.checks if smoke else {})
         if isinstance(exc, SmokeFailure):
             report["error_code"] = str(exc)
         print("PANEL_RUNTIME_SMOKE=FAILED; NO_RAW_ERROR", file=sys.stderr)

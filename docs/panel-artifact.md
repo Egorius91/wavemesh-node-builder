@@ -70,6 +70,16 @@ acceptance remains separate. It tests duplicate rejection, not backend CREATE
 idempotency or a lost-response recovery contract. No installer is invoked and
 no GitHub release is published. The ordinary installer still selects upstream.
 
+The first real HTTP smoke exposed duplicate disabled creation in the inherited
+upstream append path: matching email/subId was allowed and another entry could
+be appended to an inbound even though `clients` has a unique email. The patch
+now checks email/UUID/subId collisions under the existing inbound writer lock
+for the disabled endpoint and rejects the request before append. Repeated
+inbound IDs are rejected before any write. Backend tests cover concurrent calls
+and changed identities; smoke checks both normalized SQLite rows and the
+inbound's client array. Legacy `/add` semantics are unchanged. This is conflict
+rejection, not a multi-inbound transaction or general lost-response replay API.
+
 After the dependency PRs merge, rebuild at the final Builder merge SHA and verify
 the new artifact. Never deploy the old PR-head candidate as a merge-bound build.
 Before staging use, implement and prove transactional panel installation,
