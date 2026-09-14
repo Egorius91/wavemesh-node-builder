@@ -3,7 +3,8 @@
 XUI_COOKIE_JAR="${XUI_COOKIE_JAR:-/tmp/wavemesh-xui-cookies.txt}"
 XUI_CSRF_TOKEN="${XUI_CSRF_TOKEN:-}"
 XUI_API_TIMEOUT="${XUI_API_TIMEOUT:-15}"
-WM_PANEL_REQUEST_GUARD="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)/agent/panel_request_guard.py"
+# shellcheck source=scripts/lib/panel_guard.sh
+source "$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/panel_guard.sh"
 
 wm_xui_base_url() {
   printf 'http://127.0.0.1:%s%s' "$PANEL_PORT" "$PANEL_PATH"
@@ -68,7 +69,7 @@ wm_xui_request() {
   # The same durable uncertainty barrier is used by the Python Agent. The helper
   # invokes only curl, never an arbitrary shell command. Credentials stay in the
   # private pipe/child arguments and are not stored in the journal or diagnostics.
-  status="$(python3 - "$method" "$path" "$url" "${args[@]}" <<'PY' | python3 "$WM_PANEL_REQUEST_GUARD" 2>/dev/null || true
+  status="$(python3 - "$method" "$path" "$url" "${args[@]}" <<'PY' | wm_panel_guard_run 2>/dev/null || true
 import json, sys
 print(json.dumps({"method": sys.argv[1], "path": sys.argv[2], "url": sys.argv[3], "args": sys.argv[4:]}))
 PY

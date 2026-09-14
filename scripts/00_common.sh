@@ -335,11 +335,15 @@ wm_load_config() {
 }
 
 wm_install_cli() {
-  local project_dir
+  local project_dir destdir="${1:-}"
+  # Optional packaging root permits exercising the actual installed layout.
+  [[ "$#" -le 1 && ( -z "$destdir" || ( "$destdir" == /* && "$destdir" != / ) ) ]] || { wm_fail "Invalid CLI packaging root"; return 1; }
+  [[ -z "$destdir" || ! -L "$destdir" ]] || { wm_fail "Unsafe CLI packaging root"; return 1; }
   project_dir="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
-  mkdir -p /usr/local/lib/wavemesh/lib /usr/local/lib/wavemesh/commands
-  install -m 0755 "$project_dir/bin/wavemesh" /usr/local/bin/wavemesh
-  install -m 0644 "$project_dir/scripts/00_common.sh" /usr/local/lib/wavemesh/00_common.sh
-  install -m 0644 "$project_dir/scripts/lib/"*.sh "$project_dir/scripts/lib/"*.py /usr/local/lib/wavemesh/lib/
-  install -m 0644 "$project_dir/scripts/commands/"*.sh /usr/local/lib/wavemesh/commands/
+  mkdir -p "$destdir/usr/local/bin" "$destdir/usr/local/lib/wavemesh/lib" "$destdir/usr/local/lib/wavemesh/commands"
+  install -m 0755 "$project_dir/bin/wavemesh" "$destdir/usr/local/bin/wavemesh"
+  install -m 0644 "$project_dir/scripts/00_common.sh" "$destdir/usr/local/lib/wavemesh/00_common.sh"
+  install -m 0644 "$project_dir/scripts/lib/"*.sh "$project_dir/scripts/lib/"*.py "$destdir/usr/local/lib/wavemesh/lib/"
+  install -m 0644 "$project_dir/agent/panel_request_guard.py" "$destdir/usr/local/lib/wavemesh/lib/panel_request_guard.py"
+  install -m 0644 "$project_dir/scripts/commands/"*.sh "$destdir/usr/local/lib/wavemesh/commands/"
 }
