@@ -197,7 +197,12 @@ class Smoke:
                     "api": {"tag": "api", "services": ["HandlerService", "LoggerService", "StatsService", "RoutingService"]},
                     "inbounds": [{"tag": "api", "listen": "127.0.0.1", "port": 62789,
                                   "protocol": "tunnel", "settings": {"rewriteAddress": "127.0.0.1"}}],
-                    "outbounds": [{"tag": "direct", "protocol": "freedom", "settings": {}}],
+                    # Xray's server-side default blocks private/reserved targets.
+                    # Allow only our sentinel, never all internal destinations.
+                    "outbounds": [{"tag": "direct", "protocol": "freedom", "settings": {
+                        "finalRules": [{"action": "allow", "network": "tcp",
+                                        "ip": ["127.0.0.1/32"], "port": TARGET_PORT},
+                                       {"action": "block"}]}}],
                     "routing": {"rules": [{"type": "field", "inboundTag": ["api"], "outboundTag": "api"}]},
                     "policy": {"levels": {"0": {"statsUserUplink": True, "statsUserDownlink": True}}}, "stats": {}}
         with sqlite3.connect(self.db) as db:
@@ -234,7 +239,7 @@ class Smoke:
             for name, client in self.clients.items():
                 matches = [row for row in rows if row[1] == client["email"]]
                 require(len(matches) == 1 and matches[0][2] == client["id"]
-                        and bool(matches[0][3]) == (True if name == "control" else enabled), "CLIENT_STATE_MISMATCH")
+                        and matches[0][3] == (1 if name == "control" or enabled else 0), "CLIENT_STATE_MISMATCH")
             require(db.execute("SELECT count(*) FROM client_inbounds").fetchone()[0] == 2, "DUPLICATE_BINDING")
             settings = db.execute("SELECT settings FROM inbounds WHERE id=?", (self.inbound_id,)).fetchone()
             configured = json.loads(settings[0])["clients"]

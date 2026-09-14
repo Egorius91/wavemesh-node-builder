@@ -66,7 +66,10 @@ the candidate. It does not export raw logs or fixture identities.
 This is loopback CI evidence, not public TLS/nginx/subscription/client-app,
 long-lived session drain, staging or commercial acceptance. The fixture uses
 VLESS over plain TCP only within its isolated namespace; production transport
-acceptance remains separate. It tests duplicate rejection, not backend CREATE
+acceptance remains separate. The fixture's Freedom `finalRules` allows only TCP
+to the loopback sentinel port and blocks other destinations, following the
+[Xray server-side private-address policy](https://xtls.github.io/en/config/outbounds/freedom.html).
+It tests duplicate rejection, not backend CREATE
 idempotency or a lost-response recovery contract. No installer is invoked and
 no GitHub release is published. The ordinary installer still selects upstream.
 
