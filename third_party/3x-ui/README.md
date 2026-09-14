@@ -44,9 +44,10 @@ performed by that command or CI. Never apply the patch to a running installation
 
 ## Deployment prerequisites still open
 
-Build a complete panel artifact (including its real frontend), label it as a
-WaveMesh-modified build, bind it to both upstream and Builder merge SHAs, and
-prove transactional panel deployment/rollback. Install and accept that artifact
+The [candidate workflow](../../docs/panel-artifact.md) builds the complete panel
+with its real frontend and binds it to upstream and Builder source SHAs. A fresh
+merge-bound build and transactional panel deployment/rollback remain required.
+Install and accept that artifact
 before enabling replacement preparation. The normal installer still selects an
 upstream release; it does not yet install this extension.
 

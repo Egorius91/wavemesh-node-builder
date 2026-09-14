@@ -1,0 +1,93 @@
+name: Full WaveMesh panel candidate
+
+on:
+  pull_request:
+  push:
+    branches: [main, feat/panel-artifact]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  build:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 45
+    env:
+      GOMAXPROCS: "2"
+      GOTOOLCHAIN: local
+      CGO_ENABLED: "1"
+      GOOS: linux
+      GOARCH: amd64
+      CC: musl-gcc
+      CANDIDATE_HEAD: ${{ github.event.pull_request.head.sha || github.sha }}
+    steps:
+      - uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6.0.3
+        with:
+          ref: ${{ github.event.pull_request.head.sha || github.sha }}
+          persist-credentials: false
+      - name: Fetch exact upstream source
+        uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6.0.3
+        with:
+          repository: MHSanaei/3x-ui
+          ref: f3a57d4c57fbcae94414138de42b7ef11dc513c8
+          path: upstream
+          persist-credentials: false
+      - uses: actions/setup-go@924ae3a1cded613372ab5595356fb5720e22ba16 # v6
+        with:
+          go-version-file: upstream/go.mod
+          cache-dependency-path: upstream/go.sum
+      - uses: actions/setup-node@249970729cb0ef3589644e2896645e5dc5ba9c38 # v6
+        with:
+          node-version: "22.19.0"
+          cache: npm
+          cache-dependency-path: upstream/frontend/package-lock.json
+      - name: Install static compiler and record build tools
+        run: |
+          set -Eeuo pipefail
+          sudo apt-get update -qq
+          sudo apt-get install -y musl-tools
+          {
+            go version
+            node --version
+            npm --version
+            musl-gcc --version
+            dpkg-query -W musl musl-dev musl-tools gcc
+          } > toolchain.txt
+      - name: Prepare labelled corresponding source
+        run: |
+          set -Eeuo pipefail
+          python3 scripts/ci/prepare_xui_disabled_contract.py upstream
+          python3 scripts/ci/xui_artifact.py source --source upstream --output candidate --head "$CANDIDATE_HEAD"
+      - name: Build actual frontend
+        working-directory: upstream/frontend
+        run: |
+          set -Eeuo pipefail
+          npm ci
+          npm run build
+      - name: Test patched backend and compile complete static panel
+        working-directory: upstream
+        run: |
+          set -Eeuo pipefail
+          go test -p 2 -count=1 -run TestWaveMesh ./internal/web/service ./internal/web/controller
+          go build -p 2 -trimpath -buildvcs=false -ldflags "-w -s -linkmode external -extldflags '-static'" -o ../panel main.go
+          if readelf -l ../panel | grep -q INTERP; then
+            echo 'Unexpected dynamic interpreter'; exit 1
+          fi
+          test "$(../panel -v)" = "3.4.2-wavemesh.${CANDIDATE_HEAD:0:12}"
+          go version -m ../panel >> ../toolchain.txt
+      - name: Package pinned runtime and verify candidate
+        run: |
+          set -Eeuo pipefail
+          curl --fail --location --proto '=https' --proto-redir '=https' --tlsv1.2 \
+            --output release.tar.gz https://github.com/MHSanaei/3x-ui/releases/download/v3.4.2/x-ui-linux-amd64.tar.gz
+          python3 scripts/ci/xui_artifact.py package --source upstream --release release.tar.gz \
+            --binary panel --toolchain toolchain.txt --output candidate --head "$CANDIDATE_HEAD"
+          python3 scripts/ci/xui_artifact.py verify --output candidate --head "$CANDIDATE_HEAD"
+      - name: Preserve complete candidate and corresponding source
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7
+        with:
+          name: wavemesh-panel-linux-amd64-${{ env.CANDIDATE_HEAD }}
+          path: candidate/
+          if-no-files-found: error
+          retention-days: 30
