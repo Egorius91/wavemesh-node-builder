@@ -260,7 +260,9 @@ def provision(request_value: dict[str, Any], config: dict[str, Any], state_root:
     if existing is None:
         panel.call(
             "POST",
-            "/panel/api/clients/add",
+            # Upstream 3X-UI 3.4.2 forces enable=true on /add. A separate
+            # endpoint fails closed on an unpatched backend; never fall back.
+            "/panel/api/clients/add" if enabled else "/panel/api/clients/addDisabled",
             {
                 "client": {
                     "email": email,
@@ -279,6 +281,8 @@ def provision(request_value: dict[str, Any], config: dict[str, Any], state_root:
         )
         existing = get_client(panel, email)
     assert_matching_client(existing, state, inbound_ids)
+    if not enabled and object_value(existing.get("client")).get("enable") is not False:
+        raise ProvisionError("Disabled creation contract violated; reconciliation required")
     reconcile_entitlements(panel, existing, state, inbound_ids, enabled=enabled,
                            expires_at_ms=int(expires_at.timestamp() * 1000),
                            device_limit=device_limit, quota_bytes=quota_bytes)

@@ -1,0 +1,43 @@
+name: Pinned 3X-UI disabled creation contract
+
+on:
+  pull_request:
+  push:
+    branches: [main, feat/disabled-panel-create]
+
+permissions:
+  contents: read
+
+jobs:
+  backend-contract:
+    runs-on: ubuntu-latest
+    timeout-minutes: 25
+    env:
+      GOMAXPROCS: "2"
+    steps:
+      - uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6.0.3
+        with:
+          persist-credentials: false
+      - name: Fetch exact upstream source
+        uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6.0.3
+        with:
+          repository: MHSanaei/3x-ui
+          ref: f3a57d4c57fbcae94414138de42b7ef11dc513c8
+          path: upstream
+          persist-credentials: false
+      - uses: actions/setup-go@v6
+        with:
+          go-version-file: upstream/go.mod
+          cache-dependency-path: upstream/go.sum
+      - name: Verify and apply the source patch
+        run: python3 scripts/ci/prepare_xui_disabled_contract.py upstream
+      - name: Exercise actual backend persistence and API authentication
+        working-directory: upstream
+        run: |
+          set -Eeuo pipefail
+          mkdir -p internal/web/dist
+          touch internal/web/dist/.gitkeep
+          go test -p 2 -count=1 ./internal/web/service ./internal/web/controller
+      - name: Race-check disabled creation and rollback contract
+        working-directory: upstream
+        run: go test -p 2 -race -count=1 -run TestWaveMesh ./internal/web/service ./internal/web/controller

@@ -25,7 +25,7 @@ MAX_RESPONSE = 8 * 1024 * 1024
 READ_POSTS = {"/panel/api/xray/", "/panel/api/xray/testOutbound",
               "/panel/api/xray/routeTest", "/panel/api/setting/all", "/panel/setting/all"}
 WRITE_PATH = re.compile(
-    r"^/panel/(?:api/)?(?:clients/(?:add|bulkAdjust|(?:update|del)/[^/\s?#]+)"
+    r"^/panel/(?:api/)?(?:clients/(?:add|addDisabled|bulkAdjust|(?:update|del)/[^/\s?#]+)"
     r"|inbounds/(?:add|(?:update|setEnable|del)/[0-9]+)"
     r"|setting/(?:update|apiTokens/create)|xray/update)$"
 )
