@@ -4,11 +4,12 @@ WM_TRANSACTION_TOOL="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/transaction_s
 WM_TRANSACTION_ROOT="${WM_TRANSACTION_ROOT:-$WM_STATE_DIR/transactions}"
 WM_TRANSACTION_KEEP="${WM_TRANSACTION_KEEP:-20}"
 WM_ACTIVE_TRANSACTION=""
-WM_TRANSACTION_PANEL_GUARD="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)/agent/panel_request_guard.py"
+# shellcheck source=scripts/lib/panel_guard.sh
+source "$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/panel_guard.sh"
 WM_PANEL_RESTORE_TOOL="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/panel_restore.py"
 
 wm_transaction_panel_admission() {
-  python3 "$WM_TRANSACTION_PANEL_GUARD" --check-open >/dev/null 2>&1
+  wm_panel_guard_run --check-open >/dev/null 2>&1
 }
 
 wm_atomic_install_json() {
