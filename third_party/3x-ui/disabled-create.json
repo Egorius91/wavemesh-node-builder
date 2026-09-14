@@ -1,0 +1,6 @@
+{
+  "upstream_repository": "MHSanaei/3x-ui",
+  "upstream_tag": "v3.4.2",
+  "upstream_commit": "f3a57d4c57fbcae94414138de42b7ef11dc513c8",
+  "patch_sha256": "e5331b35a8e30f55736ccdf91078e8f7bf79c9245a952a032f24824e965781b8"
+}
