@@ -124,6 +124,38 @@ restore_or_remove() {
   fi
 }
 
+# Exclude cooperating Agent/CLI writers for the entire source rollback. Never
+# replace/truncate the shared lock inode. The installer creates it via tmpfiles.
+node_lock="$DESTDIR/run/lock/wavemesh-node.lock"
+[[ -f "$node_lock" && ! -L "$node_lock" && -O "$node_lock" ]] || fail "Node mutation lock is unavailable or unsafe"
+[[ "$(stat -c '%h' "$node_lock")" == 1 ]] || fail "Node mutation lock is unsafe"
+exec 9<>"$node_lock"
+flock -n 9 || fail "Node mutation is busy"
+[[ "$(stat -Lc '%d:%i' "/proc/$$/fd/9")" == "$(stat -c '%d:%i' "$node_lock")" ]] || fail "Node mutation lock changed"
+
+panel_journal="$DESTDIR/var/lib/wavemesh-agent/panel-requests"
+[[ -z "${WAVEMESH_PANEL_REQUEST_STATE_DIR:-}" || "$WAVEMESH_PANEL_REQUEST_STATE_DIR" == "$panel_journal" ]] || fail "Rollback requires the canonical panel request journal"
+[[ ! -L "$panel_journal" ]] || fail "Panel request journal is unsafe"
+if [[ ! -e "$panel_journal" ]]; then
+  install_directory 0700 "$panel_journal"
+fi
+[[ -d "$panel_journal" && -O "$panel_journal" && "$(stat -c '%a' "$panel_journal")" == 700 ]] || fail "Panel request journal is unsafe"
+[[ ! -L "$panel_journal/.lock" ]] || fail "Panel request lock is unsafe"
+if [[ -e "$panel_journal/.lock" ]]; then
+  [[ -f "$panel_journal/.lock" && -O "$panel_journal/.lock" && "$(stat -c '%h:%a' "$panel_journal/.lock")" == 1:600 ]] || fail "Panel request lock is unsafe"
+fi
+rollback_umask="$(umask)"
+umask 077
+exec 10<>"$panel_journal/.lock"
+umask "$rollback_umask"
+flock -n 10 || fail "Panel request is busy"
+if [[ -e "$panel_journal/state.json" || -L "$panel_journal" || -L "$panel_journal/state.json" ]]; then
+  [[ -f "$INSTALL_DIR/panel_request_guard.py" && ! -L "$INSTALL_DIR/panel_request_guard.py" ]] || fail "Panel request guard is unavailable"
+  WAVEMESH_PANEL_REQUEST_STATE_DIR="$panel_journal" "$PYTHON" "$INSTALL_DIR/panel_request_guard.py" --check-open-held-lock >/dev/null 2>&1 || fail "Panel request reconciliation is required before rollback"
+  [[ -f "$backup_dir/panel_request_guard.py" && ! -L "$backup_dir/panel_request_guard.py" ]] || fail "Rollback target predates panel request protection"
+  grep -q 'panel_request_guard' "$backup_dir/access_runtime.py" || fail "Rollback target lacks panel request protection"
+fi
+
 unit_changed=true
 if [[ -f "$backup_dir/$SERVICE" && -f "$UNIT_PATH" ]] && cmp -s "$backup_dir/$SERVICE" "$UNIT_PATH"; then
   unit_changed=false
@@ -141,6 +173,9 @@ restore_or_remove access_runtime.py "$INSTALL_DIR/access_runtime.py" 0755 0755
 # rewound/deleted with code: old Agent versions simply leave it untouched.
 if [[ -e "$backup_dir/runtime_findings.py" || -e "$backup_dir/runtime_findings.py.absent" ]]; then
   restore_or_remove runtime_findings.py "$INSTALL_DIR/runtime_findings.py" 0644 0755
+fi
+if [[ -e "$backup_dir/panel_request_guard.py" || -e "$backup_dir/panel_request_guard.py.absent" ]]; then
+  restore_or_remove panel_request_guard.py "$INSTALL_DIR/panel_request_guard.py" 0644 0755
 fi
 restore_or_remove "$SERVICE" "$UNIT_PATH" 0644 0755
 # Backward-compatible with backups made before shared-lock support. Leave the

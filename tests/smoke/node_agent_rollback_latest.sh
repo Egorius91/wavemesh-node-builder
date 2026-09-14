@@ -41,6 +41,8 @@ run_installer() {
 }
 
 run_rollback() {
+  mkdir -p "$DESTDIR/run/lock"
+  touch "$DESTDIR/run/lock/wavemesh-node.lock"
   PATH="$BIN_DIR:$PATH" \
   WAVEMESH_AGENT_DESTDIR="$DESTDIR" \
   WAVEMESH_AGENT_SYSTEMCTL="$BIN_DIR/systemctl" \
