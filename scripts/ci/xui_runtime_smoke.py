@@ -15,6 +15,7 @@ from pathlib import Path
 import re
 import secrets
 import signal
+import socket
 import sqlite3
 import subprocess
 import sys
@@ -280,15 +281,38 @@ class Smoke:
                                  "--socks5-hostname", f"127.0.0.1:{PROXIES[name]}",
                                  f"http://127.0.0.1:{TARGET_PORT}{path}"],
                                 capture_output=True, timeout=4, env=self.env)
+        self.last_probe = {"role": name, "curl_exit": result.returncode,
+                           "body_matches": result.stdout == BODY, "target_received": path in self.target.seen}
         return result.returncode == 0 and result.stdout == BODY and path in self.target.seen
 
     def wait_traffic(self, name, expected):
-        deadline = time.monotonic() + 15
+        # The pinned panel retries a requested Xray reconciliation every 30s.
+        # Startup HTTP readiness can precede gRPC readiness, selecting that path.
+        deadline = time.monotonic() + 45
         while time.monotonic() < deadline:
             if self.traffic(name) is expected:
                 return
             time.sleep(0.2)
         raise SmokeFailure("VPN_TRAFFIC_EXPECTATION_FAILED")
+
+    def diagnostics(self):
+        listeners = {}
+        for name, port in {"panel": PORT, "inbound": INBOUND_PORT, "xray_api": 62789,
+                           "target": TARGET_PORT, **PROXIES}.items():
+            try:
+                with socket.create_connection(("127.0.0.1", port), timeout=0.2):
+                    listeners[name] = True
+            except OSError:
+                listeners[name] = False
+        patterns = ("failed to start", "failed to load", "connection refused", "invalid",
+                    "permission denied", "address already in use", "unknown protocol")
+        logs = {}
+        for name in ("panel", "client"):
+            path = self.root / (name + ".private.log")
+            raw = path.read_text(errors="replace").lower() if path.exists() else ""
+            logs[name] = {pattern.replace(" ", "_"): pattern in raw for pattern in patterns}
+        return {"last_probe": getattr(self, "last_probe", None), "listeners": listeners,
+                "process_exit_codes": [child.poll() for child in self.processes], "log_categories": logs}
 
     def denied_with_control(self):
         self.wait_traffic("control", True)
@@ -325,6 +349,9 @@ class Smoke:
             self.denied_with_control()
             require(self.db_state(False) == self.identities, "DISABLE_CHANGED_IDENTITY")
             self.mark("ACTIVATE_DISABLE_SAME_IDENTITY_REAL_VLESS")
+        except Exception:
+            self.failure_diagnostics = self.diagnostics()
+            raise
         finally:
             self.target.shutdown()
             self.target.server_close()
@@ -340,6 +367,7 @@ def main():
     report = {"schema": 1, "status": "FAILED", "builder_commit": args.head,
               "scope": "PRIVATE_LOOPBACK_CI_ONLY", "deployment": "NONE", "checks": {}}
     smoke = None
+    diagnostics = None
     old_umask = os.umask(0o077)
     try:
         namespace()
@@ -353,11 +381,14 @@ def main():
                               xray_sha256=smoke.manifest["members"]["x-ui/bin/xray-linux-amd64"]["sha256"])
             finally:
                 if smoke:
+                    if report["status"] != "PASS":
+                        diagnostics = getattr(smoke, "failure_diagnostics", None) or smoke.diagnostics()
                     smoke.close()
     except Exception as exc:
         # Fixed stage/type only: provider/panel/HTTP errors can contain tokens.
         report.update(stage=smoke.stage if smoke else "ISOLATION_OR_ARTIFACT",
                       error_type=type(exc).__name__, checks=smoke.checks if smoke else {})
+        report["diagnostics"] = diagnostics
         if isinstance(exc, SmokeFailure):
             report["error_code"] = str(exc)
         print("PANEL_RUNTIME_SMOKE=FAILED; NO_RAW_ERROR", file=sys.stderr)
