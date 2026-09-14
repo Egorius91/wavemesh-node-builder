@@ -149,6 +149,8 @@ class ProcessLockTests(unittest.TestCase):
         source = source.replace("mkdir -p /run/lock", ":")
         self.cli = self.root / "transaction.sh"
         self.cli.write_text(source, encoding="utf-8")
+        shutil.copy2(ROOT / "scripts/lib/panel_guard.sh", self.root / "panel_guard.sh")
+        shutil.copy2(ROOT / "agent/panel_request_guard.py", self.root / "panel_request_guard.py")
 
     def cli_command(self, hold=False):
         return ["bash", "-c", 'set -e; WM_STATE_DIR="$2"; wm_fail() { return 23; }; '
