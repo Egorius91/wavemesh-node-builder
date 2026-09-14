@@ -7,6 +7,8 @@ wm_configure_nginx_http() {
 server {
     listen 80;
     server_name ${DOMAIN};
+    access_log off;
+    error_log /dev/null;
 
     location /.well-known/acme-challenge/ {
         root ${WM_CERTBOT_DIR};
@@ -54,6 +56,8 @@ wm_configure_nginx_https() {
 server {
     listen 80;
     server_name ${DOMAIN};
+    access_log off;
+    error_log /dev/null;
 
     location /.well-known/acme-challenge/ {
         root ${WM_CERTBOT_DIR};
