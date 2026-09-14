@@ -12,6 +12,11 @@ grep -Fx 'ProtectSystem=strict' "$UNIT" >/dev/null
 grep -Fx 'CapabilityBoundingSet=CAP_SYS_PTRACE' "$UNIT" >/dev/null
 grep -Fx 'RestrictAddressFamilies=AF_UNIX AF_INET AF_INET6 AF_NETLINK' "$UNIT" >/dev/null
 grep -Fx 'ReadWritePaths=/etc/wavemesh-agent /etc/wavemesh-node /var/lib/wavemesh-agent' "$UNIT" >/dev/null
+grep -Fx 'ReadWritePaths=/run/lock/wavemesh-node.lock' "$UNIT" >/dev/null
+if grep -Eq '^ReadWritePaths=.* /run/lock( |$)|^ReadWritePaths=/run/lock$' "$UNIT"; then
+  echo "node agent unit grants write access to unrelated locks" >&2
+  exit 1
+fi
 
 if grep -Eq '^CapabilityBoundingSet=.*CAP_(NET_ADMIN|SYS_ADMIN|DAC_OVERRIDE)' "$UNIT"; then
   echo "node agent unit grants an excessive capability" >&2

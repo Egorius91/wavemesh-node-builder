@@ -89,10 +89,14 @@ fi
 command -v "$PYTHON" >/dev/null 2>&1 || fail "python3 is required"
 command -v wavemesh >/dev/null 2>&1 || fail "wavemesh CLI is required"
 command -v "$SYSTEMCTL" >/dev/null 2>&1 || fail "systemctl is required"
+if [[ -z "$DESTDIR" ]]; then
+  command -v systemd-tmpfiles >/dev/null 2>&1 || fail "systemd-tmpfiles is required"
+fi
 
 ETC_DIR="$(root_path /etc/wavemesh-agent)"
 INSTALL_DIR="$(root_path /usr/local/lib/wavemesh-agent)"
 UNIT_PATH="$(root_path /etc/systemd/system/$SERVICE)"
+LOCK_CONFIG_PATH="$(root_path /etc/tmpfiles.d/wavemesh-node-lock.conf)"
 ROLLBACK_PATH="$(root_path /usr/local/sbin/wavemesh-node-agent-rollback)"
 RECOVERY_PATH="$(root_path /usr/local/sbin/wavemesh-node-agent-recover)"
 BACKUP_ROOT="$(root_path /var/lib/wavemesh-agent/backups)"
@@ -106,6 +110,7 @@ RECOVERY_CLIENT_SOURCE="$PROJECT_DIR/agent/node_recovery.py"
 ACCEPTANCE_SOURCE="$PROJECT_DIR/agent/acceptance.py"
 ACCESS_SOURCE="$PROJECT_DIR/agent/access_runtime.py"
 UNIT_SOURCE="$PROJECT_DIR/agent/wavemesh-node-agent.service"
+LOCK_CONFIG_SOURCE="$PROJECT_DIR/agent/wavemesh-node-lock.conf"
 ROLLBACK_SOURCE="$PROJECT_DIR/agent/rollback.sh"
 RECOVERY_SOURCE="$PROJECT_DIR/agent/recover.sh"
 
@@ -118,6 +123,7 @@ for source in \
   "$ACCEPTANCE_SOURCE" \
   "$ACCESS_SOURCE" \
   "$UNIT_SOURCE" \
+  "$LOCK_CONFIG_SOURCE" \
   "$ROLLBACK_SOURCE" \
   "$RECOVERY_SOURCE"; do
   [[ -f "$source" && ! -L "$source" ]] || fail "Missing or unsafe installer source"
@@ -162,6 +168,7 @@ file_would_change "$RECOVERY_CLIENT_SOURCE" "$INSTALL_DIR/node_recovery.py" && c
 file_would_change "$ACCEPTANCE_SOURCE" "$INSTALL_DIR/acceptance.py" && changed=true
 file_would_change "$ACCESS_SOURCE" "$INSTALL_DIR/access_runtime.py" && changed=true
 file_would_change "$UNIT_SOURCE" "$UNIT_PATH" && changed=true
+file_would_change "$LOCK_CONFIG_SOURCE" "$LOCK_CONFIG_PATH" && changed=true
 file_would_change "$ROLLBACK_SOURCE" "$ROLLBACK_PATH" && changed=true
 file_would_change "$RECOVERY_SOURCE" "$RECOVERY_PATH" && changed=true
 [[ "$env_migration_required" == false ]] || changed=true
@@ -182,6 +189,7 @@ if [[ "$changed" == true ]]; then
   backup_file "$INSTALL_DIR/acceptance.py" "$backup_dir" acceptance.py 0755
   backup_file "$INSTALL_DIR/access_runtime.py" "$backup_dir" access_runtime.py 0755
   backup_file "$UNIT_PATH" "$backup_dir" "$SERVICE" 0644
+  backup_file "$LOCK_CONFIG_PATH" "$backup_dir" wavemesh-node-lock.conf 0644
   backup_file "$ROLLBACK_PATH" "$backup_dir" wavemesh-node-agent-rollback 0755
   backup_file "$RECOVERY_PATH" "$backup_dir" wavemesh-node-agent-recover 0755
   backup_file "$ENV_FILE" "$backup_dir" agent.env 0600
@@ -207,8 +215,15 @@ atomic_install_file "$RECOVERY_CLIENT_SOURCE" "$INSTALL_DIR/node_recovery.py" 07
 atomic_install_file "$ACCEPTANCE_SOURCE" "$INSTALL_DIR/acceptance.py" 0755
 atomic_install_file "$ACCESS_SOURCE" "$INSTALL_DIR/access_runtime.py" 0755
 atomic_install_file "$UNIT_SOURCE" "$UNIT_PATH" 0644
+atomic_install_file "$LOCK_CONFIG_SOURCE" "$LOCK_CONFIG_PATH" 0644
 atomic_install_file "$ROLLBACK_SOURCE" "$ROLLBACK_PATH" 0755
 atomic_install_file "$RECOVERY_SOURCE" "$RECOVERY_PATH" 0755
+
+# Create only this shared inode now; tmpfiles recreates it after reboot.
+# Never atomically install/replace the lock itself: a running CLI may hold it.
+if [[ -z "$DESTDIR" ]]; then
+  systemd-tmpfiles --create "$LOCK_CONFIG_PATH"
+fi
 
 if grep -Eq -- '-----BEGIN [A-Z0-9 ]+-----' "$ENV_FILE"; then
   fail "Agent environment migration produced unsafe content"
