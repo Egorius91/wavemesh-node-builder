@@ -23,7 +23,9 @@ wm_lock_mutation() {
   if ! flock -n 9; then
     [[ -f /run/lock/wavemesh-node.lock.meta ]] && holder="$(tr '\n' ' ' < /run/lock/wavemesh-node.lock.meta 2>/dev/null || true)"
     wm_fail "Another WaveMesh mutation is running${holder:+ (${holder% })}"
+    return 1
   fi
+  wm_panel_guard_run --check-maintenance >/dev/null 2>&1 || { wm_fail "Local panel maintenance blocks Node mutation"; return 1; }
   printf 'pid=%s\noperation=%s\n' "$$" "$operation" > /run/lock/wavemesh-node.lock.meta
   chmod 600 /run/lock/wavemesh-node.lock.meta
 }

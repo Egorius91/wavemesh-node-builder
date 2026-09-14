@@ -21,6 +21,8 @@ validate_subscription(){
   public_content="$(curl -fsSk --max-time 10 "$source_url" 2>/dev/null || true)"; [[ -n "$public_content" ]] || fail "Public subscription URL is not reachable: $source_url"; [[ "$public_content" == "$content" ]] || fail "Public subscription content does not match generated file"; ok "Subscription OK: $source_url"
 }
 case "${1:-}" in
+  maintenance)
+    shift; source "$WM_LIB_DIR/lib/panel_guard.sh"; wm_panel_guard_run maintenance "$@" ;;
   cascade)
     shift; source "$WM_LIB_DIR/00_common.sh"; source "$WM_LIB_DIR/lib/transaction.sh"; source "$WM_LIB_DIR/lib/xui_api.sh"; source "$WM_LIB_DIR/lib/inbound_adapter.sh"; source "$WM_LIB_DIR/lib/xray_template.sh"; source "$WM_LIB_DIR/lib/nginx_renderer.sh"; source "$WM_LIB_DIR/lib/subscription_renderer.sh"; source "$WM_LIB_DIR/lib/native_subscription.sh"; WM_CASCADE_TOOL="$WM_LIB_DIR/lib/cascade.py"; WM_AUTO_TOOL="$WM_LIB_DIR/lib/auto_route.py"; WM_RUNTIME_TOOL="$WM_LIB_DIR/lib/runtime_state.py"; source "$WM_LIB_DIR/commands/runtime.sh"; source "$WM_LIB_DIR/commands/auto.sh"; source "$WM_LIB_DIR/commands/cascade.sh"; wm_cascade_command "$@" ;;
   route)
@@ -37,7 +39,16 @@ case "${1:-}" in
   diagnostics)
     load_config; case "${NODE_ROLE:-standalone}" in entry) "$0" cascade health ;; exit) systemctl is-active --quiet nginx && ok "nginx active" || fail "nginx inactive"; systemctl is-active --quiet x-ui && ok "3X-UI active" || fail "3X-UI inactive"; [[ -f "/etc/letsencrypt/live/${DOMAIN}/fullchain.pem" ]] && ok "SSL certificate exists" || fail "SSL missing"; [[ -n "${PANEL_TOKEN:-}" ]] && ok "3X-UI bearer API token present" || fail "3X-UI bearer API token missing"; curl -fsS --max-time 5 "http://127.0.0.1:${PANEL_PORT}${PANEL_PATH}" >/dev/null 2>&1 && ok "3X-UI panel reachable on loopback" || fail "3X-UI panel is not reachable on loopback"; ok "Exit diagnostics OK; client subscription is not applicable" ;; standalone) systemctl is-active --quiet nginx && ok "nginx active" || fail "nginx inactive"; [[ -f "/etc/letsencrypt/live/${DOMAIN}/fullchain.pem" ]] && ok "SSL certificate exists" || fail "SSL missing"; validate_subscription ;; *) fail "Unsupported node role: ${NODE_ROLE}" ;; esac ;;
   validate-subscription) validate_subscription ;;
-  repair) case "${2:-}" in --nginx) nginx -t && systemctl reload nginx && ok "nginx reloaded" ;; --ssl) load_config; certbot renew --dry-run ;; --subscriptions) validate_subscription ;; *) fail "Usage: wavemesh repair --nginx|--ssl|--subscriptions" ;; esac ;;
+  repair)
+    case "${2:-}" in
+      --nginx|--ssl)
+        source "$WM_LIB_DIR/00_common.sh"; source "$WM_LIB_DIR/lib/transaction.sh"
+        wm_lock_mutation "repair ${2}"
+        if [[ "$2" == --nginx ]]; then nginx -t && systemctl reload nginx && ok "nginx reloaded"
+        else load_config; certbot renew --dry-run; fi ;;
+      --subscriptions) validate_subscription ;;
+      *) fail "Usage: wavemesh repair --nginx|--ssl|--subscriptions" ;;
+    esac ;;
   *) cat <<'EOF'
 Usage:
   wavemesh show-report
@@ -75,6 +86,9 @@ Usage:
   wavemesh subscription publication-mode [--json]
   wavemesh subscription publication-mode all|auto-only --dry-run|--apply [--json]
   wavemesh transaction list [--json]
+  wavemesh maintenance status
+  wavemesh maintenance prepare OPERATION_UUID GENERATION
+  wavemesh maintenance cancel OPERATION_UUID GENERATION
   wavemesh transaction recover --id ID|--latest
   wavemesh repair --nginx
   wavemesh repair --ssl

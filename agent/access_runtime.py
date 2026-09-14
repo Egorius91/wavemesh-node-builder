@@ -60,6 +60,10 @@ def node_mutation_lock(path: Path | None = None):
         current = path.lstat()
         if (current.st_dev, current.st_ino) != (info.st_dev, info.st_ino):
             raise ProvisionError("Node mutation lock changed")
+        try:
+            PanelRequestGuard().check_maintenance()
+        except PanelRequestError as exc:
+            raise ProvisionError(str(exc)) from None
         yield
     finally:
         if fd is not None:
