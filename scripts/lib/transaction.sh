@@ -5,6 +5,7 @@ WM_TRANSACTION_ROOT="${WM_TRANSACTION_ROOT:-$WM_STATE_DIR/transactions}"
 WM_TRANSACTION_KEEP="${WM_TRANSACTION_KEEP:-20}"
 WM_ACTIVE_TRANSACTION=""
 WM_TRANSACTION_PANEL_GUARD="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)/agent/panel_request_guard.py"
+WM_PANEL_RESTORE_TOOL="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/panel_restore.py"
 
 wm_transaction_panel_admission() {
   python3 "$WM_TRANSACTION_PANEL_GUARD" --check-open >/dev/null 2>&1
@@ -105,22 +106,47 @@ wm_transaction_wait_xui() {
   return 1
 }
 
+wm_transaction_stop_xui() {
+  local observed=""
+  systemctl stop x-ui >/dev/null 2>&1 || return 1
+  observed="$(systemctl show x-ui --property=LoadState,ActiveState,SubState,MainPID,ControlPID,ControlGroup,KillMode,SendSIGKILL 2>/dev/null)" || return 1
+  printf '%s\n' "$observed" | python3 "$WM_PANEL_RESTORE_TOOL" verify-stopped >/dev/null 2>&1
+}
+
+wm_transaction_rollback_failed() {
+  python3 "$WM_TRANSACTION_TOOL" mark --transaction "$1" --status rollback_failed --message "rollback requires reconciliation" || true
+  wm_warn "Rollback stopped; backups retained for reconciliation"
+  return 1
+}
+
 wm_transaction_rollback() {
   local transaction="$1" message="${2:-automatic rollback}" failed=0 db="" nginx_conf="${WM_NGINX_MANAGED_CONF:-/etc/nginx/wavemesh-managed-locations.conf}"
   trap - EXIT INT TERM HUP
   # The caller holds the shared Node mutation lock. An HTTP timeout can outlive
   # that process; do not restore a panel DB/config snapshot over its unknown work.
   wm_transaction_panel_admission || { wm_warn "Panel request reconciliation is required before rollback"; return 1; }
-  python3 "$WM_TRANSACTION_TOOL" mark --transaction "$transaction" --status recovering --message "$message" || failed=1
+  python3 "$WM_TRANSACTION_TOOL" mark --transaction "$transaction" --status recovering --message "$message" || return 1
+  # Validate the backup pair and stop before ANY configuration/database restore.
+  if [[ -e "$transaction/x-ui.before.db" || -e "$transaction/x-ui.before.db.path" ]]; then
+    if [[ ! -f "$transaction/x-ui.before.db" || ! -f "$transaction/x-ui.before.db.path" ]]; then
+      wm_transaction_rollback_failed "$transaction"; return 1
+    fi
+    db="$(cat "$transaction/x-ui.before.db.path")" || { wm_transaction_rollback_failed "$transaction"; return 1; }
+    if [[ -z "$db" ]] || ! wm_transaction_stop_xui; then
+      wm_transaction_rollback_failed "$transaction"; return 1
+    fi
+    if ! python3 "$WM_PANEL_RESTORE_TOOL" restore --source "$transaction/x-ui.before.db" --target "$db" >/dev/null 2>&1; then
+      wm_transaction_rollback_failed "$transaction"; return 1
+    fi
+  fi
   [[ ! -f "$transaction/config.before.json" ]] || wm_atomic_install_json "$transaction/config.before.json" "$WM_CONFIG_JSON" || failed=1
   if [[ -f "$transaction/runtime.before.absent" ]]; then rm -f "$WM_RUNTIME_JSON"; elif [[ -f "$transaction/runtime.before.json" ]]; then wm_atomic_install_json "$transaction/runtime.before.json" "$WM_RUNTIME_JSON" || failed=1; fi
   wm_load_config || failed=1
-  if [[ -f "$transaction/x-ui.before.db" && -f "$transaction/x-ui.before.db.path" ]]; then
-    db="$(cat "$transaction/x-ui.before.db.path")"
-    systemctl stop x-ui || failed=1
-    install -m 0600 "$transaction/x-ui.before.db" "$db" || failed=1
-    systemctl start x-ui || failed=1
-    wm_transaction_wait_xui || failed=1
+  if (( failed != 0 )); then wm_transaction_rollback_failed "$transaction"; return 1; fi
+  if [[ -n "$db" ]]; then
+    if ! systemctl start x-ui || ! wm_transaction_wait_xui; then
+      wm_transaction_rollback_failed "$transaction"; return 1
+    fi
   fi
   if [[ -f "$transaction/xray.before.json" ]] && declare -F wm_xray_apply_template >/dev/null; then wm_xray_apply_template "$transaction/xray.before.json" || failed=1; fi
   if [[ -f "$transaction/nginx.before.absent" ]]; then rm -f "$nginx_conf"; elif [[ -f "$transaction/nginx.before.conf" ]]; then install -m 0644 "$transaction/nginx.before.conf" "$nginx_conf" || failed=1; fi

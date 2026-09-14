@@ -33,7 +33,12 @@ install() {
   cp "$1" "$2"
 }
 nginx() { return 0; }
-systemctl() { return 0; }
+systemctl() {
+  if [[ "${1:-}" == "show" ]]; then
+    printf '%s\n' LoadState=loaded ActiveState=inactive SubState=dead MainPID=0 ControlPID=0 ControlGroup= KillMode=control-group SendSIGKILL=yes
+  fi
+  return 0
+}
 
 source "$ROOT_DIR/scripts/lib/transaction.sh"
 
