@@ -95,6 +95,10 @@ class InstalledGuardTest(unittest.TestCase):
     def test_install_carries_exact_shared_source_and_no_repo_lookup(self):
         self.assertEqual(self.guard.read_bytes(), (ROOT / "agent/panel_request_guard.py").read_bytes())
         self.assertEqual(self.guard.stat().st_mode & 0o777, 0o644)
+        template = self.library / "systemd/50-wavemesh-panel-startup.conf"
+        self.assertEqual(template.read_bytes(), (ROOT / "systemd/50-wavemesh-panel-startup.conf").read_bytes())
+        self.assertEqual(template.stat().st_mode & 0o777, 0o644)
+        self.assertFalse((self.prefix / "etc/systemd").exists())
         result = self.shell('source "$INSTALLED_LIBRARY/lib/xui_api.sh"\n'
                             'printf "%s" "$WM_PANEL_REQUEST_GUARD"')
         self.assertEqual(Path(result.stdout.decode()), self.guard)
