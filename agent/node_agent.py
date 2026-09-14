@@ -27,6 +27,11 @@ from typing import Any
 from urllib import error, parse, request
 
 try:
+    from runtime_findings import RuntimeFindingCycle
+except ImportError:  # Old/staged packages keep ordinary Agent duties available.
+    RuntimeFindingCycle = None  # type: ignore[assignment,misc]
+
+try:
     from node_mtls_runtime import MtlsRuntimeConfig, MtlsRuntimeError, NodeMtlsRuntime
 except ImportError:  # Preserve bearer-only compatibility during staged upgrades.
     MtlsRuntimeConfig = None  # type: ignore[assignment,misc]
@@ -109,6 +114,8 @@ class AgentConfig:
     command_mode: str
     access_runtime_path: Path
     access_state_root: Path
+    runtime_finding_mode: str = "disabled"
+    runtime_finding_state_root: Path = Path("/var/lib/wavemesh-agent/runtime-findings")
 
     @classmethod
     def load(cls, env_path: Path) -> "AgentConfig":
@@ -178,6 +185,11 @@ class AgentConfig:
             raise AgentError("WAVEMESH_AGENT_COMMAND_MODE must be disabled or access")
         if command_mode == "access" and mtls_mode != "shadow":
             raise AgentError("Access command mode requires WAVEMESH_AGENT_MTLS_MODE=shadow")
+        finding_mode = values.get("WAVEMESH_AGENT_RUNTIME_FINDINGS_MODE", "disabled")
+        if finding_mode not in {"disabled", "observe"}:
+            raise AgentError("WAVEMESH_AGENT_RUNTIME_FINDINGS_MODE must be disabled or observe")
+        if finding_mode == "observe" and auth_mode != "mtls":
+            raise AgentError("Runtime findings require primary mTLS authentication")
         return cls(
             env_path=env_path,
             api_base=values["WAVEMESH_API_BASE"].rstrip("/"),
@@ -246,6 +258,8 @@ class AgentConfig:
                 300,
             ),
             command_mode=command_mode,
+            runtime_finding_mode=finding_mode,
+            runtime_finding_state_root=Path(values.get("WAVEMESH_AGENT_RUNTIME_FINDINGS_STATE_ROOT", "/var/lib/wavemesh-agent/runtime-findings")),
             access_runtime_path=Path(
                 values.get(
                     "WAVEMESH_AGENT_ACCESS_RUNTIME_PATH",
@@ -295,6 +309,7 @@ class NodeAgent:
             "auto_routes": [],
         }
         self.runtime = read_json_file(config.runtime_path, default={})
+        self.last_finding_status: dict[str, Any] = {"state": "DISABLED"}
 
     def run(self, once: bool = False) -> None:
         next_observation = 0.0
@@ -341,6 +356,7 @@ class NodeAgent:
             except Exception as exc:  # noqa: BLE001 - long-running service boundary
                 LOG.exception("Heartbeat cycle failed: %s", exc)
             self.run_mtls_shadow_heartbeat(heartbeat_payload)
+            self.run_runtime_finding_cycle()
 
             if once:
                 return
@@ -352,6 +368,34 @@ class NodeAgent:
             **self.last_health_state,
             "node_status": "degraded",
         }
+
+    def run_runtime_finding_cycle(self) -> None:
+        if self.config.runtime_finding_mode != "observe":
+            return
+        if (self.config.auth_mode != "mtls" or self.mtls_runtime is None
+                or self.last_mtls_status.get("state") != "SHADOW_ACTIVE"):
+            self.last_finding_status = {"state": "MTLS_NOT_READY"}
+            return
+        try:
+            if RuntimeFindingCycle is None:
+                raise AgentError("Finding collector is unavailable")
+            # A separate process bounds even a stalled local HTTP stream. Its
+            # private journal survives a timeout; stdout/stderr never reach logs.
+            completed = subprocess.run([
+                "/usr/bin/python3", str(Path(__file__).with_name("runtime_findings.py")),
+                "--node-id", self.config.node_id, "--tenant-id", self.config.tenant_id,
+                "--state-root", str(self.config.runtime_finding_state_root),
+                "--access-root", str(self.config.access_state_root), "--config", str(NODE_CONFIG_PATH),
+            ], check=False, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, timeout=20)
+            if completed.returncode != 0:
+                raise AgentError("Finding collection requires review")
+            self.last_finding_status = RuntimeFindingCycle(
+                self.config.node_id, self.config.tenant_id, self.config.runtime_finding_state_root,
+                NODE_CONFIG_PATH, self.config.access_state_root,
+            ).cycle(self.mtls_runtime)
+        except Exception:  # Isolate optional evidence work and never log raw errors.
+            self.last_finding_status = {"state": "COLLECTION_BLOCKED"}
+            LOG.warning("Runtime finding cycle blocked; private state retained")
 
     def run_mtls_lifecycle(self) -> None:
         if self.mtls_runtime is None:
@@ -782,6 +826,7 @@ class NodeAgent:
             "healthy_exits": int(state.get("healthy_exits") or 0),
             "total_exits": int(state.get("total_exits") or 0),
             "mtls_shadow": self.last_mtls_status,
+            "runtime_findings": {"mode": self.config.runtime_finding_mode, **self.last_finding_status},
         }
         assert_redacted(capabilities)
         return {
@@ -1005,6 +1050,8 @@ def read_env_file(path: Path) -> dict[str, str]:
             raise AgentError(f"Invalid environment line {number} in {path}")
         key, raw_value = line.split("=", 1)
         key = key.strip()
+        if key.startswith("WAVEMESH_AGENT_RUNTIME_FINDINGS_") and key in values:
+            raise AgentError("Duplicate runtime finding configuration")
         if not key or not key.replace("_", "").isalnum():
             raise AgentError(f"Invalid environment key on line {number} in {path}")
         parsed = shlex.split(raw_value, posix=True)

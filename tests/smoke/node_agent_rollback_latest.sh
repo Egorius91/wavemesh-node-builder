@@ -50,6 +50,8 @@ run_rollback() {
 }
 
 run_installer
+printf 'preserved private evidence\n' > "$DESTDIR/var/lib/wavemesh-agent/runtime-findings/evidence-marker"
+chmod 0600 "$DESTDIR/var/lib/wavemesh-agent/runtime-findings/evidence-marker"
 printf '\n# rollback-latest-marker\n' >> "$DESTDIR/usr/local/lib/wavemesh-agent/node_agent.py"
 run_installer
 
@@ -58,6 +60,7 @@ mkdir -p "$backup_root/stale-upstream-release-20990101T000000Z"
 
 run_rollback --latest >/dev/null
 grep -Fq 'rollback-latest-marker' "$DESTDIR/usr/local/lib/wavemesh-agent/node_agent.py"
+grep -Fx 'preserved private evidence' "$DESTDIR/var/lib/wavemesh-agent/runtime-findings/evidence-marker" >/dev/null
 
 mkdir -p "$backup_root/20991231T235959Z-99999"
 if run_rollback --latest >/dev/null 2>&1; then
