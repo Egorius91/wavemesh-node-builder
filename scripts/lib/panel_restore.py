@@ -61,6 +61,9 @@ def restore(source, target, timeout=15.0):
     source, target = regular(source), regular(target)
     if source == target or os.path.samefile(source, target):
         raise ValueError("backup and destination must differ")
+    with source.open("rb") as stream:
+        if stream.read(16) != b"SQLite format 3\x00":
+            raise ValueError("backup database header missing")
     for suffix in ("-wal", "-shm", "-journal"):
         side = Path(str(source) + suffix)
         if side.exists() or side.is_symlink():
@@ -80,6 +83,8 @@ def restore(source, target, timeout=15.0):
     with closing(sqlite3.connect(source.as_uri() + "?mode=ro&immutable=1", uri=True)) as src:
         if src.execute("PRAGMA integrity_check").fetchall() != [("ok",)]:
             raise ValueError("invalid backup database")
+        if src.execute("SELECT 1 FROM sqlite_schema WHERE type='table' LIMIT 1").fetchone() is None:
+            raise ValueError("backup has no application schema")
         with closing(sqlite3.connect(target.as_uri() + "?mode=rw", uri=True, timeout=0.05)) as dst:
             dst.execute("PRAGMA synchronous=FULL")
             src.backup(dst, pages=128, progress=progress, sleep=0.05)

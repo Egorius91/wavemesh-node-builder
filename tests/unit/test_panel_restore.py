@@ -9,6 +9,7 @@ import sys
 import tempfile
 import time
 import unittest
+from unittest.mock import patch
 
 ROOT = Path(__file__).resolve().parents[2]
 TOOL = ROOT / "scripts/lib/panel_restore.py"
@@ -95,7 +96,18 @@ db.execute("update data set value='crashed-writer'"); db.commit(); os._exit(0)
     def test_corrupt_backup_is_rejected_before_target_change(self):
         before = self.target.read_bytes()
         self.source.write_bytes(b"not a sqlite database")
-        with self.assertRaises(sqlite3.Error):
+        with self.assertRaises((sqlite3.Error, ValueError)):
+            module.restore(self.source, self.target)
+        self.assertEqual(before, self.target.read_bytes())
+
+    def test_empty_snapshot_cannot_erase_application_database(self):
+        before = self.target.read_bytes()
+        self.source.write_bytes(b"")
+        with self.assertRaises(ValueError):
+            module.restore(self.source, self.target)
+        with closing(sqlite3.connect(self.source)) as db:
+            db.execute("VACUUM")
+        with self.assertRaises(ValueError):
             module.restore(self.source, self.target)
         self.assertEqual(before, self.target.read_bytes())
 
@@ -117,8 +129,9 @@ db.execute("update data set value='crashed-writer'"); db.commit(); os._exit(0)
             db.execute("create table padding(value blob)")
             db.executemany("insert into padding values (?)", [(bytes(4096),)] * 500)
             db.commit()
-        with self.assertRaises(TimeoutError):
-            module.restore(self.source, self.target, timeout=0.000001)
+        with patch.object(module.time, "monotonic", side_effect=[0.0, 1.0]):
+            with self.assertRaises(TimeoutError):
+                module.restore(self.source, self.target, timeout=0.2)
         self.assertEqual(value(self.target), "current")
         self.assertEqual(value(self.source), "snapshot")
 
@@ -202,6 +215,7 @@ class ShellRollbackTest(unittest.TestCase):
                 database(root / "live.db", "current")
                 transaction = root / "transaction"
                 transaction.mkdir()
+                (transaction / "subscriptions.before.absent").touch()
                 (root / "snapshot.db").replace(transaction / "x-ui.before.db")
                 (transaction / "x-ui.before.db.path").write_text(str(root / "live.db"))
                 if failure == "corrupt":
@@ -257,4 +271,4 @@ if wm_transaction_rollback "$CASE_DIR/transaction" test; then exit 0; else exit 
 
 
 if __name__ == "__main__":
-    unittest.main()
+    unittest.main(verbosity=2)
