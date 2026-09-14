@@ -230,6 +230,29 @@ print('200', end='')
         self.assertEqual(self.shell(method="GET").returncode, 0)
         self.assertEqual((self.root / "counter").read_text(), "2")
 
+    def test_python_transport_timeout_blocks_shell_before_curl(self):
+        panel = runtime.PanelClient({"panel": {"listen_port": 12345, "path": "synthetic", "api_auth": {"token": "synthetic_token"}}})
+        def timeout(*args, **kwargs):
+            self.assertEqual(self.record()["phase"], "DISPATCH_INTENT")
+            raise TimeoutError("private_network_error")
+        with mock.patch.object(runtime.request, "urlopen", side_effect=timeout) as network:
+            with self.assertRaisesRegex(runtime.ProvisionError, "^PANEL_REQUEST_UNCERTAIN$"):
+                panel.call("POST", "/panel/api/clients/add", {})
+            network.assert_called_once()
+        self.assertNotEqual(self.shell().returncode, 0)
+        self.assertFalse((self.root / "counter").exists())
+
+    def test_python_success_preserves_response_and_allows_shell(self):
+        panel = runtime.PanelClient({"panel": {"listen_port": 12345, "path": "synthetic", "api_auth": {"token": "synthetic_token"}}})
+        response = mock.MagicMock()
+        response.__enter__.return_value.read.return_value = b'{"success":true,"obj":{"count":1}}'
+        with mock.patch.object(runtime.request, "urlopen", return_value=response):
+            self.assertEqual(panel.call("POST", "/panel/api/clients/add", {}),
+                             {"success": True, "obj": {"count": 1}})
+        self.assertEqual(self.record()["phase"], "RESPONSE_ACCEPTED")
+        self.assertEqual(self.shell().returncode, 0)
+        self.assertEqual((self.root / "counter").read_text(), "1")
+
     def test_normal_shell_writes_continue_with_response_acceptance(self):
         self.assertEqual(self.shell().returncode, 0)
         self.assertEqual(self.shell().returncode, 0)
