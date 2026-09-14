@@ -17,7 +17,8 @@ def main():
                               check=True, capture_output=True).stdout
     if git("rev-parse", "HEAD").decode().strip() != manifest["upstream_commit"]:
         raise RuntimeError("upstream commit mismatch")
-    if git("status", "--porcelain", "--untracked-files=all").strip():
+    if (git("status", "--porcelain", "--untracked-files=all").strip()
+            or git("ls-files", "--others").strip()):
         raise RuntimeError("upstream checkout must be clean")
     if hashlib.sha256(patch.read_bytes()).hexdigest() != manifest["patch_sha256"]:
         raise RuntimeError("patch checksum mismatch")
