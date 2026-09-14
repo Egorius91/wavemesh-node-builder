@@ -3,7 +3,7 @@ name: Full WaveMesh panel candidate
 on:
   pull_request:
   push:
-    branches: [main, feat/panel-artifact, test/panel-runtime-smoke]
+    branches: [main, feat/panel-artifact, test/panel-runtime-smoke, test/panel-maintenance-integration]
   workflow_dispatch:
 
 permissions:
@@ -89,7 +89,7 @@ jobs:
           set -Eeuo pipefail
           parent_netns="$(readlink /proc/self/ns/net)"
           sudo env WAVEMESH_CI_PARENT_NETNS="$parent_netns" \
-            timeout 180 unshare --net --pid --fork --kill-child --mount-proc \
+            timeout 300 unshare --net --pid --fork --kill-child --mount-proc \
             python3 scripts/ci/xui_runtime_smoke.py --candidate candidate \
             --head "$CANDIDATE_HEAD" --report runtime-smoke.json
       - name: Preserve sanitized runtime smoke evidence

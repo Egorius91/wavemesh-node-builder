@@ -27,6 +27,7 @@ from urllib import error, request
 import uuid
 
 import xui_artifact
+from xui_writer_smoke import Writers
 
 BODY = b"wavemesh-private-loopback-control"
 PORT = 31000
@@ -258,15 +259,21 @@ class Smoke:
                            "streamSettings": json.dumps({"network": "tcp", "security": "none"}),
                            "sniffing": json.dumps({"enabled": False})})
         self.inbound_id = inbound["id"]
+        token = self.api("setting/apiTokens/create", {"name": "private-writer-smoke"})["token"]
+        self.writers = Writers(self.root, PORT, token, require)
         for name in PROXIES:
-            self.api("clients/" + ("add" if name == "control" else "addDisabled"),
-                     {"client": self.clients[name], "inboundIds": [self.inbound_id]})
+            payload = {"client": self.clients[name], "inboundIds": [self.inbound_id]}
+            if name == "control":
+                self.api("clients/add", payload)
+            else:
+                self.writers.agent("/panel/api/clients/addDisabled", payload)
         self.identities = self.db_state(False)
         duplicate = json.loads(self.http("panel/api/clients/addDisabled",
                                {"client": self.clients["candidate"], "inboundIds": [self.inbound_id]}))
         require(duplicate.get("success") is False, "DUPLICATE_CREATE_NOT_REJECTED")
         require(self.db_state(False) == self.identities, "REPLAY_CHANGED_IDENTITY")
         self.mark("HTTP_DISABLED_CREATE_AND_DUPLICATE_REJECTION")
+        self.mark("AGENT_BEARER_DISABLED_CREATE")
         config = {"log": {"loglevel": "none"}, "inbounds": [], "outbounds": [], "routing": {"rules": []}}
         for name, port in PROXIES.items():
             config["inbounds"].append({"tag": name, "listen": "127.0.0.1", "port": port,
@@ -325,6 +332,52 @@ class Smoke:
             require(not self.traffic("candidate"), "DISABLED_CLIENT_CONNECTED")
         require(self.traffic("control"), "HEALTHY_CONTROL_LOST")
 
+    def held_writers(self):
+        self.stage = "SHARED_MAINTENANCE_ADMISSION"
+        operation = str(uuid.uuid4())
+        status = self.writers.maintenance("prepare", operation, 1)
+        require(status["local_admission"] == "CLOSED" and not status["request_pending"]
+                and status["quiescence"] == "NOT_PROVEN", "MAINTENANCE_STATUS_MISMATCH")
+        before = self.writers.journal_bytes()
+        path = "/panel/api/clients/update/" + self.clients["candidate"]["email"]
+        enabled = {**self.clients["candidate"], "enable": True}
+        self.writers.agent_rejected(path, enabled, "PANEL_LOCAL_MAINTENANCE_HELD")
+        require(self.writers.cli(path, enabled).returncode != 0, "HELD_CLI_DISPATCHED")
+        self.writers.maintenance("prepare", operation, 1)
+        require(self.writers.journal_bytes() == before, "HOLD_REPLAY_CHANGED_JOURNAL")
+        require(self.db_state(False) == self.identities, "HELD_WRITER_CHANGED_CLIENTS")
+        self.denied_with_control()
+        status = self.writers.maintenance("cancel", operation, 1)
+        require(status["local_admission"] == "NOT_HELD", "CANCELLATION_FAILED")
+        self.mark("SHARED_MAINTENANCE_BLOCKS_AGENT_AND_INSTALLED_CLI")
+
+    def lost_response(self):
+        self.stage = "COMMITTED_WRITE_LOST_RESPONSE"
+        path = "/panel/api/clients/update/" + self.clients["candidate"]["email"]
+        # First activate through the installed transport, then really disable
+        # through Agent but discard its accepted response before journaling.
+        enabled = {**self.clients["candidate"], "enable": True}
+        require(self.writers.cli(path, enabled).returncode == 0, "CLI_ACTIVATION_REJECTED")
+        self.wait_traffic("candidate", True)
+        self.writers.agent_rejected(path, self.clients["candidate"],
+                                    "PANEL_REQUEST_UNCERTAIN", lose_response=True)
+        require(self.db_state(False) == self.identities, "LOST_RESPONSE_WRITE_NOT_COMMITTED")
+        before = self.writers.journal_bytes()
+        self.writers.agent_rejected(path, enabled, "PANEL_REQUEST_RECONCILIATION_REQUIRED")
+        require(self.writers.cli(path, enabled).returncode != 0, "UNCERTAIN_CLI_DISPATCHED")
+        require(self.writers.journal_bytes() == before, "UNCERTAIN_RETRY_CHANGED_JOURNAL")
+        operation = str(uuid.uuid4())
+        status = self.writers.maintenance("prepare", operation, 2)
+        require(status["request_pending"] and status["local_admission"] == "CLOSED",
+                "UNCERTAIN_HOLD_STATUS_MISMATCH")
+        held = self.writers.journal_bytes()
+        self.writers.maintenance("cancel", operation, 2, accepted=False)
+        require(self.writers.journal_bytes() == held, "CANCELLATION_CLEARED_UNCERTAINTY")
+        require(self.db_state(False) == self.identities, "UNCERTAIN_RETRY_CHANGED_CLIENTS")
+        self.wait_traffic("candidate", False)
+        self.denied_with_control()
+        self.mark("COMMITTED_LOST_RESPONSE_FENCES_BOTH_WRITERS_AND_CANCELLATION")
+
     def run(self):
         self.bootstrap()
         self.setup_clients()
@@ -344,16 +397,20 @@ class Smoke:
             require(self.db_state(False) == self.identities, "RESTART_CHANGED_IDENTITY")
             self.denied_with_control()
             self.mark("DISABLED_PERSISTENCE_AFTER_PANEL_RESTART")
+            self.held_writers()
             self.stage = "ACTIVATION_AND_DISABLE"
-            self.api("clients/update/" + self.clients["candidate"]["email"], {**self.clients["candidate"], "enable": True})
+            path = "/panel/api/clients/update/" + self.clients["candidate"]["email"]
+            require(self.writers.cli(path, {**self.clients["candidate"], "enable": True}).returncode == 0,
+                    "CLI_ACTIVATION_REJECTED")
             self.wait_traffic("candidate", True)
             require(self.db_state(True) == self.identities, "ACTIVATION_CHANGED_IDENTITY")
             require(self.traffic("control"), "ACTIVATION_BROKE_CONTROL")
-            self.api("clients/update/" + self.clients["candidate"]["email"], self.clients["candidate"])
+            self.writers.agent(path, self.clients["candidate"])
             self.wait_traffic("candidate", False)
             self.denied_with_control()
             require(self.db_state(False) == self.identities, "DISABLE_CHANGED_IDENTITY")
             self.mark("ACTIVATE_DISABLE_SAME_IDENTITY_REAL_VLESS")
+            self.lost_response()
         except Exception:
             self.failure_diagnostics = self.diagnostics()
             raise

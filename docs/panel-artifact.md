@@ -70,7 +70,7 @@ acceptance remains separate. The fixture's Freedom `finalRules` allows only TCP
 to the loopback sentinel port and blocks other destinations, following the
 [Xray server-side private-address policy](https://xtls.github.io/en/config/outbounds/freedom.html).
 It tests duplicate rejection, not backend CREATE
-idempotency or a lost-response recovery contract. No installer is invoked and
+idempotency or a completed lost-response recovery contract. No panel installer is invoked and
 no GitHub release is published. The ordinary installer still selects upstream.
 
 The first real HTTP smoke exposed duplicate disabled creation in the inherited
@@ -82,6 +82,26 @@ inbound IDs are rejected before any write. Backend tests cover concurrent calls
 and changed identities; smoke checks both normalized SQLite rows and the
 inbound's client array. Legacy `/add` semantics are unchanged. This is conflict
 rejection, not a multi-inbound transaction or general lost-response replay API.
+
+The integration candidate also carries the shared Agent/CLI journal, durable
+local maintenance admission and stopped-backend rollback components. Its smoke
+uses the real `PanelClient` with an API token issued over authenticated HTTP to
+create the disabled client. The actual CLI packaging function installs the Bash
+transport and guard into a private prefix; only fixed Node lock paths are
+relocated inside that fixture. CLI activation and Agent disable must change real
+VLESS behavior while preserving SQLite and inbound identities. The installed
+`wavemesh maintenance` command must block both writers during a retained hold,
+and cancellation must permit the subsequent transport operations.
+
+Finally, the real panel accepts an Agent disable while the fixture discards the
+response before the journal can acknowledge it. Both writers must refuse a new
+activation, retain the pending request, and preserve the disabled runtime with
+a healthy control. Preparing a hold around this uncertainty must not make
+cancellation possible. This proves fencing of a committed but unacknowledged
+write, not its reconciliation or recovery. The fixture ends with the pending
+journal intact and deletes the entire disposable environment on teardown.
+Neither a local hold nor this loopback result proves external writer exclusion,
+backend drain, live installation, or a quiescence receipt.
 
 After the dependency PRs merge, rebuild at the final Builder merge SHA and verify
 the new artifact. Never deploy the old PR-head candidate as a merge-bound build.
