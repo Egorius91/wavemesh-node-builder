@@ -100,6 +100,28 @@ run_rollback --latest >/dev/null
 cmp "$TEMP_DIR/history.before-rollback" "$journal/state.json"
 [[ ! -s "$SYSTEMCTL_LOG" ]]
 
+# A v3 installation intent is never reopened by ordinary source rollback.
+PYTHONPATH="$ROOT_DIR/agent" WAVEMESH_PANEL_REQUEST_STATE_DIR="$journal" \
+  python3 - "$TEMP_DIR/install-intent.lock" <<'PY'
+import sys
+from pathlib import Path
+from panel_request_guard import PanelRequestGuard, maintenance_node_lock
+guard = PanelRequestGuard()
+operation = '00000000-0000-4000-8000-000000000001'
+lock = Path(sys.argv[1])
+with maintenance_node_lock(lock), guard.locked():
+    guard.maintenance('prepare', operation, 2)
+with guard.installation_intent(operation, 2, 'a' * 64, 'b' * 64, lock):
+    pass
+PY
+cp "$journal/state.json" "$TEMP_DIR/install-intent.before-rollback"
+if run_rollback --latest --restart >/dev/null 2>&1; then
+  echo "rollback ignored non-cancellable installation intent" >&2; exit 1
+fi
+cmp "$TEMP_DIR/agent.before-hold" "$DESTDIR/usr/local/lib/wavemesh-agent/node_agent.py"
+cmp "$TEMP_DIR/install-intent.before-rollback" "$journal/state.json"
+[[ ! -s "$SYSTEMCTL_LOG" ]]
+
 mkdir -p "$backup_root/20991231T235959Z-99999"
 if run_rollback --latest >/dev/null 2>&1; then
   echo "rollback accepted canonical backup without a manifest" >&2
