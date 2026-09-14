@@ -56,6 +56,8 @@ for file in node_mtls_client.py node_mtls_runtime.py node_mtls_state.py; do
   [[ "$(stat -c '%a' "$DESTDIR/usr/local/lib/wavemesh-agent/$file")" == 644 ]]
 done
 [[ "$(stat -c '%a' "$DESTDIR/usr/local/lib/wavemesh-agent/access_runtime.py")" == 755 ]]
+cmp "$ROOT_DIR/agent/wavemesh-node-lock.conf" "$DESTDIR/etc/tmpfiles.d/wavemesh-node-lock.conf"
+[[ ! -e "$DESTDIR/run/lock/wavemesh-node.lock" ]]
 [[ "$(stat -c '%a' "$DESTDIR/usr/local/lib/wavemesh-agent/node_agent.py")" == 755 ]]
 [[ "$(stat -c '%a' "$DESTDIR/usr/local/lib/wavemesh-agent/acceptance.py")" == 755 ]]
 [[ "$(stat -c '%a' "$DESTDIR/etc/wavemesh-agent/agent.env")" == 600 ]]
@@ -95,6 +97,7 @@ if grep -Eq '(^| )(start|restart|try-restart|reload-or-restart)( |$)|--now' "$SY
 fi
 
 printf '\n# previous-version-marker\n' >> "$DESTDIR/usr/local/lib/wavemesh-agent/node_agent.py"
+printf '\n# previous-lock-rule\n' >> "$DESTDIR/etc/tmpfiles.d/wavemesh-node-lock.conf"
 : > "$SYSTEMCTL_LOG"
 run_installer
 third_backup_count="$(find "$backup_root" -mindepth 1 -maxdepth 1 -type d | wc -l)"
@@ -107,6 +110,7 @@ fi
 : > "$SYSTEMCTL_LOG"
 run_rollback --latest
 grep -Fq 'previous-version-marker' "$DESTDIR/usr/local/lib/wavemesh-agent/node_agent.py"
+grep -Fq 'previous-lock-rule' "$DESTDIR/etc/tmpfiles.d/wavemesh-node-lock.conf"
 if grep -Eq '(^| )restart( |$)' "$SYSTEMCTL_LOG"; then
   echo "rollback restarted the Agent without explicit request" >&2
   exit 1
@@ -158,5 +162,23 @@ if command -v systemd-analyze >/dev/null 2>&1; then
   SYSTEMD_UNIT_PATH="$verify_dir:/usr/lib/systemd/system:/lib/systemd/system" \
     systemd-analyze verify "$verify_dir/wavemesh-node-agent.service"
 fi
+
+# Restore a pre-lock-rule backup without requiring newly introduced entries.
+latest_backup="$(find "$backup_root" -mindepth 1 -maxdepth 1 -type d | sort | tail -n 1)"
+rm -f "$latest_backup/wavemesh-node-lock.conf" "$latest_backup/wavemesh-node-lock.conf.absent"
+cp "$DESTDIR/etc/tmpfiles.d/wavemesh-node-lock.conf" "$TEMP_DIR/rule.before-legacy-rollback"
+run_rollback --latest
+cmp "$TEMP_DIR/rule.before-legacy-rollback" "$DESTDIR/etc/tmpfiles.d/wavemesh-node-lock.conf"
+
+# The first installation recorded an absent rule. Restore that exact state, but
+# never remove/replace an existing runtime inode that another process may hold.
+mkdir -p "$DESTDIR/run/lock"
+printf 'lock-sentinel' > "$DESTDIR/run/lock/wavemesh-node.lock"
+lock_inode="$(stat -c '%i' "$DESTDIR/run/lock/wavemesh-node.lock")"
+first_backup="$(find "$backup_root" -mindepth 1 -maxdepth 1 -type d | sort | head -n 1)"
+run_rollback --backup "${first_backup##*/}"
+[[ ! -e "$DESTDIR/etc/tmpfiles.d/wavemesh-node-lock.conf" ]]
+[[ "$(stat -c '%i' "$DESTDIR/run/lock/wavemesh-node.lock")" == "$lock_inode" ]]
+[[ "$(cat "$DESTDIR/run/lock/wavemesh-node.lock")" == lock-sentinel ]]
 
 echo "node agent installer smoke tests: OK"

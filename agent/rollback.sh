@@ -138,6 +138,11 @@ restore_or_remove node_mtls_state.py "$INSTALL_DIR/node_mtls_state.py" 0644 0755
 restore_or_remove acceptance.py "$INSTALL_DIR/acceptance.py" 0755 0755
 restore_or_remove access_runtime.py "$INSTALL_DIR/access_runtime.py" 0755 0755
 restore_or_remove "$SERVICE" "$UNIT_PATH" 0644 0755
+# Backward-compatible with backups made before shared-lock support. Leave the
+# runtime inode alone, even when removing this boot-time creation rule.
+if [[ -e "$backup_dir/wavemesh-node-lock.conf" || -e "$backup_dir/wavemesh-node-lock.conf.absent" ]]; then
+  restore_or_remove wavemesh-node-lock.conf "$DESTDIR/etc/tmpfiles.d/wavemesh-node-lock.conf" 0644 0755
+fi
 restore_or_remove wavemesh-node-agent-rollback "$ROLLBACK_PATH" 0755 0755
 restore_or_remove agent.env "$ENV_FILE" 0600 0700
 

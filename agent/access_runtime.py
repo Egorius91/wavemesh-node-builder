@@ -13,6 +13,7 @@ import os
 from pathlib import Path
 import re
 import secrets
+import stat
 import tempfile
 from typing import Any
 from urllib import error, parse, request
@@ -20,10 +21,63 @@ import uuid
 
 SAFE_ID = re.compile(r"^[A-Za-z0-9_-]{8,128}$")
 DAY_MILLISECONDS = 24 * 60 * 60 * 1000
+NODE_MUTATION_LOCK = Path("/run/lock/wavemesh-node.lock")
 
 
 class ProvisionError(RuntimeError):
     pass
+
+
+@contextmanager
+def node_mutation_lock(path: Path | None = None):
+    """Share the CLI's flock inode; never truncate, replace or unlink it."""
+    if os.name != "posix":
+        raise ProvisionError("Node mutation locking requires POSIX")
+    import fcntl
+
+    path = NODE_MUTATION_LOCK if path is None else path
+    fd = None
+    try:
+        fd = os.open(path, os.O_RDWR | os.O_CREAT | os.O_NOFOLLOW | os.O_NONBLOCK, 0o600)
+        info = os.fstat(fd)
+        if (not stat.S_ISREG(info.st_mode) or info.st_nlink != 1
+                or info.st_uid != os.geteuid() or info.st_mode & 0o022):
+            raise ProvisionError("Node mutation lock is unsafe")
+        try:
+            fcntl.flock(fd, fcntl.LOCK_EX | fcntl.LOCK_NB)
+        except BlockingIOError:
+            raise ProvisionError("Node mutation is busy") from None
+        current = path.lstat()
+        if (current.st_dev, current.st_ino) != (info.st_dev, info.st_ino):
+            raise ProvisionError("Node mutation lock changed")
+        yield
+    finally:
+        if fd is not None:
+            os.close(fd)
+
+
+def assert_no_pending_node_transaction(root: Path) -> None:
+    """A dead CLI releases flock but its pending rollback still fences Agent writes."""
+    if root.is_symlink():
+        raise ProvisionError("Node transaction state is unsafe")
+    if not root.exists():
+        return
+    if not root.is_dir():
+        raise ProvisionError("Node transaction state is unsafe")
+    for directory in root.iterdir():
+        if directory.is_symlink() or not directory.is_dir():
+            raise ProvisionError("Node transaction state is unsafe")
+        try:
+            plan = load_private_state(directory / "plan.json")
+            result = load_private_state(directory / "result.json")
+        except (OSError, ValueError):
+            raise ProvisionError("Node transaction reconciliation required") from None
+        # Accept only the CLI's known terminal states. Missing, malformed and
+        # future/unknown states must not silently allow a subsequent DB rollback.
+        if (not plan or type(plan.get("schema_version")) is not int
+                or plan["schema_version"] != 1 or not result
+                or result.get("status") not in {"committed", "rolled_back"}):
+            raise ProvisionError("Node transaction reconciliation required")
 
 
 @contextmanager
@@ -653,24 +707,28 @@ def main() -> int:
     parser.add_argument("--cleanup-previous", action="store_true")
     args = parser.parse_args()
     try:
-        command = json.loads(args.request.read_text(encoding="utf-8"))
-        config = json.loads(args.config.read_text(encoding="utf-8"))
-        if args.cleanup_previous:
-            removed = cleanup_previous(command, config, args.state_root)
-            print(f"access_cleanup=PASS removed={removed}")
+        # Lock order: node, then access. Hold through configuration read, panel
+        # read/write/readback and durable output, including replacement cleanup.
+        with node_mutation_lock():
+            assert_no_pending_node_transaction(args.config.parent / "transactions")
+            command = json.loads(args.request.read_text(encoding="utf-8"))
+            config = json.loads(args.config.read_text(encoding="utf-8"))
+            if args.cleanup_previous:
+                removed = cleanup_previous(command, config, args.state_root)
+                print(f"access_cleanup=PASS removed={removed}")
+                return 0
+            if args.output is None:
+                raise ProvisionError("output is required for access lifecycle execution")
+            operation = str(command.get("operation") or "access.provision")
+            if operation == "access.update_entitlements":
+                result = update_entitlements(command, config, args.state_root)
+            elif operation in {"access.provision", "access.replace_credential", "access.prepare_replacement"}:
+                result = provision(command, config, args.state_root)
+            else:
+                raise ProvisionError("Unsupported access lifecycle operation")
+            atomic_json(args.output, result)
+            print(f"access_runtime=PASS operation={operation}")
             return 0
-        if args.output is None:
-            raise ProvisionError("output is required for access lifecycle execution")
-        operation = str(command.get("operation") or "access.provision")
-        if operation == "access.update_entitlements":
-            result = update_entitlements(command, config, args.state_root)
-        elif operation in {"access.provision", "access.replace_credential", "access.prepare_replacement"}:
-            result = provision(command, config, args.state_root)
-        else:
-            raise ProvisionError("Unsupported access lifecycle operation")
-        atomic_json(args.output, result)
-        print(f"access_runtime=PASS operation={operation}")
-        return 0
     except Exception as exc:
         print(f"access_runtime=FAIL code={type(exc).__name__.upper()}")
         return 1
