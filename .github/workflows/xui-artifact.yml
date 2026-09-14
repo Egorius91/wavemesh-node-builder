@@ -3,7 +3,7 @@ name: Full WaveMesh panel candidate
 on:
   pull_request:
   push:
-    branches: [main, feat/panel-artifact]
+    branches: [main, feat/panel-artifact, test/panel-runtime-smoke]
   workflow_dispatch:
 
 permissions:
@@ -84,6 +84,22 @@ jobs:
           python3 scripts/ci/xui_artifact.py package --source upstream --release release.tar.gz \
             --binary panel --toolchain toolchain.txt --output candidate --head "$CANDIDATE_HEAD"
           python3 scripts/ci/xui_artifact.py verify --output candidate --head "$CANDIDATE_HEAD"
+      - name: Prove packaged HTTP and VLESS behavior in private network
+        run: |
+          set -Eeuo pipefail
+          parent_netns="$(readlink /proc/self/ns/net)"
+          sudo env WAVEMESH_CI_PARENT_NETNS="$parent_netns" \
+            timeout 180 unshare --net --pid --fork --kill-child --mount-proc \
+            python3 scripts/ci/xui_runtime_smoke.py --candidate candidate \
+            --head "$CANDIDATE_HEAD" --report runtime-smoke.json
+      - name: Preserve sanitized runtime smoke evidence
+        if: always()
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7
+        with:
+          name: wavemesh-panel-runtime-smoke-${{ env.CANDIDATE_HEAD }}
+          path: runtime-smoke.json
+          if-no-files-found: warn
+          retention-days: 30
       - name: Preserve complete candidate and corresponding source
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7
         with:

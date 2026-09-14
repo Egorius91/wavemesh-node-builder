@@ -47,10 +47,28 @@ SHA-pinned release in `third_party/3x-ui/runtime-release.json`.
 
 ## Promotion boundary
 
-CI tests backend contracts and executes the binary's version command. It does
-not establish live HTTP/UI behavior, Xray operation or actual VPN traffic. The
-artifact is a candidate, not staging acceptance. No installer is invoked and no
-GitHub release is published. The ordinary installer still selects upstream.
+CI tests backend contracts and executes the binary's version command. It then
+extracts the verified packaged candidate into a disposable private network/PID
+namespace and starts the real panel and pinned Xray. Only loopback exists; no
+external route or destination is available. Random fixture credentials, the
+SQLite database, generated client configuration and raw logs are discarded.
+
+The smoke verifies HTTP login/CSRF, anonymous write rejection, a real embedded
+JavaScript asset against the frontend manifest, disabled creation and duplicate
+rejection, SQLite identity/binding persistence, and real VLESS traffic through
+the packaged Xray. A healthy enabled control uses the same inbound as the
+disabled client. New connections from the disabled client must fail before and
+after panel/Xray restart. Activation and disable use authenticated HTTP and must
+preserve the same client/binding identity. A sanitized `runtime-smoke.json`
+records result flags and exact source/archive/panel/Xray hashes separately from
+the candidate. It does not export raw logs or fixture identities.
+
+This is loopback CI evidence, not public TLS/nginx/subscription/client-app,
+long-lived session drain, staging or commercial acceptance. The fixture uses
+VLESS over plain TCP only within its isolated namespace; production transport
+acceptance remains separate. It tests duplicate rejection, not backend CREATE
+idempotency or a lost-response recovery contract. No installer is invoked and
+no GitHub release is published. The ordinary installer still selects upstream.
 
 After the dependency PRs merge, rebuild at the final Builder merge SHA and verify
 the new artifact. Never deploy the old PR-head candidate as a merge-bound build.
