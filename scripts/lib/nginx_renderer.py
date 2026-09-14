@@ -96,7 +96,10 @@ def render(config,additional_native_path=None,native_alias=None,additional_nativ
         entry=route["entry"]; path=entry["public_path"]
         if path in seen: raise ValueError(f"managed path collision: {path}")
         seen.add(path); blocks.append(render_location(path,entry["local_port"],[],stream_timeouts=True))
-    return "\n\n".join(blocks)+(chr(10) if blocks else "")
+    # This include is loaded at server scope. Request URIs can contain subIds,
+    # and nginx upstream errors also copy the URI even with access logging off.
+    privacy = "access_log off;\nerror_log /dev/null;\n"
+    return privacy + "\n\n".join(blocks)+(chr(10) if blocks else "")
 def main():
     p=argparse.ArgumentParser(); p.add_argument("--config",required=True); p.add_argument("--output",required=True); p.add_argument("--additional-native-path"); p.add_argument("--additional-native-port",type=int); p.add_argument("--native-alias-from"); p.add_argument("--native-alias-to"); a=p.parse_args()
     if a.additional_native_port is not None and not a.additional_native_path: p.error("--additional-native-port requires --additional-native-path")
