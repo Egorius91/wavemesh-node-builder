@@ -141,10 +141,12 @@ add rule inet fixture_existing output ct state established,related accept
                 guard.maintenance('prepare',OP,1)
             isolation = PanelIsolation()
             original_apply = isolation.apply
+            expected_policy = []
             def lost_result(expected):
                 # The real kernel transaction commits, but the caller loses its
                 # result. The next invocation must observe, never apply twice.
                 assert json.loads((guard.root/'state.json').read_text())['schema_version'] == 3
+                expected_policy.extend(expected)
                 original_apply(expected)
                 raise IsolationError('SYNTHETIC_LOST_RESULT')
             with patch.object(isolation,'apply',side_effect=lost_result):
@@ -156,7 +158,17 @@ add rule inet fixture_existing output ct state established,related accept
                     raise AssertionError('LOST_RESULT_NOT_REPORTED')
             before = (guard.root/'state.json').read_bytes()
             with patch.object(isolation,'apply',side_effect=AssertionError('SECOND_APPLY')):
-                receipt = isolation.isolate(guard,OP,1,'a'*64,'b'*64,PORT,lock)
+                try:
+                    receipt = isolation.isolate(guard,OP,1,'a'*64,'b'*64,PORT,lock)
+                except IsolationError:
+                    # Only our synthetic CI table, stripped of handles/comment
+                    # values. Never dump the host ruleset or external metadata.
+                    for item in (isolation.observe() or {}).get('nftables',[]):
+                        for kind, fields in item.items():
+                            if kind in {'table','chain','rule'}:
+                                safe = {k:v for k,v in fields.items() if k not in {'handle','comment'}}
+                                print('CI_POLICY_SHAPE='+json.dumps({kind:safe}),flush=True)
+                    raise
             assert receipt['reconciliation_required'] and receipt['quiescence']=='NOT_PROVEN'
             assert (guard.root/'state.json').read_bytes()==before
             print('COMMITTED_LOST_RESULT_RECONCILED_WITHOUT_REAPPLY=PASS',flush=True)
