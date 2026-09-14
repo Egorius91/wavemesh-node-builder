@@ -1,0 +1,106 @@
+{
+  "url": "https://github.com/MHSanaei/3x-ui/releases/download/v3.4.2/x-ui-linux-amd64.tar.gz",
+  "sha256": "1086716ea4b09f87893da3d83d5957af28ab7094c3a3a374cb3b369f6c0009a6",
+  "members": {
+    "x-ui": {
+      "kind": "directory",
+      "mode": 493,
+      "size": 0
+    },
+    "x-ui/x-ui.service.debian": {
+      "kind": "file",
+      "mode": 420,
+      "size": 347,
+      "sha256": "dbd78334fc1931f4f8f8693050076193234685e7f2abf2ec91ea08c8c7a8343b"
+    },
+    "x-ui/x-ui.service.rhel": {
+      "kind": "file",
+      "mode": 420,
+      "size": 349,
+      "sha256": "dfe3246e65da4be432058206a6431f90f5f6ef1032d23c99dea2256fd163ee56"
+    },
+    "x-ui/x-ui.sh": {
+      "kind": "file",
+      "mode": 420,
+      "size": 125765,
+      "sha256": "14b9ed4cd14aaf9bd54932249170c53ceac147940844e7929eb7b2b204568397"
+    },
+    "x-ui/bin": {
+      "kind": "directory",
+      "mode": 493,
+      "size": 0
+    },
+    "x-ui/bin/geoip.dat": {
+      "kind": "file",
+      "mode": 420,
+      "size": 18486901,
+      "sha256": "e551b66e9300a98ecc94a5dc8c86a3973bf7033138b0fa61eb0638419ce50057"
+    },
+    "x-ui/bin/README.md": {
+      "kind": "file",
+      "mode": 420,
+      "size": 12666,
+      "sha256": "0d098928cf19c756a8c956c0b5ca736b75f9eaff0765fd71c26a3dcb413a3dde"
+    },
+    "x-ui/bin/LICENSE": {
+      "kind": "file",
+      "mode": 420,
+      "size": 16725,
+      "sha256": "1f256ecad192880510e84ad60474eab7589218784b9a50bc7ceee34c2b91f1d5"
+    },
+    "x-ui/bin/mtg-linux-amd64": {
+      "kind": "file",
+      "mode": 493,
+      "size": 13455522,
+      "sha256": "235ed984f3da25c73b02ae1239d8fcee012c17f1fa658c6ab0db655be794dad9"
+    },
+    "x-ui/bin/geoip_RU.dat": {
+      "kind": "file",
+      "mode": 420,
+      "size": 19936579,
+      "sha256": "ae54f242f768625941d21a8acac9397396abb7a05967b7e2bbf3d06e49219ba3"
+    },
+    "x-ui/bin/geosite_RU.dat": {
+      "kind": "file",
+      "mode": 420,
+      "size": 70900391,
+      "sha256": "febdaeaf8a18c2855b74f9603a4652a07aa3177686f1edb8818a79afc202a954"
+    },
+    "x-ui/bin/xray-linux-amd64": {
+      "kind": "file",
+      "mode": 493,
+      "size": 37433470,
+      "sha256": "8ef87ac07f95617e094b8e9302ea3e0c2d0edaa7045d57b455fdee28b3c9e41e"
+    },
+    "x-ui/bin/geosite_IR.dat": {
+      "kind": "file",
+      "mode": 420,
+      "size": 7509788,
+      "sha256": "215157a066643d79847ba839a11aca7bd27a57559a55e4c1da0831b792615edc"
+    },
+    "x-ui/bin/geosite.dat": {
+      "kind": "file",
+      "mode": 420,
+      "size": 10458565,
+      "sha256": "502eb4ed46a5350cc9de73d0f3b68910e0205f5211613c5fda4c293465445b63"
+    },
+    "x-ui/bin/geoip_IR.dat": {
+      "kind": "file",
+      "mode": 420,
+      "size": 18097558,
+      "sha256": "02cb092a4c5f416dbcf7c18c383fdabf6e3cbffd43fbd0c088b654d01a8ba8d7"
+    },
+    "x-ui/x-ui.service.arch": {
+      "kind": "file",
+      "mode": 420,
+      "size": 346,
+      "sha256": "b7a27ed3123714bbb37022528adbbca6402b05e41de9ae54e0bf1e1260a29a94"
+    },
+    "x-ui/x-ui": {
+      "kind": "file",
+      "mode": 493,
+      "size": 88765424,
+      "sha256": "03ee1876ad3fdea20edec890bd1169b7a35aaad23cfcc70eae839fcc59f58c25"
+    }
+  }
+}

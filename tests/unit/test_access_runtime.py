@@ -42,9 +42,14 @@ class FakePanel:
             if value is None:
                 raise runtime.ProvisionError("missing")
             return {"success": True, "obj": value}
-        if path == "/panel/api/clients/add":
+        if path in {"/panel/api/clients/add", "/panel/api/clients/addDisabled"}:
             self.__class__.add_calls += 1
             client = dict(payload["client"])
+            if path == "/panel/api/clients/add":
+                # Match deployed upstream 3.4.2, including its false->true default.
+                client["enable"] = True
+            elif client.get("enable") is not False:
+                raise runtime.ProvisionError("disabled endpoint requires false")
             client_uuid = client.pop("id")
             client["id"] = 42
             client["uuid"] = client_uuid
