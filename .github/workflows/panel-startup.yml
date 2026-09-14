@@ -1,0 +1,20 @@
+name: Panel startup interlock
+on:
+  pull_request:
+  push:
+    branches: [main, feat/panel-startup-interlock]
+permissions:
+  contents: read
+jobs:
+  systemd:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6.0.3
+        with:
+          ref: ${{ github.event.pull_request.head.sha || github.sha }}
+          persist-credentials: false
+      - name: Check strict startup state and lock admission
+        run: sudo python3 -B -m unittest discover -s tests/unit -p test_panel_startup.py -v
+      - name: Prove ExecStart suppression with actual systemd
+        run: sudo env GITHUB_ACTIONS=true python3 -B tests/integration/test_panel_startup_systemd.py

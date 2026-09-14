@@ -345,5 +345,8 @@ wm_install_cli() {
   install -m 0644 "$project_dir/scripts/00_common.sh" "$destdir/usr/local/lib/wavemesh/00_common.sh"
   install -m 0644 "$project_dir/scripts/lib/"*.sh "$project_dir/scripts/lib/"*.py "$destdir/usr/local/lib/wavemesh/lib/"
   install -m 0644 "$project_dir/agent/panel_request_guard.py" "$destdir/usr/local/lib/wavemesh/lib/panel_request_guard.py"
+  # Package only. Activation belongs to the verified maintenance installer.
+  mkdir -p "$destdir/usr/local/lib/wavemesh/systemd"
+  install -m 0644 "$project_dir/systemd/50-wavemesh-panel-startup.conf" "$destdir/usr/local/lib/wavemesh/systemd/50-wavemesh-panel-startup.conf"
   install -m 0644 "$project_dir/scripts/commands/"*.sh "$destdir/usr/local/lib/wavemesh/commands/"
 }

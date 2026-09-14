@@ -239,6 +239,26 @@ class PanelRequestGuard:
         with self.locked():
             self.assert_open(self.load(), maintenance_only=True)
 
+    def check_startup(self, node_lock=None):
+        """Admission for a NEW systemd activation, not backend drain proof.
+
+        Unlike transport bootstrap, missing durable state must fail closed.
+        Neither this check nor loss of the volatile locks initializes/releases
+        journal state. A start admitted before a hold still requires stop/drain.
+        """
+        if sys.platform != "linux" or os.geteuid() != 0 or not self.root.is_absolute():
+            raise PanelRequestError("PANEL_STARTUP_UNSUPPORTED")
+        for path in (self.root, *self.root.parents):
+            info = path.lstat()
+            if (not stat.S_ISDIR(info.st_mode) or info.st_uid != 0
+                    or info.st_mode & 0o022):
+                raise PanelRequestError("PANEL_STARTUP_STORAGE_UNSAFE")
+        with maintenance_node_lock(node_lock or Path("/run/lock/wavemesh-node.lock")), self.locked():
+            value = self.load()
+            if value is None:
+                raise PanelRequestError("PANEL_STARTUP_STATE_REQUIRED")
+            self.assert_open(value)
+
     def maintenance(self, action, operation_id=None, generation=None):
         """Caller must hold the Node lock for prepare/cancel, then journal lock.
 
@@ -410,6 +430,11 @@ def curl_transport(envelope):
 
 if __name__ == "__main__":
     try:
+        if sys.argv[1:] == ["--check-startup"]:
+            # systemd must consult the canonical journal even when a service
+            # environment contains a transport/fixture state-dir override.
+            PanelRequestGuard(DEFAULT_ROOT).check_startup()
+            sys.exit(0)
         if sys.argv[1:] == ["--check-maintenance"]:
             PanelRequestGuard().check_maintenance()
             sys.exit(0)
