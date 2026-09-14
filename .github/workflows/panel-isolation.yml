@@ -1,0 +1,25 @@
+name: Panel API kernel isolation
+on:
+  pull_request:
+  push:
+    branches: [main, feat/panel-network-isolation]
+permissions:
+  contents: read
+jobs:
+  kernel:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6.0.3
+        with:
+          ref: ${{ github.event.pull_request.head.sha || github.sha }}
+          persist-credentials: false
+      - name: Install namespace test dependencies
+        run: sudo apt-get update -qq && sudo apt-get install -y nftables iproute2
+      - name: Prove kernel enforcement in disposable network and PID namespace
+        run: |
+          set -Eeuo pipefail
+          parent_netns="$(readlink /proc/self/ns/net)"
+          sudo env WAVEMESH_CI_PARENT_NETNS="$parent_netns" \
+            timeout 120 unshare --net --pid --fork --kill-child --mount-proc \
+            python3 tests/integration/test_panel_isolation_kernel.py
