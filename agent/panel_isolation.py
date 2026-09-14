@@ -32,6 +32,7 @@ def policy(port, binding):
         return {"match": {"op": op, "left": left, "right": right}}
     destination = match({"payload": {"protocol": "tcp", "field": "dport"}}, port)
     objects = [{"table": {"family": "inet", "name": TABLE, "comment": "wm-install:" + binding}}]
+    rules = []
     for hook in ("input", "output"):
         objects.append({"chain": {"family": "inet", "table": TABLE, "name": hook,
                                   "type": "filter", "hook": hook, "prio": -310, "policy": "accept"}})
@@ -41,9 +42,11 @@ def policy(port, binding):
         else:
             expressions.extend([match({"meta": {"key": "oifname"}}, "lo"),
                                 match({"meta": {"key": "skuid"}}, 0, "!=")])
-        objects.append({"rule": {"family": "inet", "table": TABLE, "chain": hook,
+        rules.append({"rule": {"family": "inet", "table": TABLE, "chain": hook,
                                  "expr": [*expressions, {"drop": None}], "comment": "wm-deny-" + hook}})
-    return objects
+    # nft JSON lists chain definitions before their rules, regardless of the
+    # transaction's insertion order. Keep that exact readback order here too.
+    return [*objects, *rules]
 
 
 def verify_readback(value, expected):

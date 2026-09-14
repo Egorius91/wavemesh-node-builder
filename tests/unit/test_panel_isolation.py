@@ -10,6 +10,27 @@ from panel_isolation import IsolationError, policy, verify_readback, unique_obje
 
 
 class PolicyTest(unittest.TestCase):
+    def test_kernel_order_and_security_semantic_drift(self):
+        expected = policy(31333, "a" * 64)
+        self.assertEqual([next(iter(item)) for item in expected],
+                         ["table", "chain", "chain", "rule", "rule"])
+        changes = [
+            (0, "comment", "wm-install:" + "b" * 64),
+            (1, "hook", "forward"), (1, "prio", 0), (1, "policy", "drop"),
+            (2, "hook", "input"), (3, "chain", "output"),
+        ]
+        for index, field, value in changes:
+            actual = copy.deepcopy(expected)
+            next(iter(actual[index].values()))[field] = value
+            with self.subTest(index=index, field=field), self.assertRaises(IsolationError):
+                verify_readback({"nftables": actual}, expected)
+        for index in (3, 4):
+            for expr_index in range(len(expected[index]["rule"]["expr"])):
+                actual = copy.deepcopy(expected)
+                actual[index]["rule"]["expr"][expr_index] = {"accept": None}
+                with self.subTest(rule=index, expression=expr_index), self.assertRaises(IsolationError):
+                    verify_readback({"nftables": actual}, expected)
+
     def test_exact_readback_allows_only_handles(self):
         expected = policy(31333, "a" * 64)
         actual = copy.deepcopy(expected)

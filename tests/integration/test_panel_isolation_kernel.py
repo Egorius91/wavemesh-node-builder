@@ -141,12 +141,10 @@ add rule inet fixture_existing output ct state established,related accept
                 guard.maintenance('prepare',OP,1)
             isolation = PanelIsolation()
             original_apply = isolation.apply
-            expected_policy = []
             def lost_result(expected):
                 # The real kernel transaction commits, but the caller loses its
                 # result. The next invocation must observe, never apply twice.
                 assert json.loads((guard.root/'state.json').read_text())['schema_version'] == 3
-                expected_policy.extend(expected)
                 original_apply(expected)
                 raise IsolationError('SYNTHETIC_LOST_RESULT')
             with patch.object(isolation,'apply',side_effect=lost_result):
