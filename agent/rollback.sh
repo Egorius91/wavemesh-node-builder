@@ -137,6 +137,11 @@ restore_or_remove node_mtls_runtime.py "$INSTALL_DIR/node_mtls_runtime.py" 0644 
 restore_or_remove node_mtls_state.py "$INSTALL_DIR/node_mtls_state.py" 0644 0755
 restore_or_remove acceptance.py "$INSTALL_DIR/acceptance.py" 0755 0755
 restore_or_remove access_runtime.py "$INSTALL_DIR/access_runtime.py" 0755 0755
+# Historical backups predate this optional collector. Private evidence is never
+# rewound/deleted with code: old Agent versions simply leave it untouched.
+if [[ -e "$backup_dir/runtime_findings.py" || -e "$backup_dir/runtime_findings.py.absent" ]]; then
+  restore_or_remove runtime_findings.py "$INSTALL_DIR/runtime_findings.py" 0644 0755
+fi
 restore_or_remove "$SERVICE" "$UNIT_PATH" 0644 0755
 # Backward-compatible with backups made before shared-lock support. Leave the
 # runtime inode alone, even when removing this boot-time creation rule.

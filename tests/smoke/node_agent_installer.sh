@@ -51,7 +51,7 @@ run_rollback() {
 
 run_installer
 
-for file in node_mtls_client.py node_mtls_runtime.py node_mtls_state.py; do
+for file in node_mtls_client.py node_mtls_runtime.py node_mtls_state.py runtime_findings.py; do
   [[ -f "$DESTDIR/usr/local/lib/wavemesh-agent/$file" ]]
   [[ "$(stat -c '%a' "$DESTDIR/usr/local/lib/wavemesh-agent/$file")" == 644 ]]
 done
@@ -64,6 +64,11 @@ cmp "$ROOT_DIR/agent/wavemesh-node-lock.conf" "$DESTDIR/etc/tmpfiles.d/wavemesh-
 [[ "$(stat -c '%a' "$DESTDIR/etc/wavemesh-agent/tls")" == 700 ]]
 [[ "$(stat -c '%a' "$DESTDIR/etc/wavemesh-agent/tls/pending")" == 700 ]]
 [[ "$(stat -c '%a' "$DESTDIR/etc/wavemesh-agent/tls/generations")" == 700 ]]
+[[ "$(stat -c '%a' "$DESTDIR/var/lib/wavemesh-agent/runtime-findings")" == 700 ]]
+printf 'private synthetic evidence\n' > "$DESTDIR/var/lib/wavemesh-agent/runtime-findings/evidence-marker"
+chmod 0600 "$DESTDIR/var/lib/wavemesh-agent/runtime-findings/evidence-marker"
+grep -Fx 'WAVEMESH_AGENT_RUNTIME_FINDINGS_MODE=disabled' "$DESTDIR/etc/wavemesh-agent/agent.env" >/dev/null
+[[ "$(grep -c '^WAVEMESH_AGENT_RUNTIME_FINDINGS_MODE=' "$DESTDIR/etc/wavemesh-agent/agent.env")" == 1 ]]
 grep -Fx 'WAVEMESH_AGENT_MTLS_MODE=disabled' "$DESTDIR/etc/wavemesh-agent/agent.env" >/dev/null
 [[ "$(grep -c '^WAVEMESH_AGENT_MTLS_MODE=' "$DESTDIR/etc/wavemesh-agent/agent.env")" == 1 ]]
 grep -Fx 'WAVEMESH_AGENT_COMMAND_MODE=disabled' "$DESTDIR/etc/wavemesh-agent/agent.env" >/dev/null
@@ -87,6 +92,7 @@ first_backup_count="$(find "$backup_root" -mindepth 1 -maxdepth 1 -type d | wc -
 run_installer
 second_backup_count="$(find "$backup_root" -mindepth 1 -maxdepth 1 -type d | wc -l)"
 [[ "$second_backup_count" == "$first_backup_count" ]]
+grep -Fx 'private synthetic evidence' "$DESTDIR/var/lib/wavemesh-agent/runtime-findings/evidence-marker" >/dev/null
 if grep -Fx 'daemon-reload' "$SYSTEMCTL_LOG" >/dev/null; then
   echo "idempotent installer reloaded an unchanged unit" >&2
   exit 1
@@ -166,9 +172,13 @@ fi
 # Restore a pre-lock-rule backup without requiring newly introduced entries.
 latest_backup="$(find "$backup_root" -mindepth 1 -maxdepth 1 -type d | sort | tail -n 1)"
 rm -f "$latest_backup/wavemesh-node-lock.conf" "$latest_backup/wavemesh-node-lock.conf.absent"
+rm -f "$latest_backup/runtime_findings.py" "$latest_backup/runtime_findings.py.absent"
+cp "$DESTDIR/usr/local/lib/wavemesh-agent/runtime_findings.py" "$TEMP_DIR/findings.before-legacy-rollback"
 cp "$DESTDIR/etc/tmpfiles.d/wavemesh-node-lock.conf" "$TEMP_DIR/rule.before-legacy-rollback"
 run_rollback --latest
 cmp "$TEMP_DIR/rule.before-legacy-rollback" "$DESTDIR/etc/tmpfiles.d/wavemesh-node-lock.conf"
+cmp "$TEMP_DIR/findings.before-legacy-rollback" "$DESTDIR/usr/local/lib/wavemesh-agent/runtime_findings.py"
+grep -Fx 'private synthetic evidence' "$DESTDIR/var/lib/wavemesh-agent/runtime-findings/evidence-marker" >/dev/null
 
 # The first installation recorded an absent rule. Restore that exact state, but
 # never remove/replace an existing runtime inode that another process may hold.
@@ -180,5 +190,7 @@ run_rollback --backup "${first_backup##*/}"
 [[ ! -e "$DESTDIR/etc/tmpfiles.d/wavemesh-node-lock.conf" ]]
 [[ "$(stat -c '%i' "$DESTDIR/run/lock/wavemesh-node.lock")" == "$lock_inode" ]]
 [[ "$(cat "$DESTDIR/run/lock/wavemesh-node.lock")" == lock-sentinel ]]
+[[ ! -e "$DESTDIR/usr/local/lib/wavemesh-agent/runtime_findings.py" ]]
+grep -Fx 'private synthetic evidence' "$DESTDIR/var/lib/wavemesh-agent/runtime-findings/evidence-marker" >/dev/null
 
 echo "node agent installer smoke tests: OK"

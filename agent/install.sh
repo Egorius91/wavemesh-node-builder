@@ -109,6 +109,7 @@ STATE_SOURCE="$PROJECT_DIR/agent/node_mtls_state.py"
 RECOVERY_CLIENT_SOURCE="$PROJECT_DIR/agent/node_recovery.py"
 ACCEPTANCE_SOURCE="$PROJECT_DIR/agent/acceptance.py"
 ACCESS_SOURCE="$PROJECT_DIR/agent/access_runtime.py"
+FINDINGS_SOURCE="$PROJECT_DIR/agent/runtime_findings.py"
 UNIT_SOURCE="$PROJECT_DIR/agent/wavemesh-node-agent.service"
 LOCK_CONFIG_SOURCE="$PROJECT_DIR/agent/wavemesh-node-lock.conf"
 ROLLBACK_SOURCE="$PROJECT_DIR/agent/rollback.sh"
@@ -122,6 +123,7 @@ for source in \
   "$RECOVERY_CLIENT_SOURCE" \
   "$ACCEPTANCE_SOURCE" \
   "$ACCESS_SOURCE" \
+  "$FINDINGS_SOURCE" \
   "$UNIT_SOURCE" \
   "$LOCK_CONFIG_SOURCE" \
   "$ROLLBACK_SOURCE" \
@@ -137,6 +139,8 @@ mtls_mode_lines="$(grep -Ec '^WAVEMESH_AGENT_MTLS_MODE=' "$ENV_FILE" || true)"
 [[ "$mtls_mode_lines" -le 1 ]] || fail "Agent environment contains duplicate mTLS mode settings"
 command_mode_lines="$(grep -Ec '^WAVEMESH_AGENT_COMMAND_MODE=' "$ENV_FILE" || true)"
 [[ "$command_mode_lines" -le 1 ]] || fail "Agent environment contains duplicate command mode settings"
+finding_mode_lines="$(grep -Ec '^WAVEMESH_AGENT_RUNTIME_FINDINGS_MODE=' "$ENV_FILE" || true)"
+[[ "$finding_mode_lines" -le 1 ]] || fail "Agent environment contains duplicate finding mode settings"
 "$PYTHON" "$AGENT_SOURCE" check --env-file "$ENV_FILE" >/dev/null
 
 install_directory 0700 "$ETC_DIR"
@@ -144,6 +148,7 @@ install_directory 0700 "$ETC_DIR/tls"
 install_directory 0700 "$ETC_DIR/tls/pending"
 install_directory 0700 "$ETC_DIR/tls/generations"
 install_directory 0700 "$(root_path /var/lib/wavemesh-agent/access)"
+install_directory 0700 "$(root_path /var/lib/wavemesh-agent/runtime-findings)"
 install_directory 0700 "$(root_path /var/lib/wavemesh-agent/recovery-backups)"
 install_directory 0755 "$INSTALL_DIR"
 install_directory 0700 "$BACKUP_ROOT"
@@ -158,6 +163,9 @@ fi
 if [[ "$command_mode_lines" -eq 0 ]]; then
   env_migration_required=true
 fi
+if [[ "$finding_mode_lines" -eq 0 ]]; then
+  env_migration_required=true
+fi
 
 changed=false
 file_would_change "$AGENT_SOURCE" "$INSTALL_DIR/node_agent.py" && changed=true
@@ -167,6 +175,7 @@ file_would_change "$STATE_SOURCE" "$INSTALL_DIR/node_mtls_state.py" && changed=t
 file_would_change "$RECOVERY_CLIENT_SOURCE" "$INSTALL_DIR/node_recovery.py" && changed=true
 file_would_change "$ACCEPTANCE_SOURCE" "$INSTALL_DIR/acceptance.py" && changed=true
 file_would_change "$ACCESS_SOURCE" "$INSTALL_DIR/access_runtime.py" && changed=true
+file_would_change "$FINDINGS_SOURCE" "$INSTALL_DIR/runtime_findings.py" && changed=true
 file_would_change "$UNIT_SOURCE" "$UNIT_PATH" && changed=true
 file_would_change "$LOCK_CONFIG_SOURCE" "$LOCK_CONFIG_PATH" && changed=true
 file_would_change "$ROLLBACK_SOURCE" "$ROLLBACK_PATH" && changed=true
@@ -188,6 +197,7 @@ if [[ "$changed" == true ]]; then
   backup_file "$INSTALL_DIR/node_recovery.py" "$backup_dir" node_recovery.py 0755
   backup_file "$INSTALL_DIR/acceptance.py" "$backup_dir" acceptance.py 0755
   backup_file "$INSTALL_DIR/access_runtime.py" "$backup_dir" access_runtime.py 0755
+  backup_file "$INSTALL_DIR/runtime_findings.py" "$backup_dir" runtime_findings.py 0644
   backup_file "$UNIT_PATH" "$backup_dir" "$SERVICE" 0644
   backup_file "$LOCK_CONFIG_PATH" "$backup_dir" wavemesh-node-lock.conf 0644
   backup_file "$ROLLBACK_PATH" "$backup_dir" wavemesh-node-agent-rollback 0755
@@ -203,6 +213,7 @@ if [[ "$env_migration_required" == true ]]; then
   install -m 0600 "$ENV_FILE" "$env_temporary"
   [[ "$mtls_mode_lines" -ne 0 ]] || printf '\nWAVEMESH_AGENT_MTLS_MODE=disabled\n' >> "$env_temporary"
   [[ "$command_mode_lines" -ne 0 ]] || printf 'WAVEMESH_AGENT_COMMAND_MODE=disabled\n' >> "$env_temporary"
+  [[ "$finding_mode_lines" -ne 0 ]] || printf 'WAVEMESH_AGENT_RUNTIME_FINDINGS_MODE=disabled\n' >> "$env_temporary"
   [[ -n "$DESTDIR" ]] || chown root:root "$env_temporary"
   mv -fT "$env_temporary" "$ENV_FILE"
 fi
@@ -214,6 +225,7 @@ atomic_install_file "$STATE_SOURCE" "$INSTALL_DIR/node_mtls_state.py" 0644
 atomic_install_file "$RECOVERY_CLIENT_SOURCE" "$INSTALL_DIR/node_recovery.py" 0755
 atomic_install_file "$ACCEPTANCE_SOURCE" "$INSTALL_DIR/acceptance.py" 0755
 atomic_install_file "$ACCESS_SOURCE" "$INSTALL_DIR/access_runtime.py" 0755
+atomic_install_file "$FINDINGS_SOURCE" "$INSTALL_DIR/runtime_findings.py" 0644
 atomic_install_file "$UNIT_SOURCE" "$UNIT_PATH" 0644
 atomic_install_file "$LOCK_CONFIG_SOURCE" "$LOCK_CONFIG_PATH" 0644
 atomic_install_file "$ROLLBACK_SOURCE" "$ROLLBACK_PATH" 0755
