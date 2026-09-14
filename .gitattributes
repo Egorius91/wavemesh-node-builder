@@ -2,3 +2,4 @@
 *.sh text eol=lf
 bin/wavemesh text eol=lf
 install.sh text eol=lf
+third_party/3x-ui/*.patch -whitespace

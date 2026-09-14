@@ -23,6 +23,7 @@ def main():
         raise RuntimeError("patch checksum mismatch")
     git("apply", "--check", str(patch))
     git("apply", str(patch))
+    git("diff", "--check")
     print("PINNED_BACKEND_PATCH=APPLIED; RUNTIME_MUTATION=NONE")
 
 
