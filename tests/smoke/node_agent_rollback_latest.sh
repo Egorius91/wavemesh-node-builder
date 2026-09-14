@@ -64,6 +64,42 @@ run_rollback --latest >/dev/null
 grep -Fq 'rollback-latest-marker' "$DESTDIR/usr/local/lib/wavemesh-agent/node_agent.py"
 grep -Fx 'preserved private evidence' "$DESTDIR/var/lib/wavemesh-agent/runtime-findings/evidence-marker" >/dev/null
 
+# A local maintenance hold blocks actual installed rollback before source or
+# service effects. After cancellation, only compatible backups can be restored.
+journal="$DESTDIR/var/lib/wavemesh-agent/panel-requests"
+maintenance_fixture() {
+  PYTHONPATH="$ROOT_DIR/agent" WAVEMESH_PANEL_REQUEST_STATE_DIR="$journal" \
+    python3 - "$1" <<'PY'
+import sys
+from panel_request_guard import PanelRequestGuard
+guard=PanelRequestGuard()
+with guard.locked():
+    guard.maintenance(sys.argv[1], '00000000-0000-4000-8000-000000000001', 1)
+PY
+}
+maintenance_fixture prepare
+cp "$DESTDIR/usr/local/lib/wavemesh-agent/node_agent.py" "$TEMP_DIR/agent.before-hold"
+: > "$SYSTEMCTL_LOG"
+if run_rollback --latest --restart >/dev/null 2>&1; then
+  echo "rollback ignored maintenance hold" >&2; exit 1
+fi
+cmp "$TEMP_DIR/agent.before-hold" "$DESTDIR/usr/local/lib/wavemesh-agent/node_agent.py"
+[[ ! -s "$SYSTEMCTL_LOG" ]]
+maintenance_fixture cancel
+cp "$journal/state.json" "$TEMP_DIR/history.before-rollback"
+latest_backup="$(find "$backup_root" -mindepth 1 -maxdepth 1 -type d -name '2*T*-*' | sort | tail -n 1)"
+cp "$latest_backup/panel_request_guard.py" "$TEMP_DIR/compatible-guard"
+sed -i '/^MAINTENANCE_PROTOCOL = /d' "$latest_backup/panel_request_guard.py"
+if run_rollback --latest --restart >/dev/null 2>&1; then
+  echo "rollback accepted a target without maintenance protocol support" >&2; exit 1
+fi
+cmp "$TEMP_DIR/agent.before-hold" "$DESTDIR/usr/local/lib/wavemesh-agent/node_agent.py"
+[[ ! -s "$SYSTEMCTL_LOG" ]]
+cp "$TEMP_DIR/compatible-guard" "$latest_backup/panel_request_guard.py"
+run_rollback --latest >/dev/null
+cmp "$TEMP_DIR/history.before-rollback" "$journal/state.json"
+[[ ! -s "$SYSTEMCTL_LOG" ]]
+
 mkdir -p "$backup_root/20991231T235959Z-99999"
 if run_rollback --latest >/dev/null 2>&1; then
   echo "rollback accepted canonical backup without a manifest" >&2

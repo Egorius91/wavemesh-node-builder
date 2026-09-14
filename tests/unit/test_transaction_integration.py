@@ -26,6 +26,7 @@ for name, operations in expected.items():
 cli = (root / "bin" / "wavemesh").read_text(encoding="utf-8")
 assert "wavemesh transaction list [--json]" in cli
 assert "wavemesh transaction recover --id ID|--latest" in cli
-assert cli.count('source "$WM_LIB_DIR/lib/transaction.sh"') == 6
+# Topology/transaction entry points plus repair, which now shares admission.
+assert cli.count('source "$WM_LIB_DIR/lib/transaction.sh"') == 7
 
 print("transaction integration tests: OK")

@@ -153,6 +153,9 @@ if [[ -e "$panel_journal/state.json" || -L "$panel_journal" || -L "$panel_journa
   [[ -f "$INSTALL_DIR/panel_request_guard.py" && ! -L "$INSTALL_DIR/panel_request_guard.py" ]] || fail "Panel request guard is unavailable"
   WAVEMESH_PANEL_REQUEST_STATE_DIR="$panel_journal" "$PYTHON" "$INSTALL_DIR/panel_request_guard.py" --check-open-held-lock >/dev/null 2>&1 || fail "Panel request reconciliation is required before rollback"
   [[ -f "$backup_dir/panel_request_guard.py" && ! -L "$backup_dir/panel_request_guard.py" ]] || fail "Rollback target predates panel request protection"
+  if ! WAVEMESH_PANEL_REQUEST_STATE_DIR="$panel_journal" "$PYTHON" "$INSTALL_DIR/panel_request_guard.py" --check-v1-held-lock >/dev/null 2>&1; then
+    grep -Fq 'MAINTENANCE_PROTOCOL = "local-maintenance-v2"' "$backup_dir/panel_request_guard.py" || fail "Rollback target cannot read maintenance history"
+  fi
   grep -q 'panel_request_guard' "$backup_dir/access_runtime.py" || fail "Rollback target lacks panel request protection"
 fi
 

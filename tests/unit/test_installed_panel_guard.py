@@ -15,6 +15,7 @@ from unittest.mock import patch
 ROOT = Path(__file__).resolve().parents[2]
 sys.path.insert(0, str(ROOT / "agent"))
 import access_runtime as runtime
+from panel_request_guard import PanelRequestGuard, maintenance_node_lock
 
 
 class FakePanel(BaseHTTPRequestHandler):
@@ -170,6 +171,88 @@ class InstalledGuardTest(unittest.TestCase):
         self.assertEqual(before, (self.journal / "state.json").read_bytes())
         self.assertNotEqual(self.admission().returncode, 0)
         self.assertEqual(self.server.writes, 1)
+
+    def maintenance_cli(self, *args):
+        # Relocate only the fixed Node lock in the installed fixture, never
+        # introduce a production command-line path override or touch host state.
+        node_lock = str(self.root / "node.lock")
+        for target in (self.guard, self.library / "lib/transaction.sh"):
+            target.write_text(target.read_text().replace("/run/lock/wavemesh-node.lock", node_lock)
+                              .replace("mkdir -p /run/lock", ":"))
+        return subprocess.run([str(self.prefix / "usr/local/bin/wavemesh"), "maintenance", *args],
+                              env=dict(self.env, WAVEMESH_LIB_DIR=str(self.library)),
+                              capture_output=True, timeout=10)
+
+    def test_installed_maintenance_commands_block_writes_and_allow_typed_cancellation(self):
+        operation = "00000000-0000-4000-8000-000000000001"
+        result = self.maintenance_cli("prepare", operation, "1")
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertEqual(json.loads(result.stdout)["local_admission"], "CLOSED")
+        before = (self.journal / "state.json").read_bytes()
+        self.assertNotEqual(self.request().returncode, 0)
+        self.assertNotEqual(self.admission().returncode, 0)
+        with patch.dict(os.environ, self.env):
+            with self.assertRaisesRegex(runtime.ProvisionError, "MAINTENANCE_HELD"):
+                self.agent().call("POST", "/panel/api/clients/add", {})
+        self.assertEqual(self.request("GET").returncode, 0)
+        for action in ("prepare", "status"):
+            args = (action, operation, "1") if action == "prepare" else (action,)
+            self.assertEqual(self.maintenance_cli(*args).returncode, 0)
+        self.assertEqual(before, (self.journal / "state.json").read_bytes())
+        self.assertEqual(self.server.writes, 0)
+        self.assertEqual(self.maintenance_cli("cancel", operation, "1").returncode, 0)
+        self.assertEqual(self.request().returncode, 0)
+        self.assertEqual(self.server.writes, 1)
+
+    def test_installed_cli_rejects_untyped_actions_without_network(self):
+        for args in (("reset",), ("prepare",), ("status", "extra"),
+                     ("prepare", "bad", "1"), ("cancel", "bad", "-1"),
+                     ("prepare", "00000000-0000-4000-8000-000000000001", "1", "--force")):
+            with self.subTest(args=args):
+                result = self.maintenance_cli(*args)
+                self.assertNotEqual(result.returncode, 0)
+                self.assertEqual(result.stdout, b"")
+                self.assertNotIn(b"Traceback", result.stderr)
+        self.assertEqual(self.server.writes, 0)
+        self.assertFalse((self.journal / "state.json").exists())
+
+    def test_held_maintenance_stops_cli_lock_and_repair_before_commands(self):
+        operation = "00000000-0000-4000-8000-000000000001"
+        self.assertEqual(self.maintenance_cli("prepare", operation, "1").returncode, 0)
+        commands = self.root / "commands"
+        commands.mkdir()
+        for name in ("nginx", "systemctl", "certbot"):
+            executable = commands / name
+            executable.write_text('#!/bin/sh\ntouch "$CASE_ROOT/unexpected-effect"\n')
+            executable.chmod(0o755)
+        for option in ("--nginx", "--ssl"):
+            result = subprocess.run([str(self.prefix / "usr/local/bin/wavemesh"), "repair", option],
+                                    env=dict(self.env, WAVEMESH_LIB_DIR=str(self.library),
+                                             PATH=str(commands) + os.pathsep + self.env["PATH"]),
+                                    capture_output=True, timeout=10)
+            self.assertNotEqual(result.returncode, 0)
+            self.assertFalse((self.root / "unexpected-effect").exists())
+        result = self.shell('WM_STATE_DIR="$CASE_ROOT/state"\n'
+                            'source "$INSTALLED_LIBRARY/lib/transaction.sh"\n'
+                            'wm_fail() { return 1; }\n'
+                            'wm_lock_mutation fixture\n'
+                            'touch "$CASE_ROOT/unexpected-effect"')
+        self.assertNotEqual(result.returncode, 0)
+        self.assertFalse((self.root / "unexpected-effect").exists())
+
+    def test_maintenance_reinstall_retains_hold(self):
+        guard = PanelRequestGuard(self.journal)
+        with maintenance_node_lock(self.root / "node.lock"), guard.locked():
+            guard.maintenance("prepare", "00000000-0000-4000-8000-000000000001", 1)
+        before = (self.journal / "state.json").read_bytes()
+        result = subprocess.run(["bash", "-c", 'set -Eeuo pipefail; source "$1"; wm_install_cli "$2"',
+                                 "fixture", str(ROOT / "scripts/00_common.sh"), str(self.prefix)],
+                                capture_output=True, env=self.env, timeout=10)
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertEqual(before, (self.journal / "state.json").read_bytes())
+        self.assertNotEqual(self.admission().returncode, 0)
+        self.assertNotEqual(self.request().returncode, 0)
+        self.assertEqual(self.server.writes, 0)
 
 
 if __name__ == "__main__":
