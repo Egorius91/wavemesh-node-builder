@@ -22,6 +22,7 @@ from urllib.parse import urlsplit
 
 DEFAULT_ROOT = Path("/var/lib/wavemesh-agent/panel-requests")
 MAINTENANCE_PROTOCOL = "local-maintenance-v2"
+INSTALLATION_PROTOCOL = "panel-install-intent-v3"
 MAX_STATE = 4096
 MAX_RESPONSE = 8 * 1024 * 1024
 READ_POSTS = {"/panel/api/xray/", "/panel/api/xray/testOutbound",
@@ -131,9 +132,13 @@ class PanelRequestGuard:
             value = json.loads(raw, object_pairs_hook=unique_object)
         except (ValueError, UnicodeError):
             raise PanelRequestError("PANEL_JOURNAL_INVALID") from None
-        if isinstance(value, dict) and value.get("schema_version") == 2:
+        if isinstance(value, dict) and value.get("schema_version") in (2, 3):
+            version = value["schema_version"]
+            expected = {"schema_version", "request", "maintenance"}
+            if version == 3:
+                expected.add("installation")
             if (type(value["schema_version"]) is not int
-                    or set(value) != {"schema_version", "request", "maintenance"}):
+                    or set(value) != expected):
                 raise PanelRequestError("PANEL_JOURNAL_INVALID")
             hold = value["maintenance"]
             if (not isinstance(hold, dict) or set(hold) != {"operation_id", "generation", "phase"}
@@ -142,6 +147,11 @@ class PanelRequestGuard:
             validate_hold_identity(hold["operation_id"], hold["generation"])
             if value["request"] is not None:
                 self.validate_request(value["request"])
+            if version == 3:
+                self.validate_installation(value["installation"])
+                if (hold["phase"] != "HELD" or (value["request"] is not None
+                        and value["request"]["phase"] != "RESPONSE_ACCEPTED")):
+                    raise PanelRequestError("PANEL_JOURNAL_INVALID")
         else:
             self.validate_request(value)
         return value
@@ -158,11 +168,55 @@ class PanelRequestGuard:
 
     @staticmethod
     def request_state(value):
-        return value["request"] if value and value["schema_version"] == 2 else value
+        return value["request"] if value and value["schema_version"] in (2, 3) else value
 
     @staticmethod
     def hold_state(value):
-        return value["maintenance"] if value and value["schema_version"] == 2 else None
+        return value["maintenance"] if value and value["schema_version"] in (2, 3) else None
+
+    @staticmethod
+    def validate_installation(value):
+        if (not isinstance(value, dict)
+                or set(value) != {"phase", "candidate_sha256", "rollback_manifest_sha256"}
+                or value["phase"] != "INSTALL_INTENT"
+                or any(not isinstance(value[key], str) or not re.fullmatch(r"[a-f0-9]{64}", value[key])
+                       for key in ("candidate_sha256", "rollback_manifest_sha256"))):
+            raise PanelRequestError("PANEL_INSTALLATION_INVALID")
+
+    @contextmanager
+    def installation_intent(self, operation_id, generation, candidate_sha256,
+                            rollback_manifest_sha256, node_lock=None):
+        """Internal pre-effect boundary, not artifact verification or recovery.
+
+        Caller must independently verify artifact/backup and exclusion/drain.
+        Both locks remain owned until the context exits. Exit or process death
+        never clears the durable intent. Re-entering the same binding is only
+        permission to reconcile; it must never trigger a blind replay of effects.
+        There is deliberately no CLI/remote entry point or release operation.
+        """
+        validate_hold_identity(operation_id, generation)
+        installation = {"phase": "INSTALL_INTENT", "candidate_sha256": candidate_sha256,
+                        "rollback_manifest_sha256": rollback_manifest_sha256}
+        self.validate_installation(installation)
+        with maintenance_node_lock(node_lock or Path("/run/lock/wavemesh-node.lock")), self.locked():
+            value = self.load()
+            hold = self.hold_state(value)
+            if (not hold or hold["phase"] != "HELD"
+                    or (hold["operation_id"], hold["generation"]) != (operation_id, generation)):
+                raise PanelRequestError("PANEL_INSTALLATION_CONFLICT")
+            request = self.request_state(value)
+            if request and request["phase"] != "RESPONSE_ACCEPTED":
+                raise PanelRequestError("PANEL_REQUEST_RECONCILIATION_REQUIRED")
+            replay = value["schema_version"] == 3
+            if replay:
+                if value["installation"] != installation:
+                    raise PanelRequestError("PANEL_INSTALLATION_CONFLICT")
+            else:
+                self.save({**value, "schema_version": 3, "installation": installation})
+            # A replay is explicitly distinguishable from the initial transition.
+            # It conveys no claim that an earlier external effect did/didn't run.
+            yield {"installation": installation, "reconciliation_required": replay,
+                   "local_admission": "CLOSED", "quiescence": "NOT_PROVEN"}
 
     def assert_open(self, value, maintenance_only=False):
         hold = self.hold_state(value)
@@ -196,6 +250,8 @@ class PanelRequestGuard:
         if action != "status":
             validate_hold_identity(operation_id, generation)
         value = self.load()
+        if value and value["schema_version"] == 3 and action != "status":
+            raise PanelRequestError("PANEL_INSTALLATION_RECONCILIATION_REQUIRED")
         hold = self.hold_state(value)
         request = self.request_state(value)
         same = hold and (hold["operation_id"], hold["generation"]) == (operation_id, generation)
@@ -215,9 +271,12 @@ class PanelRequestGuard:
                 hold = {**hold, "phase": "CANCELLED"}
                 value = {"schema_version": 2, "request": request, "maintenance": hold}
                 self.save(value)
-        return {"local_admission": "CLOSED" if hold and hold["phase"] == "HELD" else "NOT_HELD",
+        result = {"local_admission": "CLOSED" if hold and hold["phase"] == "HELD" else "NOT_HELD",
                 "maintenance": hold, "request_pending": bool(request and request["phase"] != "RESPONSE_ACCEPTED"),
                 "quiescence": "NOT_PROVEN"}
+        if value and value["schema_version"] == 3:
+            result["installation"] = value["installation"]
+        return result
 
     def save(self, value):
         fd, temporary = tempfile.mkstemp(prefix=".state-", dir=self.root)

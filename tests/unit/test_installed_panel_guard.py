@@ -254,6 +254,29 @@ class InstalledGuardTest(unittest.TestCase):
         self.assertNotEqual(self.request().returncode, 0)
         self.assertEqual(self.server.writes, 0)
 
+    def test_installation_intent_blocks_installed_cancel_agent_and_cli_after_reinstall(self):
+        operation = "00000000-0000-4000-8000-000000000001"
+        self.assertEqual(self.maintenance_cli("prepare", operation, "1").returncode, 0)
+        guard = PanelRequestGuard(self.journal)
+        with guard.installation_intent(operation, 1, "a" * 64, "b" * 64, self.root / "node.lock"):
+            pass
+        before = (self.journal / "state.json").read_bytes()
+        result = subprocess.run(["bash", "-c", 'set -Eeuo pipefail; source "$1"; wm_install_cli "$2"',
+                                 "fixture", str(ROOT / "scripts/00_common.sh"), str(self.prefix)],
+                                capture_output=True, env=self.env, timeout=10)
+        self.assertEqual(result.returncode, 0)
+        self.assertNotEqual(self.maintenance_cli("cancel", operation, "1").returncode, 0)
+        status = self.maintenance_cli("status")
+        self.assertEqual(status.returncode, 0)
+        self.assertEqual(json.loads(status.stdout)["installation"]["phase"], "INSTALL_INTENT")
+        self.assertNotEqual(self.request().returncode, 0)
+        self.assertNotEqual(self.admission().returncode, 0)
+        with patch.dict(os.environ, self.env):
+            with self.assertRaisesRegex(runtime.ProvisionError, "MAINTENANCE_HELD"):
+                self.agent().call("POST", "/panel/api/clients/add", {})
+        self.assertEqual((self.journal / "state.json").read_bytes(), before)
+        self.assertEqual(self.server.writes, 0)
+
 
 if __name__ == "__main__":
     unittest.main(verbosity=2)

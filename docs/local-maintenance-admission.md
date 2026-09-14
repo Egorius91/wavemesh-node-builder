@@ -43,6 +43,39 @@ maintenance actuator must persist a separate non-cancellable phase before its
 first external change, then reconcile and prove recovery before reopening. This
 component exposes no such external action or quiescence receipt.
 
+## Internal installation intent boundary
+
+`PanelRequestGuard.installation_intent(operation_id, generation,
+candidate_sha256, rollback_manifest_sha256)` is a lock-holding Python context for
+the future verified installation actuator. It is not a CLI or remote command,
+and existing installation scripts do not invoke it. Both digests must be exact
+lowercase SHA256 strings. They bind the caller's intended immutable inputs;
+the guard does not verify the artifacts, backup contents, freshness, provenance,
+writer exclusion or backend drain on the caller's behalf.
+
+The context acquires Node then journal lock. It requires the exact HELD tuple
+and no unresolved panel request, retains accepted request history, and atomically
+upgrades to schema v3 with an `INSTALL_INTENT` record before yielding to any
+external work. File and directory fsync must succeed first. The installed Agent,
+CLI and source rollback continue to reject mutation. Old v1/v2 readers reject
+the unknown schema rather than treating it as an ordinary cancellable hold.
+
+Once v3 exists, ordinary prepare/cancel are rejected, including after process
+death or failure before the first external effect. Status reports the bound
+installation and still says `quiescence: NOT_PROVEN`. No timeout, context exit,
+exception or source reinstall releases this state. Re-entering with the exact
+same tuple and digests returns `reconciliation_required: true`; different input
+is rejected. That flag prohibits interpreting a replay as permission to repeat
+external work blindly. A lost response or post-replace fsync error may leave a
+committed intent even though the first caller never entered its external body.
+
+There is no installation release/recovery transition yet. A subsequent actuator
+must implement evidence-backed recovery and reopening, retain both locks during
+each operation and revalidate its immutable inputs before effects. This internal
+primitive alone must not be used to begin a live installation: it does not stop,
+drain, replace, restore or start 3X-UI/Xray. Those external steps and their
+reconciliation remain the next required implementation.
+
 ## Persistence and uncertainty
 
 The canonical journal remains
@@ -104,3 +137,9 @@ effects. Only fixed runtime lock paths are relocated in those fixtures; no
 production path-bypass argument is added. `node_agent_rollback_latest.sh`
 exercises installed rollback, cancellation history and compatibility rejection.
 These are source/CI checks, not staging, reboot or real VPN acceptance.
+
+`test_installation_intent.py` additionally covers exact binding, unchanged
+accepted/pending history, lock ownership before effects, killed processes,
+conflicting replay, file/replace/directory sync failures and malformed v3 state.
+Installed CLI reinstallation and actual rollback smoke retain the v3 hold and
+reject cancellation/writes/source restoration before effects.
