@@ -144,6 +144,7 @@ def run_inner(args):
     fds = []
     try:
         smoke.bootstrap()
+        smoke.setup_clients()
         # Every independent guard copy must validate this disposable unit, not
         # production x-ui.service. Otherwise writers reject a valid fixture
         # stop journal as PANEL_STOP_INVALID instead of proving durable HELD.
@@ -153,7 +154,6 @@ def run_inner(args):
         source = cli_guard.read_text()
         require(source.count('PANEL_UNIT = "x-ui.service"') == 1, 'CLI_UNIT_RELOCATION_UNPROVEN')
         cli_guard.write_text(source.replace('PANEL_UNIT = "x-ui.service"', 'PANEL_UNIT = ' + json.dumps(unit)))
-        smoke.setup_clients()
         smoke.target = ThreadingHTTPServer(('127.0.0.1', TARGET_PORT), Target)
         smoke.target.seen = []
         target_thread = threading.Thread(target=smoke.target.serve_forever, kwargs={'poll_interval': 0.05}, daemon=True)
