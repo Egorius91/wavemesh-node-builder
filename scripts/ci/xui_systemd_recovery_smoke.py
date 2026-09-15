@@ -18,6 +18,7 @@ sys.path.insert(0, str(ROOT / 'agent'))
 import panel_request_guard as journal
 import panel_stop
 import panel_start
+import panel_backup
 from panel_isolation import PanelIsolation
 from xui_runtime_smoke import Smoke, SmokeFailure, Target, ThreadingHTTPServer, TARGET_PORT, PORT, command, namespace, require
 
@@ -41,6 +42,8 @@ def run_inner(args):
     journal.PANEL_UNIT = unit
     panel_start.PANEL_BINARY = smoke.binary
     panel_start.PANEL_ARGV = [str(smoke.binary)]
+    panel_backup.PANEL_HOME = smoke.home
+    panel_backup.PANEL_DB = smoke.db
     guard = journal.PanelRequestGuard(journal.DEFAULT_ROOT)
     lock = smoke.root / 'node.lock'
     with guard.locked():
@@ -97,16 +100,26 @@ def run_inner(args):
         fds = [os.pidfd_open(pid) for pid in original_pids]
         with journal.maintenance_node_lock(lock), guard.locked():
             guard.maintenance('prepare', OP, 1)
-        PanelIsolation().isolate(guard, OP, 1, 'a'*64, 'b'*64, PORT, lock)
-        with panel_stop.PanelStop().stopped(guard, OP, 1, 'a'*64, 'b'*64, PORT, helper_sha, lock):
+        candidate_sha = smoke.manifest['archive_sha256']
+        backup = panel_backup.prepare(guard, OP, 1, candidate_sha, lock)
+        rollback_sha = backup['rollback_manifest_sha256']
+        snapshot = panel_backup.location(guard, OP, 1)
+        # Verify actual private fixture identities/disabled state without logging
+        # them. This is a read of the snapshot, never a live DB restoration.
+        with patch.object(smoke, 'db', snapshot / 'database.sqlite'):
+            require(smoke.db_state(False) == identities, 'SNAPSHOT_CLIENT_IDENTITY_MISMATCH')
+        PanelIsolation().isolate(guard, OP, 1, candidate_sha, rollback_sha, PORT, lock)
+        with panel_stop.PanelStop().stopped(guard, OP, 1, candidate_sha, rollback_sha, PORT, helper_sha, lock):
+            panel_backup.verify_locked(guard, OP, 1, candidate_sha, rollback_sha)
             for fd in fds:
                 poll = select.poll(); poll.register(fd, select.POLLIN)
                 require(bool(poll.poll(0)), 'ORIGINAL_PANEL_OR_XRAY_SURVIVED')
             require(not smoke.traffic('control'), 'STOPPED_VPN_STILL_CONNECTS')
         print('PACKAGED_PANEL_XRAY_CGROUP_DRAIN_AND_VPN_STOP=PASS', flush=True)
+        print('OPERATION_BOUND_SQLITE_AND_PANEL_SNAPSHOT=PASS', flush=True)
         controller = panel_start.PanelStart()
         def recover():
-            return controller.started(guard, OP, 1, 'a'*64, 'b'*64, PORT, helper_sha, executable_sha, lock)
+            return controller.started(guard, OP, 1, candidate_sha, rollback_sha, PORT, helper_sha, executable_sha, lock)
         verify = controller.verify_running
         def lost_result(*values):
             verify(*values)
@@ -143,6 +156,7 @@ def run_inner(args):
         print('RECOVERED_REAL_VLESS_AND_IDENTITIES_WITH_WRITERS_CLOSED=PASS', flush=True)
         report = {'schema': 1, 'builder_commit': args.head, 'status': 'PASS',
                   'scope': 'DISPOSABLE_SYSTEMD_PRIVATE_NETWORK', 'deployment': 'NONE',
+                  'rollback_snapshot_verified': True,
                   'panel_sha256': executable_sha, 'archive_sha256': smoke.manifest['archive_sha256']}
         args.report.write_text(json.dumps(report, sort_keys=True) + '\n')
         # Only this allow-listed digest/status report is public CI evidence.
@@ -203,6 +217,6 @@ if __name__ == '__main__':
         main()
     except Exception as exc:
         print('PACKAGED_SYSTEMD_RECOVERY=FAILED; TYPE=' + type(exc).__name__, file=sys.stderr)
-        if isinstance(exc, (SmokeFailure, panel_stop.StopError, panel_start.StartError)) and re.fullmatch('[A-Z_]+', str(exc)):
+        if isinstance(exc, (SmokeFailure, panel_stop.StopError, panel_start.StartError, panel_backup.BackupError)) and re.fullmatch('[A-Z_]+', str(exc)):
             print('CODE=' + str(exc), file=sys.stderr)
         raise SystemExit(1)
