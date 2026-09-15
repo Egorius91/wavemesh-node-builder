@@ -22,3 +22,5 @@ jobs:
         run: sudo env GITHUB_ACTIONS=true python3 -B tests/integration/test_panel_start_systemd.py
       - name: Verify replacement maintenance admission boundaries
         run: sudo python3 -B -m unittest discover -s tests/unit -p test_panel_maintenance_start.py -v
+      - name: Verify terminal maintenance recovery and attempt replay boundaries
+        run: sudo python3 -B -m unittest discover -s tests/unit -p test_panel_maintenance_recovery.py -v

@@ -211,7 +211,7 @@ class PanelStop:
             state = guard.load()
             if state['schema_version'] == 5:
                 raise StopError('STOP_START_RECONCILIATION_REQUIRED')
-            if state['schema_version'] in (6, 7):
+            if state['schema_version'] in (6, 7, 8):
                 raise StopError('STOP_REPLACEMENT_RECONCILIATION_REQUIRED')
             replay = state['schema_version'] == 4
             if replay:

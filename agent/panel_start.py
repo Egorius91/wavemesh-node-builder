@@ -179,6 +179,36 @@ class PanelStart(PanelStop):
         connection.sendall(b'OK\n')
         return admitted
 
+    def dispatch_once(self, guard, state, helper_sha256, executable_sha256, expected, contract, version):
+        endpoint = guard.root / 'start.sock'
+        # A stale socket is unresolved state, never delete-and-retry.
+        with socket.socket(socket.AF_UNIX, socket.SOCK_STREAM) as listener:
+            listener.bind(str(endpoint))
+            os.chmod(endpoint, 0o600)
+            owned = endpoint.lstat()
+            try:
+                listener.listen(1)
+                listener.settimeout(20)
+                state = {**state, 'schema_version': version, 'start': {
+                    'phase': 'START_INTENT', 'job_path': '', 'invocation_id': '', 'cgroup_inode': 0,
+                    'executable_sha256': executable_sha256, 'contract_sha256': contract}}
+                guard.save(state)
+                job = self.dispatch_start()
+                state = {**state, 'start': {**state['start'], 'job_path': job}}
+                guard.save(state)
+                connection, _ = listener.accept()
+                with connection:
+                    state = self.admit(guard, connection, state, helper_sha256, executable_sha256, expected)
+                deadline = time.monotonic() + 20
+                while self.observe()['ActiveState'] == 'activating' and time.monotonic() < deadline:
+                    time.sleep(0.05)
+                self.verify_running(state, helper_sha256, executable_sha256)
+            finally:
+                current = endpoint.lstat()
+                if (current.st_dev, current.st_ino) == (owned.st_dev, owned.st_ino):
+                    endpoint.unlink()
+        return state
+
     @contextmanager
     def started(self, guard, operation_id, generation, candidate_sha256, rollback_manifest_sha256,
                 port, helper_sha256, executable_sha256, node_lock=None):
@@ -204,33 +234,7 @@ class PanelStart(PanelStop):
                 if self.contract(observed, helper_sha256) != state['stop']['contract_sha256'] or self.job() != '/':
                     raise StartError('START_BINDING_CHANGED')
                 contract = self.start_contract(observed, helper_sha256, executable_sha256)
-                endpoint = guard.root / 'start.sock'
-                # A stale socket is unresolved state, never delete-and-retry.
-                with socket.socket(socket.AF_UNIX, socket.SOCK_STREAM) as listener:
-                    listener.bind(str(endpoint))
-                    os.chmod(endpoint, 0o600)
-                    owned = endpoint.lstat()
-                    try:
-                        listener.listen(1)
-                        listener.settimeout(20)
-                        state = {**state, 'schema_version': self.active_version, 'start': {
-                            'phase': 'START_INTENT', 'job_path': '', 'invocation_id': '', 'cgroup_inode': 0,
-                            'executable_sha256': executable_sha256, 'contract_sha256': contract}}
-                        guard.save(state)
-                        job = self.dispatch_start()
-                        state = {**state, 'start': {**state['start'], 'job_path': job}}
-                        guard.save(state)
-                        connection, _ = listener.accept()
-                        with connection:
-                            state = self.admit(guard, connection, state, helper_sha256, executable_sha256, expected)
-                        deadline = time.monotonic() + 20
-                        while self.observe()['ActiveState'] == 'activating' and time.monotonic() < deadline:
-                            time.sleep(0.05)
-                        self.verify_running(state, helper_sha256, executable_sha256)
-                    finally:
-                        current = endpoint.lstat()
-                        if (current.st_dev, current.st_ino) == (owned.st_dev, owned.st_ino):
-                            endpoint.unlink()
+                state = self.dispatch_once(guard, state, helper_sha256, executable_sha256, expected, contract, self.active_version)
             verify_readback(PanelIsolation().observe(), expected)
             yield {'activation': 'RUNNING_BOUND_INVOCATION', 'local_admission': 'CLOSED',
                    'reconciliation_required': replay, 'commercial_access': 'NOT_PROVEN'}
