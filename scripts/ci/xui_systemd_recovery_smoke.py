@@ -145,6 +145,9 @@ def run_inner(args):
                   'scope': 'DISPOSABLE_SYSTEMD_PRIVATE_NETWORK', 'deployment': 'NONE',
                   'panel_sha256': executable_sha, 'archive_sha256': smoke.manifest['archive_sha256']}
         args.report.write_text(json.dumps(report, sort_keys=True) + '\n')
+        # Only this allow-listed digest/status report is public CI evidence.
+        # Private fixture logs, database and credentials keep the 0077 umask.
+        args.report.chmod(0o644)
     finally:
         subprocess.run(['systemctl', 'stop', unit], capture_output=True, timeout=30)
         if target_thread:
