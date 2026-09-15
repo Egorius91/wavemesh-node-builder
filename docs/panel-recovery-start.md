@@ -51,7 +51,13 @@ synthetic child service. It injects a lost successful start result, verifies
 read-only reconciliation and healthy child traffic, and keeps ordinary writers
 closed. Root unit tests cover unknown dispatch, failure before grant, lost grant,
 wrong peer, stale socket, strict schema and retained v5 denial.
-This is not actual panel/Xray installation, rollback, reboot or staging acceptance.
+The full candidate workflow also runs the packaged panel and its Xray under a
+dedicated systemd unit in a private network namespace. It proves original process
+exit, loss of VPN connectivity while stopped, recovery after a lost successful
+start result without redispatch, restored real VLESS traffic, unchanged client
+identities and continued Agent/installed-CLI writer denial. Its synthetic unit
+uses the compatible simple/no-restart contract; it is not the live unit.
+This is not transactional replacement, rollback, reboot or staging acceptance.
 The complete actuator still must validate/replace/restore artifacts and database,
 activate compatible interlocks transactionally, reconcile SaaS ownership and
 prove actual panel/Xray traffic before reopening admission.
