@@ -1,0 +1,22 @@
+name: Panel controlled stop
+on:
+  pull_request:
+  push:
+    branches: [main, feat/panel-controlled-stop]
+permissions:
+  contents: read
+jobs:
+  systemd:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6.0.3
+        with:
+          ref: ${{ github.event.pull_request.head.sha || github.sha }}
+          persist-credentials: false
+      - name: Install isolated packet-test dependencies
+        run: sudo apt-get update -qq && sudo apt-get install -y nftables iproute2
+      - name: Verify stop intent and reconciliation
+        run: sudo python3 -B -m unittest discover -s tests/unit -p test_panel_stop.py -v
+      - name: Prove combined isolation and systemd stop without redispatch
+        run: sudo env GITHUB_ACTIONS=true python3 -B tests/integration/test_panel_stop_systemd.py

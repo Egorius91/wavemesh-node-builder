@@ -68,6 +68,12 @@ def verify_readback(value, expected):
         raise IsolationError("ISOLATION_READBACK_MISMATCH")
 
 
+def bound_policy(operation_id, generation, candidate_sha256, rollback_manifest_sha256, port):
+    encoded = json.dumps([operation_id, generation, candidate_sha256, rollback_manifest_sha256, port],
+                         separators=(",", ":")).encode()
+    return policy(port, hashlib.sha256(encoded).hexdigest())
+
+
 class PanelIsolation:
     def run(self, args, data=None):
         try:
@@ -117,9 +123,7 @@ class PanelIsolation:
         # Validate the port before journaling. Remaining binding validation is
         # performed by the journal before yielding the pre-effect boundary.
         policy(port, "0" * 64)
-        encoded = json.dumps([operation_id, generation, candidate_sha256, rollback_manifest_sha256, port],
-                             separators=(",", ":")).encode()
-        expected = policy(port, hashlib.sha256(encoded).hexdigest())
+        expected = bound_policy(operation_id, generation, candidate_sha256, rollback_manifest_sha256, port)
         with guard.installation_intent(operation_id, generation, candidate_sha256,
                                        rollback_manifest_sha256, node_lock) as intent:
             existing = self.observe()
