@@ -162,6 +162,15 @@ class StopTest(unittest.TestCase):
                     pass
         self.assertEqual(self.stop.calls, 1)
 
+    def test_failed_unit_with_zero_pids_still_rejects(self):
+        with self.context():
+            pass
+        failed = {**self.stop.observe(), 'ActiveState': 'failed', 'SubState': 'failed'}
+        with patch.object(self.stop, 'observe', return_value=failed), self.assertRaises(module.StopError):
+            with self.context():
+                pass
+        self.assertEqual(self.stop.calls, 1)
+
 
 if __name__ == '__main__':
     unittest.main()

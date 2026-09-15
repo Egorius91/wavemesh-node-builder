@@ -38,7 +38,8 @@ failed/transitional service states reject even when processes appear absent.
 
 Root CI uses a dedicated service in a private network namespace, the installed
 startup helper and real nft rules. It opens a live echo connection to a child
-which ignores SIGTERM; the fixture explicitly uses KillSignal=SIGKILL. It verifies
+which ignores SIGTERM; the fixture explicitly uses KillSignal=SIGKILL and marks
+that fixture-only signal as expected with SuccessExitStatus=SIGKILL. It verifies
 original parent/child exit via pidfds and connection teardown, injects loss after
 the real stop, reconciles without redispatch, and proves startup remains blocked.
 This is a controlled process fixture, not the actual panel/Xray or a machine

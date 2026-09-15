@@ -172,7 +172,7 @@ def main():
                               'while data:=c.recv(32): c.sendall(data)\n')
             unit.write_text('[Unit]\nDescription=Disposable WaveMesh stop CI fixture\n'
                             '[Service]\nType=simple\nRestart=no\nKillMode=control-group\n'
-                            'KillSignal=SIGKILL\nSendSIGKILL=yes\n'
+                            'KillSignal=SIGKILL\nSuccessExitStatus=SIGKILL\nSendSIGKILL=yes\n'
                             f'NetworkNamespacePath=/proc/{keeper.pid}/ns/net\n'
                             f'ExecStart=/usr/bin/python3 {worker}\n'
                             'StandardOutput=null\nStandardError=null\n')
