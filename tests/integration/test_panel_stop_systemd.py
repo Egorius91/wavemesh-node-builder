@@ -151,6 +151,12 @@ def inner(root, unit):
             print('CI_INVOCATION_EMPTY_OR_ORIGINAL=' + str(state['InvocationID'] in ('', observed['InvocationID'])), flush=True)
             raise
         assert (guard.root / 'state.json').read_bytes() == before
+        if os.environ.get('WAVEMESH_CI_RECOVERY_TEST') == 'true':
+            from test_panel_start_systemd import recovery_checks
+            recovery_checks(root, unit, guard, lock)
+            # Fixture cleanup stop, not the production recovery controller.
+            run(['systemctl', 'stop', unit])
+            before = (guard.root / 'state.json').read_bytes()
         assert run(['systemctl', 'start', unit], required=False).returncode != 0, 'STARTUP_BYPASSED'
         assert (guard.root / 'state.json').read_bytes() == before
         print('LOST_STOP_RESULT_RECONCILED_WITHOUT_REDISPATCH=PASS', flush=True)
@@ -225,7 +231,8 @@ def main():
                             '[Service]\nType=simple\nRestart=no\nKillMode=control-group\n'
                             'KillSignal=SIGKILL\nSuccessExitStatus=SIGKILL\nSendSIGKILL=yes\n'
                             f'NetworkNamespacePath=/proc/{keeper.pid}/ns/net\n'
-                            f'ExecStart=/usr/bin/python3 {worker}\n'
+                            f'WorkingDirectory={Path("/usr/bin/python3").resolve().parent}\n'
+                            f'ExecStart={Path("/usr/bin/python3").resolve()} {worker}\n'
                             'StandardOutput=null\nStandardError=null\n')
             drop_dir.mkdir()
             drop_file.write_text(drop)

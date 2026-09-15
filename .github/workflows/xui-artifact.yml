@@ -46,7 +46,7 @@ jobs:
         run: |
           set -Eeuo pipefail
           sudo apt-get update -qq
-          sudo apt-get install -y musl-tools
+          sudo apt-get install -y musl-tools nftables iproute2
           {
             go version
             node --version
@@ -92,12 +92,18 @@ jobs:
             timeout 300 unshare --net --pid --fork --kill-child --mount-proc \
             python3 scripts/ci/xui_runtime_smoke.py --candidate candidate \
             --head "$CANDIDATE_HEAD" --report runtime-smoke.json
+      - name: Prove packaged systemd stop and recovery with real VLESS
+        run: |
+          sudo env GITHUB_ACTIONS=true python3 scripts/ci/xui_systemd_recovery_smoke.py \
+            --candidate candidate --head "$CANDIDATE_HEAD" --report systemd-recovery-smoke.json
       - name: Preserve sanitized runtime smoke evidence
         if: always()
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7
         with:
           name: wavemesh-panel-runtime-smoke-${{ env.CANDIDATE_HEAD }}
-          path: runtime-smoke.json
+          path: |
+            runtime-smoke.json
+            systemd-recovery-smoke.json
           if-no-files-found: warn
           retention-days: 30
       - name: Preserve complete candidate and corresponding source

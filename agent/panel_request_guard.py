@@ -13,7 +13,9 @@ import os
 from pathlib import Path
 import re
 import secrets
+import socket
 import stat
+import struct
 import subprocess
 import sys
 import tempfile
@@ -24,6 +26,7 @@ DEFAULT_ROOT = Path("/var/lib/wavemesh-agent/panel-requests")
 MAINTENANCE_PROTOCOL = "local-maintenance-v2"
 INSTALLATION_PROTOCOL = "panel-install-intent-v3"
 STOP_PROTOCOL = "panel-stop-intent-v4"
+START_PROTOCOL = "panel-start-intent-v5"
 PANEL_UNIT = "x-ui.service"
 MAX_STATE = 4096
 MAX_RESPONSE = 8 * 1024 * 1024
@@ -134,13 +137,15 @@ class PanelRequestGuard:
             value = json.loads(raw, object_pairs_hook=unique_object)
         except (ValueError, UnicodeError):
             raise PanelRequestError("PANEL_JOURNAL_INVALID") from None
-        if isinstance(value, dict) and value.get("schema_version") in (2, 3, 4):
+        if isinstance(value, dict) and value.get("schema_version") in (2, 3, 4, 5):
             version = value["schema_version"]
             expected = {"schema_version", "request", "maintenance"}
-            if version in (3, 4):
+            if version in (3, 4, 5):
                 expected.add("installation")
-            if version == 4:
+            if version in (4, 5):
                 expected.add("stop")
+            if version == 5:
+                expected.add("start")
             if (type(value["schema_version"]) is not int
                     or set(value) != expected):
                 raise PanelRequestError("PANEL_JOURNAL_INVALID")
@@ -151,13 +156,15 @@ class PanelRequestGuard:
             validate_hold_identity(hold["operation_id"], hold["generation"])
             if value["request"] is not None:
                 self.validate_request(value["request"])
-            if version in (3, 4):
+            if version in (3, 4, 5):
                 self.validate_installation(value["installation"])
                 if (hold["phase"] != "HELD" or (value["request"] is not None
                         and value["request"]["phase"] != "RESPONSE_ACCEPTED")):
                     raise PanelRequestError("PANEL_JOURNAL_INVALID")
-            if version == 4:
+            if version in (4, 5):
                 self.validate_stop(value["stop"])
+            if version == 5:
+                self.validate_start(value["start"])
         else:
             self.validate_request(value)
         return value
@@ -174,11 +181,30 @@ class PanelRequestGuard:
 
     @staticmethod
     def request_state(value):
-        return value["request"] if value and value["schema_version"] in (2, 3, 4) else value
+        return value["request"] if value and value["schema_version"] in (2, 3, 4, 5) else value
 
     @staticmethod
     def hold_state(value):
-        return value["maintenance"] if value and value["schema_version"] in (2, 3, 4) else None
+        return value["maintenance"] if value and value["schema_version"] in (2, 3, 4, 5) else None
+
+    @staticmethod
+    def validate_start(value):
+        keys = {"phase", "job_path", "invocation_id", "cgroup_inode", "executable_sha256", "contract_sha256"}
+        if (not isinstance(value, dict) or set(value) != keys
+                or value["phase"] not in ("START_INTENT", "START_ADMITTED")
+                or not isinstance(value["job_path"], str)
+                or not re.fullmatch(r"(?:/org/freedesktop/systemd1/job/[1-9][0-9]*)?", value["job_path"])
+                or not isinstance(value["invocation_id"], str)
+                or not re.fullmatch(r"(?:[a-f0-9]{32})?", value["invocation_id"])
+                or type(value["cgroup_inode"]) is not int or value["cgroup_inode"] < 0
+                or any(not isinstance(value[key], str) or not re.fullmatch(r"[a-f0-9]{64}", value[key])
+                       for key in ("executable_sha256", "contract_sha256"))):
+            raise PanelRequestError("PANEL_START_INVALID")
+        admitted = value["phase"] == "START_ADMITTED"
+        if (admitted and (not value["job_path"] or not value["invocation_id"] or not value["cgroup_inode"])):
+            raise PanelRequestError("PANEL_START_INVALID")
+        if not admitted and (value["invocation_id"] or value["cgroup_inode"]):
+            raise PanelRequestError("PANEL_START_INVALID")
 
     @staticmethod
     def validate_stop(value):
@@ -228,7 +254,7 @@ class PanelRequestGuard:
             request = self.request_state(value)
             if request and request["phase"] != "RESPONSE_ACCEPTED":
                 raise PanelRequestError("PANEL_REQUEST_RECONCILIATION_REQUIRED")
-            replay = value["schema_version"] in (3, 4)
+            replay = value["schema_version"] in (3, 4, 5)
             if replay:
                 if value["installation"] != installation:
                     raise PanelRequestError("PANEL_INSTALLATION_CONFLICT")
@@ -274,11 +300,42 @@ class PanelRequestGuard:
             if (not stat.S_ISDIR(info.st_mode) or info.st_uid != 0
                     or info.st_mode & 0o022):
                 raise PanelRequestError("PANEL_STARTUP_STORAGE_UNSAFE")
-        with maintenance_node_lock(node_lock or Path("/run/lock/wavemesh-node.lock")), self.locked():
-            value = self.load()
-            if value is None:
-                raise PanelRequestError("PANEL_STARTUP_STATE_REQUIRED")
-            self.assert_open(value)
+        try:
+            with maintenance_node_lock(node_lock or Path("/run/lock/wavemesh-node.lock")), self.locked():
+                value = self.load()
+                if value is None:
+                    raise PanelRequestError("PANEL_STARTUP_STATE_REQUIRED")
+                self.assert_open(value)
+        except PanelRequestError as exc:
+            if str(exc) != "PANEL_NODE_BUSY" or self.root != DEFAULT_ROOT:
+                raise
+            # Only the controller retaining BOTH locks may delegate this one
+            # startup admission. No state-file permit or environment bypass.
+            self.request_start_admission()
+
+    def request_start_admission(self):
+        endpoint = self.root / "start.sock"
+        try:
+            info = endpoint.lstat()
+            if not stat.S_ISSOCK(info.st_mode) or info.st_uid != 0 or info.st_mode & 0o077:
+                raise PanelRequestError("PANEL_START_BROKER_UNSAFE")
+            with socket.socket(socket.AF_UNIX, socket.SOCK_STREAM) as connection:
+                connection.settimeout(20)
+                connection.connect(str(endpoint))
+                pid, uid, _ = struct.unpack("3i", connection.getsockopt(socket.SOL_SOCKET, socket.SO_PEERCRED, 12))
+                if uid != 0 or pid <= 0:
+                    raise PanelRequestError("PANEL_START_BROKER_UNSAFE")
+                connection.sendall(b"WAVEMESH_START_V1\n")
+                response = b""
+                while len(response) < 3:
+                    part = connection.recv(3 - len(response))
+                    if not part:
+                        break
+                    response += part
+                if response != b"OK\n":
+                    raise PanelRequestError("PANEL_START_NOT_ADMITTED")
+        except (OSError, ValueError):
+            raise PanelRequestError("PANEL_START_NOT_ADMITTED") from None
 
     def maintenance(self, action, operation_id=None, generation=None):
         """Caller must hold the Node lock for prepare/cancel, then journal lock.
@@ -291,7 +348,7 @@ class PanelRequestGuard:
         if action != "status":
             validate_hold_identity(operation_id, generation)
         value = self.load()
-        if value and value["schema_version"] in (3, 4) and action != "status":
+        if value and value["schema_version"] in (3, 4, 5) and action != "status":
             raise PanelRequestError("PANEL_INSTALLATION_RECONCILIATION_REQUIRED")
         hold = self.hold_state(value)
         request = self.request_state(value)
@@ -315,11 +372,13 @@ class PanelRequestGuard:
         result = {"local_admission": "CLOSED" if hold and hold["phase"] == "HELD" else "NOT_HELD",
                 "maintenance": hold, "request_pending": bool(request and request["phase"] != "RESPONSE_ACCEPTED"),
                 "quiescence": "NOT_PROVEN"}
-        if value and value["schema_version"] in (3, 4):
+        if value and value["schema_version"] in (3, 4, 5):
             result["installation"] = value["installation"]
-        if value and value["schema_version"] == 4:
+        if value and value["schema_version"] in (4, 5):
             # Boot/cgroup/invocation identity is private reconciliation state.
             result["stop"] = {"phase": value["stop"]["phase"]}
+        if value and value["schema_version"] == 5:
+            result["start"] = {"phase": value["start"]["phase"]}
         return result
 
     def save(self, value):
