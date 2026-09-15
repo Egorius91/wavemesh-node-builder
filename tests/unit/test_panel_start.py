@@ -60,7 +60,7 @@ class StartStateTest(unittest.TestCase):
         self.addCleanup(patch.stopall)
         patch.object(journal, 'DEFAULT_ROOT', self.guard.root).start()
         self.expected = bound_policy(OP, 1, 'a'*64, 'b'*64, 31333)
-        patch.object(PanelIsolation, 'observe', return_value=self.expected).start()
+        patch.object(PanelIsolation, 'observe', return_value={'nftables': self.expected}).start()
         with journal.maintenance_node_lock(self.lock), self.guard.locked():
             self.guard.maintenance('prepare', OP, 1)
         with FakeStop(self.guard).stopped(self.guard, OP, 1, 'a'*64, 'b'*64, 31333, 'c'*64, self.lock):
