@@ -60,8 +60,48 @@ def inner(root, unit):
         def stopped():
             return stopper.stopped(guard, OP, 1, 'a'*64, 'b'*64, PORT, digest, lock)
 
-        # Reject a stop-post hook before dispatch; only fixture configuration.
         extra = Path('/run/systemd/system') / (unit + '.d') / '99-extra.conf'
+        # These declarations are reloaded, never started/mounted. A controller
+        # must reject them even when the currently running service is healthy.
+        for section, directive in (
+            ('Service', 'PrivateNetwork=yes'),
+            ('Unit', 'JoinsNamespaceOf=wm-absent-ci-peer.service'),
+            ('Service', 'MountImages=/nonexistent-wm-ci.raw:/opt/wm-ci'),
+            ('Service', 'ExtensionImages=/nonexistent-wm-ci.raw'),
+            ('Service', 'ExtensionDirectories=/nonexistent-wm-ci'),
+        ):
+            before = (guard.root / 'state.json').read_bytes()
+            extra.write_text('[' + section + ']\n' + directive + '\n')
+            run(['systemctl', 'daemon-reload'])
+            try:
+                with patch.object(stopper, 'dispatch_stop', side_effect=AssertionError('UNSAFE_STOP_DISPATCH')):
+                    try:
+                        with stopped():
+                            raise AssertionError('UNSUPPORTED_ENVIRONMENT_ACCEPTED')
+                    except module.StopError as exc:
+                        assert str(exc) == 'STOP_EXECUTION_ENVIRONMENT_UNSUPPORTED', 'UNEXPECTED_ENVIRONMENT_ERROR'
+            finally:
+                extra.unlink()
+                run(['systemctl', 'daemon-reload'])
+            assert (guard.root / 'state.json').read_bytes() == before
+            assert stopper.observe()['ActiveState'] == 'active'
+        print('UNSUPPORTED_NAMESPACES_AND_IMAGES_REJECTED_BEFORE_STOP=PASS', flush=True)
+
+        # After daemon-reload the declared path may differ from the running
+        # process. From the host namespace, the old path-only check would pass;
+        # verify the actual process catches this mismatch. This subprocess only
+        # reads the fixture contract; it never applies host firewall rules.
+        extra.write_text('[Service]\nNetworkNamespacePath=/proc/1/ns/net\n')
+        run(['systemctl', 'daemon-reload'])
+        try:
+            run(['nsenter', '-t', '1', '-n', sys.executable, str(Path(__file__).resolve()),
+                 'namespace-mismatch', str(root), unit])
+        finally:
+            extra.unlink()
+            run(['systemctl', 'daemon-reload'])
+        print('ACTUAL_PROCESS_NAMESPACE_MISMATCH_REJECTED=PASS', flush=True)
+
+        # Reject a stop-post hook before dispatch; only fixture configuration.
         extra.write_text('[Service]\nExecStopPost=/usr/bin/true\n')
         run(['systemctl', 'daemon-reload'])
         try:
@@ -126,6 +166,17 @@ def main():
     if sys.argv[1:2] == ['inner']:
         inner(Path(sys.argv[2]), sys.argv[3])
         return
+    if sys.argv[1:2] == ['namespace-mismatch']:
+        journal.PANEL_UNIT = sys.argv[3]
+        module.STARTUP_GUARD = Path(sys.argv[2]) / 'package/usr/local/lib/wavemesh/lib/panel_request_guard.py'
+        digest = hashlib.sha256(module.STARTUP_GUARD.read_bytes()).hexdigest()
+        stopper = module.PanelStop()
+        try:
+            stopper.contract(stopper.observe(), digest)
+        except module.StopError as exc:
+            assert str(exc) == 'STOP_NETWORK_NAMESPACE_MISMATCH', 'WRONG_NAMESPACE_ERROR'
+            return
+        raise AssertionError('PROCESS_NAMESPACE_MISMATCH_ACCEPTED')
     if Path('/proc/1/comm').read_text().strip() != 'systemd':
         raise RuntimeError('SYSTEMD_REQUIRED')
     with tempfile.TemporaryDirectory(prefix='wm-stop-ci-', dir='/run') as directory:

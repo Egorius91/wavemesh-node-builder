@@ -5,6 +5,7 @@ import json
 import os
 from pathlib import Path
 import re
+import select
 import stat
 import subprocess
 import sys
@@ -20,6 +21,13 @@ SETTINGS = {'LoadState': 'loaded', 'KillMode': 'control-group', 'SendSIGKILL': '
 VARIABLE = {'ActiveState', 'SubState', 'MainPID', 'ControlPID', 'ControlGroup', 'InvocationID',
             'User', 'NetworkNamespacePath'}
 HOOKS = ('ExecStartPre', 'ExecStartPost', 'ExecStop', 'ExecStopPost', 'ExecCondition')
+EXECUTION_ENVIRONMENT = {
+    'PrivateNetwork': ('Service', 'b', False),
+    'JoinsNamespaceOf': ('Unit', 'as', []),
+    'MountImages': ('Service', 'a(ssba(ss))', []),
+    'ExtensionImages': ('Service', 'a(sba(ss))', []),
+    'ExtensionDirectories': ('Service', 'as', []),
+}
 
 
 class StopError(RuntimeError):
@@ -57,6 +65,17 @@ def verify_hooks(properties, helper):
             raise StopError('STOP_HOOK_INVALID')
 
 
+def verify_execution_environment(properties):
+    if set(properties) != set(EXECUTION_ENVIRONMENT):
+        raise StopError('STOP_EXECUTION_ENVIRONMENT_UNSUPPORTED')
+    for name, (_, signature, expected) in EXECUTION_ENVIRONMENT.items():
+        value = properties[name]
+        if (not isinstance(value, dict) or set(value) != {'type', 'data'}
+                or value['type'] != signature or type(value['data']) is not type(expected)
+                or value['data'] != expected):
+            raise StopError('STOP_EXECUTION_ENVIRONMENT_UNSUPPORTED')
+
+
 class PanelStop:
     def run(self, args):
         try:
@@ -75,13 +94,50 @@ class PanelStop:
     def boot_id(self):
         return Path('/proc/sys/kernel/random/boot_id').read_text().strip()
 
+    def property(self, name, interface='Service'):
+        encoded = ''.join(c if c.isascii() and c.isalnum() else '_' + format(ord(c), '02x')
+                          for c in journal.PANEL_UNIT)
+        raw = self.run(['/usr/bin/busctl', '--system', '--json=short', 'get-property',
+                        'org.freedesktop.systemd1', '/org/freedesktop/systemd1/unit/' + encoded,
+                        'org.freedesktop.systemd1.' + interface, name])
+        return json.loads(raw, object_pairs_hook=journal.unique_object)
+
+    def verify_main_namespace(self, observed):
+        if not re.fullmatch('[1-9][0-9]*', observed['MainPID']):
+            raise StopError('STOP_PROCESS_IDENTITY_UNPROVEN')
+        pid = int(observed['MainPID'])
+        fd = os.pidfd_open(pid)
+        try:
+            # A pidfd becoming readable detects death/reuse while the numeric
+            # /proc path is inspected. Never signal a numeric PID here.
+            actual = os.stat('/proc/' + str(pid) + '/ns/net')
+            current = os.stat('/proc/self/ns/net')
+            if (actual.st_dev, actual.st_ino) != (current.st_dev, current.st_ino):
+                raise StopError('STOP_NETWORK_NAMESPACE_MISMATCH')
+            fresh = self.observe()
+            if any(fresh[key] != observed[key] for key in
+                   ('MainPID', 'InvocationID', 'ControlGroup', 'ActiveState', 'SubState')):
+                raise StopError('STOP_PROCESS_IDENTITY_UNPROVEN')
+            poll = select.poll()
+            poll.register(fd, select.POLLIN)
+            if poll.poll(0):
+                raise StopError('STOP_PROCESS_IDENTITY_UNPROVEN')
+        finally:
+            os.close(fd)
+
     def contract(self, observed, helper_sha256):
         if any(observed[k] != v for k, v in SETTINGS.items()) or observed['User'] not in ('', 'root', '0'):
             raise StopError('STOP_UNIT_UNSUPPORTED')
+        environment = {name: self.property(name, interface)
+                       for name, (interface, _, _) in EXECUTION_ENVIRONMENT.items()}
+        verify_execution_environment(environment)
         # The nft readback must inspect the namespace used by the service.
         namespace = observed['NetworkNamespacePath'] or '/proc/1/ns/net'
-        if os.stat(namespace).st_ino != os.stat('/proc/self/ns/net').st_ino:
+        configured, current = os.stat(namespace), os.stat('/proc/self/ns/net')
+        if (configured.st_dev, configured.st_ino) != (current.st_dev, current.st_ino):
             raise StopError('STOP_NETWORK_NAMESPACE_MISMATCH')
+        if observed['ActiveState'] == 'active':
+            self.verify_main_namespace(observed)
         for path in STARTUP_GUARD.parents:
             info = path.lstat()
             if not stat.S_ISDIR(info.st_mode) or info.st_uid != 0 or info.st_mode & 0o022:
@@ -97,19 +153,14 @@ class PanelStop:
             os.close(fd)
         if digest != helper_sha256:
             raise StopError('STOP_HELPER_MISMATCH')
-        encoded = ''.join(c if c.isascii() and c.isalnum() else '_' + format(ord(c), '02x')
-                          for c in journal.PANEL_UNIT)
-        hooks = {}
-        for name in HOOKS:
-            raw = self.run(['/usr/bin/busctl', '--system', '--json=short', 'get-property',
-                            'org.freedesktop.systemd1', '/org/freedesktop/systemd1/unit/' + encoded,
-                            'org.freedesktop.systemd1.Service', name])
-            hooks[name] = json.loads(raw, object_pairs_hook=journal.unique_object)
+        hooks = {name: self.property(name) for name in HOOKS}
         verify_hooks(hooks, STARTUP_GUARD)
         # Runtime timestamps/PIDs inside ExecStartPre are observations, not
         # configuration. Hash only the strictly verified command contract.
         identity = {k: observed[k] for k in SETTINGS.keys() | {'User', 'NetworkNamespacePath'}}
         identity['helper_sha256'] = digest
+        identity['execution_environment'] = environment
+        identity['network_namespace'] = [current.st_dev, current.st_ino]
         identity['startup_argv'] = hooks['ExecStartPre']['data'][0][:3]
         return hashlib.sha256(json.dumps(identity, sort_keys=True).encode()).hexdigest()
 

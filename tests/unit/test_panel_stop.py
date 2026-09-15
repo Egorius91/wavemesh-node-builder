@@ -4,6 +4,7 @@ from pathlib import Path
 import sys
 import tempfile
 import unittest
+from types import SimpleNamespace
 from unittest.mock import patch
 
 ROOT = Path(__file__).resolve().parents[2]
@@ -17,6 +18,26 @@ BOOT = '00000000-0000-4000-8000-000000000002'
 
 
 class ContractTest(unittest.TestCase):
+    def test_namespace_and_overlay_settings_require_exact_empty_defaults(self):
+        valid = {name: {'type': signature, 'data': copy.deepcopy(value)}
+                 for name, (_, signature, value) in module.EXECUTION_ENVIRONMENT.items()}
+        module.verify_execution_environment(valid)
+        for name in valid:
+            changed = copy.deepcopy(valid)
+            changed[name]['data'] = True if name == 'PrivateNetwork' else ['synthetic']
+            with self.subTest(name=name), self.assertRaises(module.StopError):
+                module.verify_execution_environment(changed)
+            changed = copy.deepcopy(valid)
+            changed[name]['type'] = 'unknown'
+            with self.assertRaises(module.StopError):
+                module.verify_execution_environment(changed)
+            changed = copy.deepcopy(valid)
+            del changed[name]
+            with self.assertRaises(module.StopError):
+                module.verify_execution_environment(changed)
+        with self.assertRaises(module.StopError):
+            module.verify_execution_environment({**valid, 'PrivateNetwork': {'type': 'b', 'data': 0}})
+
     def test_hooks_require_exact_mandatory_guard_and_no_other_effects(self):
         hooks = {key: {'type': 'a(sasbttttuii)', 'data': []} for key in module.HOOKS}
         argv = ['/usr/bin/python3', '-I', '-B', str(module.STARTUP_GUARD), '--check-startup']
@@ -73,6 +94,37 @@ class FakeStop(module.PanelStop):
         self.active = False
         if self.lost:
             raise module.StopError('SYNTHETIC_LOST_RESULT')
+
+
+@unittest.skipUnless(sys.platform == 'linux', 'Linux pidfd API')
+class ProcessNamespaceTest(unittest.TestCase):
+    def check(self, changed=None, exited=False, other_namespace=False):
+        observed = FakeStop(None).observe()
+        namespace = SimpleNamespace(st_dev=1, st_ino=2)
+        alternate = SimpleNamespace(st_dev=1, st_ino=3)
+        with patch.object(os, 'pidfd_open', return_value=42), patch.object(os, 'close') as close:
+            with patch.object(os, 'stat', side_effect=[alternate if other_namespace else namespace, namespace]):
+                with patch.object(module.PanelStop, 'observe', return_value={**observed, **(changed or {})}):
+                    with patch.object(module.select, 'poll') as poll:
+                        poll.return_value.poll.return_value = [(42, 1)] if exited else []
+                        try:
+                            module.PanelStop().verify_main_namespace(observed)
+                        finally:
+                            close.assert_called_once_with(42)
+
+    def test_matching_live_process(self):
+        self.check()
+
+    def test_changed_pid_invocation_or_exit_rejects(self):
+        for changed in ({'MainPID': '124'}, {'InvocationID': 'b'*32}):
+            with self.assertRaises(module.StopError):
+                self.check(changed=changed)
+        with self.assertRaises(module.StopError):
+            self.check(exited=True)
+
+    def test_process_in_another_namespace_rejects(self):
+        with self.assertRaises(module.StopError):
+            self.check(other_namespace=True)
 
 
 @unittest.skipUnless(sys.platform == 'linux' and getattr(os, 'geteuid', lambda: -1)() == 0,
