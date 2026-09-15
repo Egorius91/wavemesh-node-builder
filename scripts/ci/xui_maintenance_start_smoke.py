@@ -64,12 +64,14 @@ def run(smoke, guard, lock, unit_path, unit, operation, candidate_sha, rollback_
         with response:
             raw = response.read(4 * 1024 * 1024 + 1)
             require(len(raw) <= 4 * 1024 * 1024, 'MAINTENANCE_RESPONSE_LIMIT')
-            return response.code, json.loads(raw)
+            # Authentication rejection deliberately has no JSON body.
+            return response.code, raw
     def ready():
         deadline = time.monotonic() + 20
         while time.monotonic() < deadline:
             try:
-                code, value = call('panel/api/wavemesh/maintenance')
+                code, raw = call('panel/api/wavemesh/maintenance')
+                value = json.loads(raw)
                 require(code == 200 and value.get('success') is True and value.get('obj') == {
                     'protocol': 'wavemesh-maintenance-v1', 'maintenance': True}, 'MAINTENANCE_STATUS_INVALID')
                 return
@@ -82,11 +84,13 @@ def run(smoke, guard, lock, unit_path, unit, operation, candidate_sha, rollback_
                 require(result['activation'] == 'MAINTENANCE_BOUND_INVOCATION', 'MAINTENANCE_RECEIPT_INVALID')
                 ready()
                 require(call('panel/api/clients/list', authenticated=False)[0] == 401, 'MAINTENANCE_AUTH_BYPASS')
-                code, inventory = call('panel/api/clients/list')
+                code, raw = call('panel/api/clients/list')
+                inventory = json.loads(raw)
                 require(code == 200 and inventory.get('success') is True and len(inventory.get('obj', [])) == 2,
                         'MAINTENANCE_INVENTORY_FAILED')
                 for path in ('panel/api/server/restartXray', 'panel/api/clients/update/' + smoke.clients['candidate']['email']):
-                    code, value = call(path, 'POST', payload={**smoke.clients['candidate'], 'enable': True})
+                    code, raw = call(path, 'POST', payload={**smoke.clients['candidate'], 'enable': True})
+                    value = json.loads(raw)
                     require(code == 503 and value.get('msg') == 'WAVEMESH_MAINTENANCE_READ_ONLY', 'MAINTENANCE_WRITE_ALLOWED')
                 observed = controller.observe()
                 command(['systemctl', 'kill', '--kill-whom=main', '--signal=HUP', unit])
