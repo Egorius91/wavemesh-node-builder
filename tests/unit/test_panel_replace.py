@@ -17,6 +17,7 @@ import panel_candidate as candidate
 import panel_request_guard as journal
 import panel_start
 import panel_stop
+import access_runtime
 from panel_isolation import IsolationError, PanelIsolation, bound_policy
 from test_panel_candidate import fixture, HEAD, OP
 from test_panel_stop import FakeStop
@@ -121,6 +122,14 @@ class ReplacementTest(unittest.TestCase):
             self.assertTrue(self.transition('rollback')['reconciliation_required'])
             with self.assertRaises(module.ReplacementError):
                 self.transition()
+
+    def test_agent_denied_by_durable_hold_after_volatile_locks_are_released(self):
+        for action in ('replace', 'rollback'):
+            self.transition(action)
+            with patch.dict(os.environ, {'WAVEMESH_PANEL_REQUEST_STATE_DIR': str(self.guard.root)}):
+                with self.assertRaisesRegex(access_runtime.ProvisionError, '^PANEL_LOCAL_MAINTENANCE_HELD$'):
+                    with access_runtime.node_mutation_lock(self.lock):
+                        self.fail('durable replacement hold admitted Agent mutation')
 
     def test_lost_results_in_both_directions_reconcile_without_second_exchange(self):
         actual = module.exchange

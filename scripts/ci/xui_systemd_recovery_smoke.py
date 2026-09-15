@@ -83,7 +83,9 @@ def replacement_smoke(smoke, guard, lock, unit, candidate_sha, rollback_sha, man
             smoke.writers.agent(path, {**smoke.clients['candidate'], 'enable': True})
             raise SmokeFailure('FILE_JOURNAL_AGENT_WRITE_ALLOWED')
         except runtime.ProvisionError as exc:
-            require(str(exc) == 'Node mutation is busy', 'FILE_JOURNAL_AGENT_DENIAL_UNPROVEN')
+            # run() has released volatile locks. The durable hold, not flock
+            # contention or an unavailable panel socket, must deny this writer.
+            require(str(exc) == 'PANEL_LOCAL_MAINTENANCE_HELD', 'FILE_JOURNAL_AGENT_DENIAL_UNPROVEN')
     print('REAL_PANEL_TREE_EXCHANGE_AND_ROLLBACK_AFTER_LOST_RESULTS=PASS', flush=True)
     print('FILE_TRANSACTION_PRESERVES_DATABASE_AND_DENIES_STARTUP_AND_WRITERS=PASS', flush=True)
 
