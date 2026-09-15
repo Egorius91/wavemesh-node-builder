@@ -112,7 +112,8 @@ def run_inner(args):
     helper = package / 'usr/local/lib/wavemesh/lib/panel_request_guard.py'
     require(helper.read_bytes() == (ROOT / 'agent/panel_request_guard.py').read_bytes(), 'INSTALLED_HELPER_MISMATCH')
     helper.write_text(helper.read_text().replace('/var/lib/wavemesh-agent/panel-requests', str(guard.root))
-                      .replace('/run/lock/wavemesh-node.lock', str(lock)))
+                      .replace('/run/lock/wavemesh-node.lock', str(lock))
+                      .replace('PANEL_UNIT = "x-ui.service"', 'PANEL_UNIT = ' + json.dumps(unit)))
     panel_stop.STARTUP_GUARD = helper
     helper_sha = hashlib.sha256(helper.read_bytes()).hexdigest()
     executable_sha = panel_start.file_digest(smoke.binary)
@@ -143,6 +144,15 @@ def run_inner(args):
     fds = []
     try:
         smoke.bootstrap()
+        # Every independent guard copy must validate this disposable unit, not
+        # production x-ui.service. Otherwise writers reject a valid fixture
+        # stop journal as PANEL_STOP_INVALID instead of proving durable HELD.
+        from xui_writer_smoke import runtime
+        runtime._guard_module.PANEL_UNIT = unit
+        cli_guard = smoke.writers.library / 'lib/panel_request_guard.py'
+        source = cli_guard.read_text()
+        require(source.count('PANEL_UNIT = "x-ui.service"') == 1, 'CLI_UNIT_RELOCATION_UNPROVEN')
+        cli_guard.write_text(source.replace('PANEL_UNIT = "x-ui.service"', 'PANEL_UNIT = ' + json.dumps(unit)))
         smoke.setup_clients()
         smoke.target = ThreadingHTTPServer(('127.0.0.1', TARGET_PORT), Target)
         smoke.target.seen = []

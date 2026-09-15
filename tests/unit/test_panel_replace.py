@@ -131,6 +131,21 @@ class ReplacementTest(unittest.TestCase):
                     with access_runtime.node_mutation_lock(self.lock):
                         self.fail('durable replacement hold admitted Agent mutation')
 
+    def test_independent_agent_guard_requires_matching_fixture_unit(self):
+        self.transition()
+        state = self.guard.load()
+        state['stop'] = {**state['stop'], 'unit': 'wm-fixture.service',
+                         'control_group': '/system.slice/wm-fixture.service'}
+        self.guard.save(state)
+        with patch.dict(os.environ, {'WAVEMESH_PANEL_REQUEST_STATE_DIR': str(self.guard.root)}):
+            with self.assertRaisesRegex(access_runtime.ProvisionError, '^PANEL_STOP_INVALID$'):
+                with access_runtime.node_mutation_lock(self.lock):
+                    self.fail('mismatched unit admitted')
+            with patch.object(access_runtime._guard_module, 'PANEL_UNIT', 'wm-fixture.service'):
+                with self.assertRaisesRegex(access_runtime.ProvisionError, '^PANEL_LOCAL_MAINTENANCE_HELD$'):
+                    with access_runtime.node_mutation_lock(self.lock):
+                        self.fail('fixture hold admitted')
+
     def test_lost_results_in_both_directions_reconcile_without_second_exchange(self):
         actual = module.exchange
         def lost(*args):
