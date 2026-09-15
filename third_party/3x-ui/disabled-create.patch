@@ -1,8 +1,29 @@
 diff --git a/frontend/src/pages/api-docs/endpoints.ts b/frontend/src/pages/api-docs/endpoints.ts
-index af2081a..12bc1ee 100644
+index af2081a..63a2e01 100644
 --- a/frontend/src/pages/api-docs/endpoints.ts
 +++ b/frontend/src/pages/api-docs/endpoints.ts
-@@ -586,6 +586,17 @@ export const sections: readonly Section[] = [
+@@ -56,6 +56,20 @@ export interface Section {
+ }
+ 
+ export const sections: readonly Section[] = [
++  {
++    id: 'wavemesh-maintenance',
++    title: 'WaveMesh maintenance',
++    description: 'Read the immutable process startup mode using existing API authentication. This endpoint does not authorize runtime activation or reconciliation.',
++    endpoints: [
++      {
++        method: 'GET',
++        path: '/panel/api/wavemesh/maintenance',
++        summary: 'Return the maintenance protocol and whether this process started in maintenance mode.',
++        description: 'Maintenance mode allows only authenticated GET requests to this endpoint and /panel/api/clients/list. Other requests return HTTP 503. The mode cannot be changed through the API.',
++        response: '{"success":true,"obj":{"protocol":"wavemesh-maintenance-v1","maintenance":true}}',
++      },
++    ],
++  },
+   {
+     id: 'authentication',
+     title: 'Authentication',
+@@ -586,6 +600,17 @@ export const sections: readonly Section[] = [
          body: '{\n  "client": {\n    "email": "alice@example.com",\n    "totalGB": 53687091200,\n    "expiryTime": 1735689600000,\n    "tgId": 0,\n    "limitIp": 0,\n    "enable": true\n  },\n  "inboundIds": [3, 5]\n}',
          response: '{\n  "success": true,\n  "msg": "Client added"\n}',
        },
