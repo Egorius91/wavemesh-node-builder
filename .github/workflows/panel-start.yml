@@ -1,0 +1,22 @@
+name: Panel recovery start
+on:
+  pull_request:
+  push:
+    branches: [main, feat/panel-recovery-start]
+permissions:
+  contents: read
+jobs:
+  systemd:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6.0.3
+        with:
+          ref: ${{ github.event.pull_request.head.sha || github.sha }}
+          persist-credentials: false
+      - name: Install isolated packet-test dependencies
+        run: sudo apt-get update -qq && sudo apt-get install -y nftables iproute2
+      - name: Verify recovery-start intent and denial boundaries
+        run: sudo python3 -B -m unittest discover -s tests/unit -p test_panel_start.py -v
+      - name: Prove real recovery activation under retained locks
+        run: sudo env GITHUB_ACTIONS=true python3 -B tests/integration/test_panel_start_systemd.py

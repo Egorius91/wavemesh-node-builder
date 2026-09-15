@@ -209,6 +209,8 @@ class PanelStop:
             contract = self.contract(observed, helper_sha256)
             boot = self.boot_id()
             state = guard.load()
+            if state['schema_version'] == 5:
+                raise StopError('STOP_START_RECONCILIATION_REQUIRED')
             replay = state['schema_version'] == 4
             if replay:
                 intent = state['stop']
