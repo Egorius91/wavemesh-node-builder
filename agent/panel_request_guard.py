@@ -23,6 +23,8 @@ from urllib.parse import urlsplit
 DEFAULT_ROOT = Path("/var/lib/wavemesh-agent/panel-requests")
 MAINTENANCE_PROTOCOL = "local-maintenance-v2"
 INSTALLATION_PROTOCOL = "panel-install-intent-v3"
+STOP_PROTOCOL = "panel-stop-intent-v4"
+PANEL_UNIT = "x-ui.service"
 MAX_STATE = 4096
 MAX_RESPONSE = 8 * 1024 * 1024
 READ_POSTS = {"/panel/api/xray/", "/panel/api/xray/testOutbound",
@@ -132,11 +134,13 @@ class PanelRequestGuard:
             value = json.loads(raw, object_pairs_hook=unique_object)
         except (ValueError, UnicodeError):
             raise PanelRequestError("PANEL_JOURNAL_INVALID") from None
-        if isinstance(value, dict) and value.get("schema_version") in (2, 3):
+        if isinstance(value, dict) and value.get("schema_version") in (2, 3, 4):
             version = value["schema_version"]
             expected = {"schema_version", "request", "maintenance"}
-            if version == 3:
+            if version in (3, 4):
                 expected.add("installation")
+            if version == 4:
+                expected.add("stop")
             if (type(value["schema_version"]) is not int
                     or set(value) != expected):
                 raise PanelRequestError("PANEL_JOURNAL_INVALID")
@@ -147,11 +151,13 @@ class PanelRequestGuard:
             validate_hold_identity(hold["operation_id"], hold["generation"])
             if value["request"] is not None:
                 self.validate_request(value["request"])
-            if version == 3:
+            if version in (3, 4):
                 self.validate_installation(value["installation"])
                 if (hold["phase"] != "HELD" or (value["request"] is not None
                         and value["request"]["phase"] != "RESPONSE_ACCEPTED")):
                     raise PanelRequestError("PANEL_JOURNAL_INVALID")
+            if version == 4:
+                self.validate_stop(value["stop"])
         else:
             self.validate_request(value)
         return value
@@ -168,11 +174,26 @@ class PanelRequestGuard:
 
     @staticmethod
     def request_state(value):
-        return value["request"] if value and value["schema_version"] in (2, 3) else value
+        return value["request"] if value and value["schema_version"] in (2, 3, 4) else value
 
     @staticmethod
     def hold_state(value):
-        return value["maintenance"] if value and value["schema_version"] in (2, 3) else None
+        return value["maintenance"] if value and value["schema_version"] in (2, 3, 4) else None
+
+    @staticmethod
+    def validate_stop(value):
+        keys = {"phase", "unit", "boot_id", "invocation_id", "control_group", "cgroup_inode", "contract_sha256"}
+        if (not isinstance(value, dict) or set(value) != keys
+                or value["phase"] != "STOP_INTENT" or value["unit"] != PANEL_UNIT
+                or not isinstance(value["boot_id"], str)
+                or not re.fullmatch(r"[a-f0-9]{8}(-[a-f0-9]{4}){3}-[a-f0-9]{12}", value["boot_id"])
+                or not isinstance(value["invocation_id"], str)
+                or not re.fullmatch(r"(?:[a-f0-9]{32})?", value["invocation_id"])
+                or value["control_group"] != "/system.slice/" + PANEL_UNIT
+                or type(value["cgroup_inode"]) is not int or value["cgroup_inode"] < 0
+                or not isinstance(value["contract_sha256"], str)
+                or not re.fullmatch(r"[a-f0-9]{64}", value["contract_sha256"])):
+            raise PanelRequestError("PANEL_STOP_INVALID")
 
     @staticmethod
     def validate_installation(value):
@@ -207,7 +228,7 @@ class PanelRequestGuard:
             request = self.request_state(value)
             if request and request["phase"] != "RESPONSE_ACCEPTED":
                 raise PanelRequestError("PANEL_REQUEST_RECONCILIATION_REQUIRED")
-            replay = value["schema_version"] == 3
+            replay = value["schema_version"] in (3, 4)
             if replay:
                 if value["installation"] != installation:
                     raise PanelRequestError("PANEL_INSTALLATION_CONFLICT")
@@ -270,7 +291,7 @@ class PanelRequestGuard:
         if action != "status":
             validate_hold_identity(operation_id, generation)
         value = self.load()
-        if value and value["schema_version"] == 3 and action != "status":
+        if value and value["schema_version"] in (3, 4) and action != "status":
             raise PanelRequestError("PANEL_INSTALLATION_RECONCILIATION_REQUIRED")
         hold = self.hold_state(value)
         request = self.request_state(value)
@@ -294,8 +315,11 @@ class PanelRequestGuard:
         result = {"local_admission": "CLOSED" if hold and hold["phase"] == "HELD" else "NOT_HELD",
                 "maintenance": hold, "request_pending": bool(request and request["phase"] != "RESPONSE_ACCEPTED"),
                 "quiescence": "NOT_PROVEN"}
-        if value and value["schema_version"] == 3:
+        if value and value["schema_version"] in (3, 4):
             result["installation"] = value["installation"]
+        if value and value["schema_version"] == 4:
+            # Boot/cgroup/invocation identity is private reconciliation state.
+            result["stop"] = {"phase": value["stop"]["phase"]}
         return result
 
     def save(self, value):
