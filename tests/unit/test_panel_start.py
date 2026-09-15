@@ -97,6 +97,33 @@ class StartStateTest(unittest.TestCase):
             self.assertEqual(dispatch.call_count, 1)
             self.assertEqual((self.guard.root / 'state.json').read_bytes(), before)
 
+    def test_controller_process_death_retains_intent_and_stale_socket(self):
+        import multiprocessing
+        def crash():
+            with patch.object(self.controller, 'dispatch_start', side_effect=lambda: os._exit(86)):
+                with self.start():
+                    os._exit(87)
+        child = multiprocessing.get_context('fork').Process(target=crash)
+        child.start()
+        child.join(timeout=5)
+        if child.is_alive():
+            child.kill(); child.join(timeout=5)
+            self.fail('crash fixture did not terminate')
+        self.assertEqual(child.exitcode, 86)
+        self.assertEqual(self.guard.load()['start'], INTENT)
+        endpoint = self.guard.root / 'start.sock'
+        self.assertTrue(endpoint.exists())
+        before = (self.guard.root / 'state.json').read_bytes()
+        with patch.object(self.controller, 'dispatch_start') as dispatch:
+            with self.assertRaises(module.StartError):
+                with self.start():
+                    pass
+            dispatch.assert_not_called()
+        self.assertTrue(endpoint.exists())
+        self.assertEqual((self.guard.root / 'state.json').read_bytes(), before)
+        with self.assertRaises(journal.PanelRequestError):
+            self.guard.check_startup(self.lock)
+
     def test_failed_intent_save_never_dispatches(self):
         with patch.object(self.guard, 'save', side_effect=OSError('synthetic')), patch.object(self.controller, 'dispatch_start') as dispatch:
             with self.assertRaises(OSError):
