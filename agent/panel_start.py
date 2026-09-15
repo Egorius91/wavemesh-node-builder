@@ -53,6 +53,12 @@ def file_digest(path):
 
 
 class PanelStart(PanelStop):
+    initial_version = 4
+    active_version = 5
+
+    def verify_source(self, guard, state, executable_sha256):
+        """Additional pre-dispatch binding for specialized admission protocols."""
+
     def start_contract(self, observed, helper_sha256, executable_sha256):
         base = self.contract(observed, helper_sha256)
         expected = {'Type': 'simple', 'Restart': 'no', 'PIDFile': '',
@@ -183,10 +189,11 @@ class PanelStart(PanelStop):
         expected = bound_policy(operation_id, generation, candidate_sha256, rollback_manifest_sha256, port)
         with guard.installation_intent(operation_id, generation, candidate_sha256, rollback_manifest_sha256, node_lock):
             state = guard.load()
-            if state['schema_version'] not in (4, 5) or self.boot_id() != state['stop']['boot_id']:
+            if state['schema_version'] not in (self.initial_version, self.active_version) or self.boot_id() != state['stop']['boot_id']:
                 raise StartError('START_STOP_PROOF_REQUIRED')
             verify_readback(PanelIsolation().observe(), expected)
-            replay = state['schema_version'] == 5
+            self.verify_source(guard, state, executable_sha256)
+            replay = state['schema_version'] == self.active_version
             if replay:
                 if state['start']['executable_sha256'] != executable_sha256:
                     raise StartError('START_BINDING_CHANGED')
@@ -206,7 +213,7 @@ class PanelStart(PanelStop):
                     try:
                         listener.listen(1)
                         listener.settimeout(20)
-                        state = {**state, 'schema_version': 5, 'start': {
+                        state = {**state, 'schema_version': self.active_version, 'start': {
                             'phase': 'START_INTENT', 'job_path': '', 'invocation_id': '', 'cgroup_inode': 0,
                             'executable_sha256': executable_sha256, 'contract_sha256': contract}}
                         guard.save(state)
