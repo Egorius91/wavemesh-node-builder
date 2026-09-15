@@ -21,6 +21,7 @@ import panel_stop
 import panel_start
 import panel_backup
 import panel_candidate
+import panel_replace
 from panel_isolation import PanelIsolation
 from xui_runtime_smoke import Smoke, SmokeFailure, Target, ThreadingHTTPServer, TARGET_PORT, PORT, command, namespace, require
 
@@ -34,6 +35,59 @@ class UnitProcess:
     def poll(self):
         result = subprocess.run(['systemctl', 'is-active', '--quiet', self.unit], capture_output=True, timeout=5)
         return None if result.returncode == 0 else 1
+
+
+def replacement_smoke(smoke, guard, lock, unit, candidate_sha, rollback_sha, manifest_sha, head, helper_sha, executable_sha):
+    controller = panel_replace.PanelReplacement()
+    original = panel_replace.describe(smoke.home)
+    database_before = hashlib.sha256(smoke.db.read_bytes()).hexdigest()
+    arguments = (guard, OP, 1, candidate_sha, rollback_sha, manifest_sha, head, PORT, helper_sha, lock)
+    actual_exchange = panel_replace.exchange
+    def lost(*paths):
+        actual_exchange(*paths)
+        raise panel_replace.ReplacementError('SYNTHETIC_LOST_RESULT')
+    for action, pending, terminal in (('replace', 'REPLACE_INTENT', 'REPLACED'),
+                                      ('rollback', 'ROLLBACK_INTENT', 'ROLLED_BACK')):
+        with patch.object(panel_replace, 'exchange', side_effect=lost) as call:
+            try:
+                controller.run(action, *arguments)
+                raise SmokeFailure('FILE_LOST_RESULT_NOT_INJECTED')
+            except panel_replace.ReplacementError as exc:
+                require(str(exc) == 'SYNTHETIC_LOST_RESULT', 'FILE_EXCHANGE_FAILED')
+            require(call.call_count == 1, 'FILE_EXCHANGE_COUNT_INVALID')
+        require(guard.load()['replacement']['phase'] == pending, 'FILE_INTENT_NOT_RETAINED')
+        with patch.object(panel_replace, 'exchange', side_effect=AssertionError('SECOND_EXCHANGE')):
+            require(controller.run(action, *arguments)['files'] == terminal, 'FILE_RECONCILIATION_FAILED')
+        if action == 'replace':
+            require(smoke.home.stat().st_ino != original['inode'], 'FILE_TREE_NOT_EXCHANGED')
+            require(not (smoke.home / '.wm-original-tree-proof').exists(), 'ORIGINAL_TREE_STILL_LIVE')
+            require(panel_start.file_digest(smoke.binary) == executable_sha, 'REPLACEMENT_BINARY_MISMATCH')
+            require(panel_replace.describe(panel_replace.location(OP, 1) / 'slot') == original, 'ORIGINAL_TREE_NOT_RETAINED')
+        else:
+            require(panel_replace.describe(smoke.home) == original, 'FILE_ROLLBACK_MISMATCH')
+        require(not smoke.traffic('control'), 'FILE_TRANSACTION_EXPOSED_VPN')
+    require(hashlib.sha256(smoke.db.read_bytes()).hexdigest() == database_before, 'FILE_TRANSACTION_CHANGED_DATABASE')
+    with patch.object(panel_start.PanelStart, 'dispatch_start', side_effect=AssertionError('UNSAFE_START')):
+        try:
+            with panel_start.PanelStart().started(guard, OP, 1, candidate_sha, rollback_sha, PORT, helper_sha, executable_sha, lock):
+                raise SmokeFailure('RECOVERY_BYPASSED_FILE_JOURNAL')
+        except panel_start.StartError as exc:
+            require(str(exc) == 'START_STOP_PROOF_REQUIRED', 'RECOVERY_FILE_DENIAL_UNPROVEN')
+    result = subprocess.run(['systemctl', 'start', unit], capture_output=True, timeout=30)
+    require(result.returncode != 0 and panel_stop.PanelStop().observe()['MainPID'] == '0', 'ORDINARY_START_BYPASSED_FILE_JOURNAL')
+    path = '/panel/api/clients/update/' + smoke.clients['candidate']['email']
+    require(smoke.writers.cli(path, {**smoke.clients['candidate'], 'enable': True}).returncode != 0, 'FILE_JOURNAL_CLI_WRITE_ALLOWED')
+    with smoke.writers.environment():
+        from xui_writer_smoke import runtime
+        try:
+            smoke.writers.agent(path, {**smoke.clients['candidate'], 'enable': True})
+            raise SmokeFailure('FILE_JOURNAL_AGENT_WRITE_ALLOWED')
+        except runtime.ProvisionError as exc:
+            # run() has released volatile locks. The durable hold, not flock
+            # contention or an unavailable panel socket, must deny this writer.
+            require(str(exc) == 'PANEL_LOCAL_MAINTENANCE_HELD', 'FILE_JOURNAL_AGENT_DENIAL_UNPROVEN')
+    print('REAL_PANEL_TREE_EXCHANGE_AND_ROLLBACK_AFTER_LOST_RESULTS=PASS', flush=True)
+    print('FILE_TRANSACTION_PRESERVES_DATABASE_AND_DENIES_STARTUP_AND_WRITERS=PASS', flush=True)
 
 
 def run_inner(args):
@@ -58,7 +112,8 @@ def run_inner(args):
     helper = package / 'usr/local/lib/wavemesh/lib/panel_request_guard.py'
     require(helper.read_bytes() == (ROOT / 'agent/panel_request_guard.py').read_bytes(), 'INSTALLED_HELPER_MISMATCH')
     helper.write_text(helper.read_text().replace('/var/lib/wavemesh-agent/panel-requests', str(guard.root))
-                      .replace('/run/lock/wavemesh-node.lock', str(lock)))
+                      .replace('/run/lock/wavemesh-node.lock', str(lock))
+                      .replace('PANEL_UNIT = "x-ui.service"', 'PANEL_UNIT = ' + json.dumps(unit)))
     panel_stop.STARTUP_GUARD = helper
     helper_sha = hashlib.sha256(helper.read_bytes()).hexdigest()
     executable_sha = panel_start.file_digest(smoke.binary)
@@ -90,6 +145,15 @@ def run_inner(args):
     try:
         smoke.bootstrap()
         smoke.setup_clients()
+        # Every independent guard copy must validate this disposable unit, not
+        # production x-ui.service. Otherwise writers reject a valid fixture
+        # stop journal as PANEL_STOP_INVALID instead of proving durable HELD.
+        from xui_writer_smoke import runtime
+        runtime._guard_module.PANEL_UNIT = unit
+        cli_guard = smoke.writers.library / 'lib/panel_request_guard.py'
+        source = cli_guard.read_text()
+        require(source.count('PANEL_UNIT = "x-ui.service"') == 1, 'CLI_UNIT_RELOCATION_UNPROVEN')
+        cli_guard.write_text(source.replace('PANEL_UNIT = "x-ui.service"', 'PANEL_UNIT = ' + json.dumps(unit)))
         smoke.target = ThreadingHTTPServer(('127.0.0.1', TARGET_PORT), Target)
         smoke.target.seen = []
         target_thread = threading.Thread(target=smoke.target.serve_forever, kwargs={'poll_interval': 0.05}, daemon=True)
@@ -118,6 +182,10 @@ def run_inner(args):
             require(replay['reconciliation_required'] and replay['candidate_sha256'] == prepared['candidate_sha256'],
                     'CANDIDATE_REPLAY_UNPROVEN')
         candidate_sha = prepared['candidate_sha256']
+        if args.replacement:
+            marker = smoke.home / '.wm-original-tree-proof'
+            marker.write_bytes(b'original tree fixture')
+            marker.chmod(0o600)
         backup = panel_backup.prepare(guard, OP, 1, candidate_sha, lock)
         rollback_sha = backup['rollback_manifest_sha256']
         snapshot = panel_backup.location(guard, OP, 1)
@@ -136,6 +204,17 @@ def run_inner(args):
         print('PACKAGED_PANEL_XRAY_CGROUP_DRAIN_AND_VPN_STOP=PASS', flush=True)
         print('OPERATION_BOUND_SQLITE_AND_PANEL_SNAPSHOT=PASS', flush=True)
         print('TRUST_BOUND_CANDIDATE_PREPARATION_AND_REPLAY=PASS', flush=True)
+        if args.replacement:
+            replacement_smoke(smoke, guard, lock, unit, candidate_sha, rollback_sha, manifest_sha,
+                              args.head, helper_sha, executable_sha)
+            report = {'schema': 1, 'builder_commit': args.head, 'status': 'PASS', 'deployment': 'NONE',
+                      'scope': 'DISPOSABLE_STOPPED_FILE_TRANSACTION', 'file_replacement_verified': True,
+                      'file_rollback_verified': True, 'database_unchanged': True, 'startup': 'DENIED',
+                      'candidate_manifest_sha256': manifest_sha, 'panel_sha256': executable_sha,
+                      'archive_sha256': candidate_sha}
+            args.report.write_text(json.dumps(report, sort_keys=True) + '\n')
+            args.report.chmod(0o644)
+            return
         controller = panel_start.PanelStart()
         def recover():
             return controller.started(guard, OP, 1, candidate_sha, rollback_sha, PORT, helper_sha, executable_sha, lock)
@@ -204,6 +283,7 @@ def main():
     parser.add_argument('--root', type=Path)
     parser.add_argument('--unit')
     parser.add_argument('--netns')
+    parser.add_argument('--replacement', action='store_true')
     args = parser.parse_args()
     require(sys.platform == 'linux' and os.geteuid() == 0 and os.environ.get('GITHUB_ACTIONS') == 'true', 'CI_ROOT_REQUIRED')
     if args.root:
@@ -224,7 +304,8 @@ def main():
             result = subprocess.run(['nsenter', '-t', str(keeper.pid), '-n', sys.executable,
                                      str(Path(__file__).resolve()), '--candidate', str(args.candidate.resolve()),
                                      '--head', args.head, '--report', str(args.report.resolve()),
-                                     '--root', str(root), '--unit', root.name + '.service', '--netns', netns],
+                                     '--root', str(root), '--unit', root.name + '.service', '--netns', netns,
+                                     *(['--replacement'] if args.replacement else [])],
                                     env={**os.environ, 'WAVEMESH_CI_PARENT_NETNS': parent_namespace}, timeout=240)
             require(result.returncode == 0, 'INNER_RECOVERY_FAILED')
         finally:
@@ -238,6 +319,7 @@ if __name__ == '__main__':
     except Exception as exc:
         print('PACKAGED_SYSTEMD_RECOVERY=FAILED; TYPE=' + type(exc).__name__, file=sys.stderr)
         if isinstance(exc, (SmokeFailure, panel_stop.StopError, panel_start.StartError,
-                            panel_backup.BackupError, panel_candidate.CandidateError)) and re.fullmatch('[A-Z_]+', str(exc)):
+                            panel_backup.BackupError, panel_candidate.CandidateError,
+                            panel_replace.ReplacementError)) and re.fullmatch('[A-Z_]+', str(exc)):
             print('CODE=' + str(exc), file=sys.stderr)
         raise SystemExit(1)
