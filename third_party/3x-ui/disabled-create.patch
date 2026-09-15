@@ -1,8 +1,29 @@
 diff --git a/frontend/src/pages/api-docs/endpoints.ts b/frontend/src/pages/api-docs/endpoints.ts
-index af2081a..12bc1ee 100644
+index af2081a..63a2e01 100644
 --- a/frontend/src/pages/api-docs/endpoints.ts
 +++ b/frontend/src/pages/api-docs/endpoints.ts
-@@ -586,6 +586,17 @@ export const sections: readonly Section[] = [
+@@ -56,6 +56,20 @@ export interface Section {
+ }
+ 
+ export const sections: readonly Section[] = [
++  {
++    id: 'wavemesh-maintenance',
++    title: 'WaveMesh maintenance',
++    description: 'Read the immutable process startup mode using existing API authentication. This endpoint does not authorize runtime activation or reconciliation.',
++    endpoints: [
++      {
++        method: 'GET',
++        path: '/panel/api/wavemesh/maintenance',
++        summary: 'Return the maintenance protocol and whether this process started in maintenance mode.',
++        description: 'Maintenance mode allows only authenticated GET requests to this endpoint and /panel/api/clients/list. Other requests return HTTP 503. The mode cannot be changed through the API.',
++        response: '{"success":true,"obj":{"protocol":"wavemesh-maintenance-v1","maintenance":true}}',
++      },
++    ],
++  },
+   {
+     id: 'authentication',
+     title: 'Authentication',
+@@ -586,6 +600,17 @@ export const sections: readonly Section[] = [
          body: '{\n  "client": {\n    "email": "alice@example.com",\n    "totalGB": 53687091200,\n    "expiryTime": 1735689600000,\n    "tgId": 0,\n    "limitIp": 0,\n    "enable": true\n  },\n  "inboundIds": [3, 5]\n}',
          response: '{\n  "success": true,\n  "msg": "Client added"\n}',
        },
@@ -20,6 +41,110 @@ index af2081a..12bc1ee 100644
        {
          method: 'POST',
          path: '/panel/api/clients/update/:email',
+diff --git a/internal/config/wavemesh_maintenance.go b/internal/config/wavemesh_maintenance.go
+new file mode 100644
+index 0000000..c946b74
+--- /dev/null
++++ b/internal/config/wavemesh_maintenance.go
+@@ -0,0 +1,19 @@
++package config
++
++import (
++	"errors"
++	"os"
++)
++
++// Capture only the process-start environment. Panel settings, .env reloads and
++// subsequent os.Setenv calls cannot release maintenance in this process.
++var waveMeshStartupMode = os.Getenv("WAVEMESH_PANEL_MODE")
++
++func WaveMeshMaintenance() bool { return waveMeshStartupMode != "" }
++
++func ValidateWaveMeshMode() error {
++	if waveMeshStartupMode != "" && waveMeshStartupMode != "maintenance" {
++		return errors.New("WAVEMESH_PANEL_MODE_INVALID")
++	}
++	return nil
++}
+diff --git a/internal/config/wavemesh_maintenance_test.go b/internal/config/wavemesh_maintenance_test.go
+new file mode 100644
+index 0000000..5980469
+--- /dev/null
++++ b/internal/config/wavemesh_maintenance_test.go
+@@ -0,0 +1,31 @@
++package config
++
++import (
++	"os"
++	"os/exec"
++	"strings"
++	"testing"
++)
++
++func TestWaveMeshStartupModeIsImmutable(t *testing.T) {
++	if os.Getenv("WM_MODE_CHILD") == "1" {
++		value := os.Getenv("WAVEMESH_PANEL_MODE")
++		invalid := value != "" && value != "maintenance"
++		if (ValidateWaveMeshMode() != nil) != invalid || WaveMeshMaintenance() != (value != "") {
++			t.Fatal("startup mode mismatch")
++		}
++		os.Setenv("WAVEMESH_PANEL_MODE", "")
++		if WaveMeshMaintenance() != (value != "") { t.Fatal("mode released by environment mutation") }
++		os.Setenv("WAVEMESH_PANEL_MODE", "maintenance")
++		if WaveMeshMaintenance() != (value != "") { t.Fatal("mode changed in running process") }
++		return
++	}
++	for _, value := range []string{"", "maintenance", "normal", "false", "MAINTENANCE", " maintenance"} {
++		cmd := exec.Command(os.Args[0], "-test.run=^TestWaveMeshStartupModeIsImmutable$")
++		for _, entry := range os.Environ() {
++			if !strings.HasPrefix(entry, "WAVEMESH_PANEL_MODE=") && !strings.HasPrefix(entry, "WM_MODE_CHILD=") { cmd.Env = append(cmd.Env, entry) }
++		}
++		cmd.Env = append(cmd.Env, "WAVEMESH_PANEL_MODE="+value, "WM_MODE_CHILD=1")
++		if output, err := cmd.CombinedOutput(); err != nil { t.Fatalf("mode child failed: %s", output) }
++	}
++}
+diff --git a/internal/sub/sub.go b/internal/sub/sub.go
+index 858af33..4847a4a 100644
+--- a/internal/sub/sub.go
++++ b/internal/sub/sub.go
+@@ -14,6 +14,7 @@ import (
+ 	"strings"
+ 	"time"
+ 
++	"github.com/mhsanaei/3x-ui/v3/internal/config"
+ 	"github.com/mhsanaei/3x-ui/v3/internal/logger"
+ 	"github.com/mhsanaei/3x-ui/v3/internal/util/common"
+ 	"github.com/mhsanaei/3x-ui/v3/internal/web/locale"
+@@ -250,6 +251,7 @@ func (s *Server) initRouter() (*gin.Engine, error) {
+ 
+ // Start initializes and starts the subscription server with configured settings.
+ func (s *Server) Start() (err error) {
++	if config.WaveMeshMaintenance() { return nil }
+ 	// This is an anonymous function, no function name
+ 	defer func() {
+ 		if err != nil {
+diff --git a/internal/web/controller/api.go b/internal/web/controller/api.go
+index a4b4a83..85185b7 100644
+--- a/internal/web/controller/api.go
++++ b/internal/web/controller/api.go
+@@ -4,6 +4,7 @@ import (
+ 	"net/http"
+ 	"strings"
+ 
++	"github.com/mhsanaei/3x-ui/v3/internal/config"
+ 	"github.com/mhsanaei/3x-ui/v3/internal/web/middleware"
+ 	"github.com/mhsanaei/3x-ui/v3/internal/web/service/panel"
+ 	"github.com/mhsanaei/3x-ui/v3/internal/web/service/tgbot"
+@@ -77,6 +78,9 @@ func (a *APIController) initRouter(g *gin.RouterGroup) {
+ 	// advertise support, before CSRF/handlers read the body.
+ 	api.Use(middleware.ConfigEnvelopeMiddleware())
+ 	api.Use(middleware.CSRFMiddleware())
++	api.GET("/wavemesh/maintenance", func(c *gin.Context) {
++		jsonObj(c, gin.H{"protocol": "wavemesh-maintenance-v1", "maintenance": config.WaveMeshMaintenance()}, nil)
++	})
+ 
+ 	// Inbounds API
+ 	inbounds := api.Group("/inbounds")
 diff --git a/internal/web/controller/client.go b/internal/web/controller/client.go
 index 093217e..84a1a39 100644
 --- a/internal/web/controller/client.go
@@ -119,6 +244,89 @@ index 0000000..86a06d9
 +	}
 +	rec, err := (&service.ClientService{}).GetRecordByEmail(nil, "wm-route@example.invalid")
 +	if err != nil || rec.Enable || calls != 0 { t.Fatalf("route violated disabled contract: record=%v calls=%d err=%v", rec, calls, err) }
++}
+diff --git a/internal/web/middleware/wavemesh_maintenance.go b/internal/web/middleware/wavemesh_maintenance.go
+new file mode 100644
+index 0000000..fec959a
+--- /dev/null
++++ b/internal/web/middleware/wavemesh_maintenance.go
+@@ -0,0 +1,26 @@
++package middleware
++
++import (
++	"net/http"
++	"strings"
++
++	"github.com/gin-gonic/gin"
++	"github.com/mhsanaei/3x-ui/v3/internal/config"
++)
++
++// An exact read allow-list, before all routes (including legacy and WebSocket
++// routes). Existing API authentication still protects the admitted reads.
++func WaveMeshMaintenance(basePath string) gin.HandlerFunc {
++	prefix := strings.TrimSuffix(basePath, "/") + "/panel/api/"
++	return func(c *gin.Context) {
++		if config.WaveMeshMaintenance() {
++			c.Header("X-WaveMesh-Panel-Mode", "maintenance-v1")
++			path := c.Request.URL.Path
++			if c.Request.Method != http.MethodGet || (path != prefix+"clients/list" && path != prefix+"wavemesh/maintenance") {
++				c.AbortWithStatusJSON(http.StatusServiceUnavailable, gin.H{"success": false, "msg": "WAVEMESH_MAINTENANCE_READ_ONLY"})
++				return
++			}
++		}
++		c.Next()
++	}
++}
+diff --git a/internal/web/middleware/wavemesh_maintenance_test.go b/internal/web/middleware/wavemesh_maintenance_test.go
+new file mode 100644
+index 0000000..ed9ad4f
+--- /dev/null
++++ b/internal/web/middleware/wavemesh_maintenance_test.go
+@@ -0,0 +1,45 @@
++package middleware
++
++import (
++	"net/http"
++	"net/http/httptest"
++	"os"
++	"os/exec"
++	"testing"
++
++	"github.com/gin-gonic/gin"
++	"github.com/mhsanaei/3x-ui/v3/internal/config"
++)
++
++func TestWaveMeshMaintenanceAdmitsOnlyAuthenticatedReadRoutes(t *testing.T) {
++	if !config.WaveMeshMaintenance() {
++		cmd := exec.Command(os.Args[0], "-test.run=^TestWaveMeshMaintenanceAdmitsOnlyAuthenticatedReadRoutes$")
++		cmd.Env = append(os.Environ(), "WAVEMESH_PANEL_MODE=maintenance")
++		if output, err := cmd.CombinedOutput(); err != nil { t.Fatalf("maintenance child failed: %s", output) }
++		return
++	}
++	gin.SetMode(gin.TestMode)
++	for _, base := range []string{"/", "/private/"} {
++		engine := gin.New()
++		engine.Use(WaveMeshMaintenance(base))
++		called := false
++		engine.NoRoute(func(c *gin.Context) {
++			if c.GetHeader("Authorization") != "Bearer fixture" { c.AbortWithStatus(401); return }
++			called = true
++			c.Status(200)
++		})
++		for _, path := range []string{"panel/api/clients/list", "panel/api/wavemesh/maintenance", "panel/api/clients/list/", "panel/api/server/restartXray", "panel/api/setting/update", "ws", "login", "sub/test"} {
++			for _, method := range []string{"GET", "POST", "PUT", "HEAD", "OPTIONS"} {
++				for _, auth := range []bool{false, true} {
++					called = false
++					req := httptest.NewRequest(method, base+path, nil)
++					if auth { req.Header.Set("Authorization", "Bearer fixture") }
++					rr := httptest.NewRecorder(); engine.ServeHTTP(rr, req)
++					allowed := method == http.MethodGet && (path == "panel/api/clients/list" || path == "panel/api/wavemesh/maintenance")
++					want := 503; if allowed { want = 401; if auth { want = 200 } }
++					if rr.Code != want || called != (allowed && auth) { t.Fatalf("route escaped maintenance: %s %s code=%d", method, path, rr.Code) }
++				}
++			}
++		}
++	}
 +}
 diff --git a/internal/web/service/client_crud.go b/internal/web/service/client_crud.go
 index 08565dd..3b9abc0 100644
@@ -424,3 +632,185 @@ index 0000000..4c92ca5
 +		t.Fatalf("failed insert leaked enabled state: count=%d calls=%d err=%v", count, *calls, err)
 +	}
 +}
+diff --git a/internal/web/service/xray.go b/internal/web/service/xray.go
+index 7e027a0..5f68e77 100644
+--- a/internal/web/service/xray.go
++++ b/internal/web/service/xray.go
+@@ -937,6 +937,7 @@ func (s *XrayService) TestRoute(req xray.RouteTestRequest) (*xray.RouteTestResul
+ // routing rules/balancers are hot-reloadable); only changes the core cannot
+ // take at runtime — or a force request — stop and restart the process.
+ func (s *XrayService) RestartXray(isForce bool) error {
++	if config.WaveMeshMaintenance() { return errors.New("WAVEMESH_XRAY_MAINTENANCE") }
+ 	lock.Lock()
+ 	defer lock.Unlock()
+ 	logger.Debug("restart Xray, force:", isForce)
+diff --git a/internal/web/wavemesh_maintenance_test.go b/internal/web/wavemesh_maintenance_test.go
+new file mode 100644
+index 0000000..cd629b8
+--- /dev/null
++++ b/internal/web/wavemesh_maintenance_test.go
+@@ -0,0 +1,28 @@
++package web
++
++import (
++	"os"
++	"os/exec"
++	"testing"
++
++	"github.com/mhsanaei/3x-ui/v3/internal/config"
++	"github.com/mhsanaei/3x-ui/v3/internal/sub"
++	"github.com/mhsanaei/3x-ui/v3/internal/web/service"
++)
++
++func TestWaveMeshMaintenanceSkipsJobsAndSubscriptionListener(t *testing.T) {
++	if !config.WaveMeshMaintenance() {
++		cmd := exec.Command(os.Args[0], "-test.run=^TestWaveMeshMaintenanceSkipsJobsAndSubscriptionListener$")
++		cmd.Env = append(os.Environ(), "WAVEMESH_PANEL_MODE=maintenance")
++		if output, err := cmd.CombinedOutput(); err != nil { t.Fatalf("maintenance child failed: %s", output) }
++		return
++	}
++	// No database or cron exists. Touching either before the maintenance gate
++	// would fail, rather than accidentally exercising a harmless empty config.
++	server := NewServer()
++	server.startTask(true)
++	if server.cron != nil { t.Fatal("maintenance scheduled background jobs") }
++	if err := sub.NewServer().Start(); err != nil { t.Fatal("maintenance opened subscription service") }
++	service := service.XrayService{}
++	if err := service.RestartXray(true); err == nil || err.Error() != "WAVEMESH_XRAY_MAINTENANCE" { t.Fatal("restart bypassed maintenance") }
++}
+diff --git a/internal/web/web.go b/internal/web/web.go
+index 33c400e..28636ff 100644
+--- a/internal/web/web.go
++++ b/internal/web/web.go
+@@ -192,6 +192,7 @@ func (s *Server) initRouter() (*gin.Engine, error) {
+ 	if err != nil {
+ 		return nil, err
+ 	}
++	engine.Use(middleware.WaveMeshMaintenance(basePath))
+ 	engine.Use(gzip.Gzip(gzip.DefaultCompression))
+ 	assetsBasePath := basePath + "assets/"
+ 
+@@ -302,6 +303,7 @@ const (
+ // startTask schedules background jobs (Xray checks, traffic jobs, cron
+ // jobs) which the panel relies on for periodic maintenance and monitoring.
+ func (s *Server) startTask(restartXray bool) {
++	if config.WaveMeshMaintenance() { return }
+ 	if restartXray {
+ 		err := s.xrayService.RestartXray(true)
+ 		if err != nil {
+@@ -487,7 +489,7 @@ func (s *Server) start(restartXray bool, startTgBot bool) (err error) {
+ 	if err != nil {
+ 		return err
+ 	}
+-	service.StartTrafficWriter()
++	if !config.WaveMeshMaintenance() { service.StartTrafficWriter() }
+ 
+ 	// SkipIfStillRunning stops a slow job (e.g. the 5s traffic poll on a large
+ 	// install) from overlapping itself: two concurrent runs of the same job race
+@@ -502,7 +504,7 @@ func (s *Server) start(restartXray bool, startTgBot bool) (err error) {
+ 			cron.Recover(cron.PrintfLogger(cronPanicLogger{})),
+ 		),
+ 	)
+-	s.cron.Start()
++	if !config.WaveMeshMaintenance() { s.cron.Start() }
+ 
+ 	// Wire the inbound-runtime manager once so InboundService can route
+ 	// add/update/delete to either the local xray or a remote node panel.
+@@ -596,6 +598,9 @@ func (s *Server) start(restartXray bool, startTgBot bool) (err error) {
+ 		_ = s.httpServer.Serve(listener)
+ 	}()
+ 
++	// No jobs, remote sync, MTProto or notification side effects in maintenance.
++	if config.WaveMeshMaintenance() { return nil }
++
+ 	// Create event bus before startTask so jobs can use it
+ 	s.bus = eventbus.New(eventbus.DefaultBufferSize)
+ 	service.SetEventBus(s.bus)
+diff --git a/internal/xray/process.go b/internal/xray/process.go
+index 4735a2e..239252a 100644
+--- a/internal/xray/process.go
++++ b/internal/xray/process.go
+@@ -476,6 +476,7 @@ func (p *process) refreshAPIPort() {
+ 
+ // refreshVersion updates the version string by running the Xray binary with -version.
+ func (p *process) refreshVersion() {
++	if config.WaveMeshMaintenance() { p.version = "Unknown"; return }
+ 	cmd := exec.CommandContext(context.Background(), GetBinaryPath(), "-version")
+ 	data, err := cmd.Output()
+ 	if err != nil {
+@@ -492,6 +493,7 @@ func (p *process) refreshVersion() {
+ 
+ // Start launches the Xray process with the current configuration.
+ func (p *process) Start() (err error) {
++	if config.WaveMeshMaintenance() { return errors.New("WAVEMESH_XRAY_MAINTENANCE") }
+ 	if p.IsRunning() {
+ 		return errors.New("xray is already running")
+ 	}
+@@ -586,6 +588,7 @@ func writeFileAtomic(path string, data []byte, perm os.FileMode) (err error) {
+ var renameFile = os.Rename
+ 
+ func (p *process) startCommand(cmd *exec.Cmd) error {
++	if config.WaveMeshMaintenance() { return errors.New("WAVEMESH_XRAY_MAINTENANCE") }
+ 	p.mu.Lock()
+ 	p.cmd = cmd
+ 	p.done = make(chan struct{})
+diff --git a/internal/xray/wavemesh_maintenance_test.go b/internal/xray/wavemesh_maintenance_test.go
+new file mode 100644
+index 0000000..0084418
+--- /dev/null
++++ b/internal/xray/wavemesh_maintenance_test.go
+@@ -0,0 +1,24 @@
++package xray
++
++import (
++	"os"
++	"os/exec"
++	"testing"
++
++	"github.com/mhsanaei/3x-ui/v3/internal/config"
++)
++
++func TestWaveMeshMaintenanceCannotLaunchNormalOrProbeXray(t *testing.T) {
++	if !config.WaveMeshMaintenance() {
++		cmd := exec.Command(os.Args[0], "-test.run=^TestWaveMeshMaintenanceCannotLaunchNormalOrProbeXray$")
++		cmd.Env = append(os.Environ(), "WAVEMESH_PANEL_MODE=maintenance")
++		if output, err := cmd.CombinedOutput(); err != nil { t.Fatalf("maintenance child failed: %s", output) }
++		return
++	}
++	for _, p := range []*process{newProcess(nil), newTestProcess(nil, "must-not-be-written")} {
++		if err := p.Start(); err == nil || err.Error() != "WAVEMESH_XRAY_MAINTENANCE" { t.Fatal("Start bypassed maintenance") }
++		if err := p.startCommand(exec.Command("must-not-execute")); err == nil || err.Error() != "WAVEMESH_XRAY_MAINTENANCE" { t.Fatal("command bypassed maintenance") }
++		p.refreshVersion()
++		if p.IsRunning() || p.cmd != nil || p.version != "Unknown" { t.Fatal("process state changed") }
++	}
++}
+diff --git a/main.go b/main.go
+index ec2379a..97f957b 100644
+--- a/main.go
++++ b/main.go
+@@ -57,7 +57,7 @@ func runWebServer() {
+ 		logger.Info(line)
+ 	}
+ 
+-	if os.Getenv("XUI_PPROF") == "true" {
++	if os.Getenv("XUI_PPROF") == "true" && !config.WaveMeshMaintenance() {
+ 		go func() {
+ 			logger.Info("pprof profiling server listening on 127.0.0.1:6060")
+ 			if err := http.ListenAndServe("127.0.0.1:6060", nil); err != nil {
+@@ -103,7 +103,7 @@ func runWebServer() {
+ 
+ 	var stopTunnelHealthMonitor context.CancelFunc
+ 	monitorCfg := tunnelmonitor.ConfigFromEnv()
+-	if monitorCfg.Enabled {
++	if monitorCfg.Enabled && !config.WaveMeshMaintenance() {
+ 		if monitorCfg.ProxyURL == "" {
+ 			logger.Warning("Tunnel health monitor enabled without XUI_TUNNEL_HEALTH_PROXY: the probe measures host connectivity, not the xray tunnel, so failures will restart xray without fixing host network issues")
+ 		}
+@@ -513,6 +513,7 @@ func loadServiceEnvFile() {
+ // main is the entry point of the 3x-ui application.
+ // It parses command-line arguments to run the web server, migrate database, or update settings.
+ func main() {
++	if err := config.ValidateWaveMeshMode(); err != nil { log.Fatal(err) }
+ 	loadServiceEnvFile()
+ 
+ 	if len(os.Args) < 2 {

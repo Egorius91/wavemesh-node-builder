@@ -40,4 +40,4 @@ jobs:
           go test -p 2 -count=1 ./internal/web/service ./internal/web/controller
       - name: Race-check disabled creation and rollback contract
         working-directory: upstream
-        run: go test -p 2 -race -count=1 -run TestWaveMesh ./internal/web/service ./internal/web/controller
+        run: go test -p 2 -race -count=1 -run TestWaveMesh ./internal/config ./internal/xray ./internal/web/middleware ./internal/web ./internal/web/service ./internal/web/controller
