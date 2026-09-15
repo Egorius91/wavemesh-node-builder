@@ -7,6 +7,7 @@ import os
 from pathlib import Path
 import re
 import select
+import shutil
 import subprocess
 import sys
 import tempfile
@@ -19,6 +20,7 @@ import panel_request_guard as journal
 import panel_stop
 import panel_start
 import panel_backup
+import panel_candidate
 from panel_isolation import PanelIsolation
 from xui_runtime_smoke import Smoke, SmokeFailure, Target, ThreadingHTTPServer, TARGET_PORT, PORT, command, namespace, require
 
@@ -44,6 +46,7 @@ def run_inner(args):
     panel_start.PANEL_ARGV = [str(smoke.binary)]
     panel_backup.PANEL_HOME = smoke.home
     panel_backup.PANEL_DB = smoke.db
+    panel_candidate.PANEL_HOME = smoke.home
     guard = journal.PanelRequestGuard(journal.DEFAULT_ROOT)
     lock = smoke.root / 'node.lock'
     with guard.locked():
@@ -100,7 +103,21 @@ def run_inner(args):
         fds = [os.pidfd_open(pid) for pid in original_pids]
         with journal.maintenance_node_lock(lock), guard.locked():
             guard.maintenance('prepare', OP, 1)
-        candidate_sha = smoke.manifest['archive_sha256']
+        # CI is the trusted producer here, not a production promotion service.
+        # Transfer its verified bundle into a root-owned private incoming area.
+        manifest_sha = hashlib.sha256((args.candidate / 'manifest.json').read_bytes()).hexdigest()
+        incoming = root / 'incoming'
+        incoming.mkdir(mode=0o700)
+        for name in ('manifest.json', 'source.tar.gz', panel_candidate.ARCHIVE):
+            shutil.copyfile(args.candidate / name, incoming / name)
+            (incoming / name).chmod(0o600)
+        prepared = panel_candidate.prepare(guard, OP, 1, incoming, manifest_sha, args.head, lock)
+        require(prepared['panel_sha256'] == executable_sha, 'PREPARED_PANEL_MISMATCH')
+        with patch.object(panel_candidate, 'extract', side_effect=AssertionError('SECOND_EXTRACTION')):
+            replay = panel_candidate.prepare(guard, OP, 1, incoming, manifest_sha, args.head, lock)
+            require(replay['reconciliation_required'] and replay['candidate_sha256'] == prepared['candidate_sha256'],
+                    'CANDIDATE_REPLAY_UNPROVEN')
+        candidate_sha = prepared['candidate_sha256']
         backup = panel_backup.prepare(guard, OP, 1, candidate_sha, lock)
         rollback_sha = backup['rollback_manifest_sha256']
         snapshot = panel_backup.location(guard, OP, 1)
@@ -110,6 +127,7 @@ def run_inner(args):
             require(smoke.db_state(False) == identities, 'SNAPSHOT_CLIENT_IDENTITY_MISMATCH')
         PanelIsolation().isolate(guard, OP, 1, candidate_sha, rollback_sha, PORT, lock)
         with panel_stop.PanelStop().stopped(guard, OP, 1, candidate_sha, rollback_sha, PORT, helper_sha, lock):
+            panel_candidate.verify_locked(guard, OP, 1, manifest_sha, args.head)
             panel_backup.verify_locked(guard, OP, 1, candidate_sha, rollback_sha)
             for fd in fds:
                 poll = select.poll(); poll.register(fd, select.POLLIN)
@@ -117,6 +135,7 @@ def run_inner(args):
             require(not smoke.traffic('control'), 'STOPPED_VPN_STILL_CONNECTS')
         print('PACKAGED_PANEL_XRAY_CGROUP_DRAIN_AND_VPN_STOP=PASS', flush=True)
         print('OPERATION_BOUND_SQLITE_AND_PANEL_SNAPSHOT=PASS', flush=True)
+        print('TRUST_BOUND_CANDIDATE_PREPARATION_AND_REPLAY=PASS', flush=True)
         controller = panel_start.PanelStart()
         def recover():
             return controller.started(guard, OP, 1, candidate_sha, rollback_sha, PORT, helper_sha, executable_sha, lock)
@@ -157,6 +176,7 @@ def run_inner(args):
         report = {'schema': 1, 'builder_commit': args.head, 'status': 'PASS',
                   'scope': 'DISPOSABLE_SYSTEMD_PRIVATE_NETWORK', 'deployment': 'NONE',
                   'rollback_snapshot_verified': True,
+                  'candidate_preparation_verified': True, 'candidate_manifest_sha256': manifest_sha,
                   'panel_sha256': executable_sha, 'archive_sha256': smoke.manifest['archive_sha256']}
         args.report.write_text(json.dumps(report, sort_keys=True) + '\n')
         # Only this allow-listed digest/status report is public CI evidence.
@@ -217,6 +237,7 @@ if __name__ == '__main__':
         main()
     except Exception as exc:
         print('PACKAGED_SYSTEMD_RECOVERY=FAILED; TYPE=' + type(exc).__name__, file=sys.stderr)
-        if isinstance(exc, (SmokeFailure, panel_stop.StopError, panel_start.StartError, panel_backup.BackupError)) and re.fullmatch('[A-Z_]+', str(exc)):
+        if isinstance(exc, (SmokeFailure, panel_stop.StopError, panel_start.StartError,
+                            panel_backup.BackupError, panel_candidate.CandidateError)) and re.fullmatch('[A-Z_]+', str(exc)):
             print('CODE=' + str(exc), file=sys.stderr)
         raise SystemExit(1)
