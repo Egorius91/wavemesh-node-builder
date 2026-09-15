@@ -85,19 +85,31 @@ def inner(root, unit):
             except module.StopError as exc:
                 assert str(exc) == 'SYNTHETIC_LOST_RESULT', 'UNEXPECTED_STOP_ERROR'
         before = (guard.root / 'state.json').read_bytes()
-        with patch.object(stopper, 'dispatch_stop', side_effect=AssertionError('SECOND_STOP')):
-            with stopped() as receipt:
-                assert receipt['backend_cgroup'] == 'DRAINED'
-                assert receipt['reconciliation_required']
-                for fd in (parent, child):
-                    poll = select.poll(); poll.register(fd, select.POLLIN)
-                    assert poll.poll(0), 'ORIGINAL_PROCESS_STILL_LIVE'
-                try:
-                    connection.sendall(b'probe')
-                    assert connection.recv(5) == b'', 'ESTABLISHED_CONNECTION_SURVIVED'
-                except (ConnectionResetError, BrokenPipeError):
-                    pass
-                print('ORIGINAL_PARENT_CHILD_AND_ESTABLISHED_CONNECTION_DRAINED=PASS', flush=True)
+        try:
+            with patch.object(stopper, 'dispatch_stop', side_effect=AssertionError('SECOND_STOP')):
+                with stopped() as receipt:
+                    assert receipt['backend_cgroup'] == 'DRAINED'
+                    assert receipt['reconciliation_required']
+                    for fd in (parent, child):
+                        poll = select.poll(); poll.register(fd, select.POLLIN)
+                        assert poll.poll(0), 'ORIGINAL_PROCESS_STILL_LIVE'
+                    try:
+                        connection.sendall(b'probe')
+                        assert connection.recv(5) == b'', 'ESTABLISHED_CONNECTION_SURVIVED'
+                    except (ConnectionResetError, BrokenPipeError):
+                        pass
+                    print('ORIGINAL_PARENT_CHILD_AND_ESTABLISHED_CONNECTION_DRAINED=PASS', flush=True)
+        except module.StopError:
+            state = stopper.observe()
+            # Only fixed state words and booleans from our disposable CI unit.
+            # No invocation, cgroup, endpoint or process identifiers are logged.
+            for name in ('ActiveState', 'SubState'):
+                value = state[name]
+                print('CI_' + name.upper() + '=' + (value if re.fullmatch('[a-z-]+', value) else 'OTHER'), flush=True)
+            print('CI_MAIN_ZERO=' + str(state['MainPID'] == '0'), flush=True)
+            print('CI_CONTROL_ZERO=' + str(state['ControlPID'] == '0'), flush=True)
+            print('CI_INVOCATION_EMPTY_OR_ORIGINAL=' + str(state['InvocationID'] in ('', observed['InvocationID'])), flush=True)
+            raise
         assert (guard.root / 'state.json').read_bytes() == before
         assert run(['systemctl', 'start', unit], required=False).returncode != 0, 'STARTUP_BYPASSED'
         assert (guard.root / 'state.json').read_bytes() == before
