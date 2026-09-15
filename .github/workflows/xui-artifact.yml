@@ -107,6 +107,10 @@ jobs:
             timeout 300 unshare --net --pid --fork --kill-child --mount-proc \
             python3 scripts/ci/xui_maintenance_smoke.py \
             --candidate candidate --head "$CANDIDATE_HEAD" --report maintenance-smoke.json
+      - name: Prove replacement maintenance start and lost-result reconciliation
+        run: |
+          sudo env GITHUB_ACTIONS=true python3 scripts/ci/xui_systemd_recovery_smoke.py \
+            --candidate candidate --head "$CANDIDATE_HEAD" --maintenance-start --report maintenance-start-smoke.json
       - name: Preserve sanitized runtime smoke evidence
         if: always()
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7
@@ -117,6 +121,7 @@ jobs:
             systemd-recovery-smoke.json
             systemd-replacement-smoke.json
             maintenance-smoke.json
+            maintenance-start-smoke.json
           if-no-files-found: warn
           retention-days: 30
       - name: Preserve complete candidate and corresponding source

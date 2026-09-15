@@ -182,7 +182,7 @@ def run_inner(args):
             require(replay['reconciliation_required'] and replay['candidate_sha256'] == prepared['candidate_sha256'],
                     'CANDIDATE_REPLAY_UNPROVEN')
         candidate_sha = prepared['candidate_sha256']
-        if args.replacement:
+        if args.replacement or args.maintenance_start:
             marker = smoke.home / '.wm-original-tree-proof'
             marker.write_bytes(b'original tree fixture')
             marker.chmod(0o600)
@@ -204,6 +204,19 @@ def run_inner(args):
         print('PACKAGED_PANEL_XRAY_CGROUP_DRAIN_AND_VPN_STOP=PASS', flush=True)
         print('OPERATION_BOUND_SQLITE_AND_PANEL_SNAPSHOT=PASS', flush=True)
         print('TRUST_BOUND_CANDIDATE_PREPARATION_AND_REPLAY=PASS', flush=True)
+        if args.maintenance_start:
+            from xui_maintenance_start_smoke import run as maintenance_start
+            maintenance_start(smoke, guard, lock, unit_path, unit, OP, candidate_sha, rollback_sha,
+                              manifest_sha, args.head, helper_sha, executable_sha)
+            report = {'schema': 1, 'builder_commit': args.head, 'status': 'PASS', 'deployment': 'NONE',
+                      'scope': 'DISPOSABLE_REPLACEMENT_MAINTENANCE_START', 'one_job_reconciled': True,
+                      'authenticated_inventory': True, 'runtime_activation_denied': True,
+                      'writers_remain_closed': True, 'second_start_denied': True,
+                      'candidate_manifest_sha256': manifest_sha, 'panel_sha256': executable_sha,
+                      'archive_sha256': candidate_sha}
+            args.report.write_text(json.dumps(report, sort_keys=True) + '\n')
+            args.report.chmod(0o644)
+            return
         if args.replacement:
             replacement_smoke(smoke, guard, lock, unit, candidate_sha, rollback_sha, manifest_sha,
                               args.head, helper_sha, executable_sha)
@@ -284,6 +297,7 @@ def main():
     parser.add_argument('--unit')
     parser.add_argument('--netns')
     parser.add_argument('--replacement', action='store_true')
+    parser.add_argument('--maintenance-start', action='store_true')
     args = parser.parse_args()
     require(sys.platform == 'linux' and os.geteuid() == 0 and os.environ.get('GITHUB_ACTIONS') == 'true', 'CI_ROOT_REQUIRED')
     if args.root:
@@ -305,7 +319,8 @@ def main():
                                      str(Path(__file__).resolve()), '--candidate', str(args.candidate.resolve()),
                                      '--head', args.head, '--report', str(args.report.resolve()),
                                      '--root', str(root), '--unit', root.name + '.service', '--netns', netns,
-                                     *(['--replacement'] if args.replacement else [])],
+                                     *(['--replacement'] if args.replacement else []),
+                                     *(['--maintenance-start'] if args.maintenance_start else [])],
                                     env={**os.environ, 'WAVEMESH_CI_PARENT_NETNS': parent_namespace}, timeout=240)
             require(result.returncode == 0, 'INNER_RECOVERY_FAILED')
         finally:

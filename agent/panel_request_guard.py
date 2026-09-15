@@ -138,16 +138,16 @@ class PanelRequestGuard:
             value = json.loads(raw, object_pairs_hook=unique_object)
         except (ValueError, UnicodeError):
             raise PanelRequestError("PANEL_JOURNAL_INVALID") from None
-        if isinstance(value, dict) and value.get("schema_version") in (2, 3, 4, 5, 6):
+        if isinstance(value, dict) and value.get("schema_version") in (2, 3, 4, 5, 6, 7):
             version = value["schema_version"]
             expected = {"schema_version", "request", "maintenance"}
-            if version in (3, 4, 5, 6):
+            if version in (3, 4, 5, 6, 7):
                 expected.add("installation")
-            if version in (4, 5, 6):
+            if version in (4, 5, 6, 7):
                 expected.add("stop")
-            if version == 5:
+            if version in (5, 7):
                 expected.add("start")
-            if version == 6:
+            if version in (6, 7):
                 expected.add("replacement")
             if (type(value["schema_version"]) is not int
                     or set(value) != expected):
@@ -159,17 +159,19 @@ class PanelRequestGuard:
             validate_hold_identity(hold["operation_id"], hold["generation"])
             if value["request"] is not None:
                 self.validate_request(value["request"])
-            if version in (3, 4, 5, 6):
+            if version in (3, 4, 5, 6, 7):
                 self.validate_installation(value["installation"])
                 if (hold["phase"] != "HELD" or (value["request"] is not None
                         and value["request"]["phase"] != "RESPONSE_ACCEPTED")):
                     raise PanelRequestError("PANEL_JOURNAL_INVALID")
-            if version in (4, 5, 6):
+            if version in (4, 5, 6, 7):
                 self.validate_stop(value["stop"])
-            if version == 5:
+            if version in (5, 7):
                 self.validate_start(value["start"])
-            if version == 6:
+            if version in (6, 7):
                 self.validate_replacement(value["replacement"])
+                if version == 7 and value["replacement"]["phase"] != "REPLACED":
+                    raise PanelRequestError("PANEL_REPLACEMENT_INVALID")
         else:
             self.validate_request(value)
         return value
@@ -186,11 +188,11 @@ class PanelRequestGuard:
 
     @staticmethod
     def request_state(value):
-        return value["request"] if value and value["schema_version"] in (2, 3, 4, 5, 6) else value
+        return value["request"] if value and value["schema_version"] in (2, 3, 4, 5, 6, 7) else value
 
     @staticmethod
     def hold_state(value):
-        return value["maintenance"] if value and value["schema_version"] in (2, 3, 4, 5, 6) else None
+        return value["maintenance"] if value and value["schema_version"] in (2, 3, 4, 5, 6, 7) else None
 
     @staticmethod
     def validate_replacement(value):
@@ -271,7 +273,7 @@ class PanelRequestGuard:
             request = self.request_state(value)
             if request and request["phase"] != "RESPONSE_ACCEPTED":
                 raise PanelRequestError("PANEL_REQUEST_RECONCILIATION_REQUIRED")
-            replay = value["schema_version"] in (3, 4, 5, 6)
+            replay = value["schema_version"] in (3, 4, 5, 6, 7)
             if replay:
                 if value["installation"] != installation:
                     raise PanelRequestError("PANEL_INSTALLATION_CONFLICT")
@@ -365,7 +367,7 @@ class PanelRequestGuard:
         if action != "status":
             validate_hold_identity(operation_id, generation)
         value = self.load()
-        if value and value["schema_version"] in (3, 4, 5, 6) and action != "status":
+        if value and value["schema_version"] in (3, 4, 5, 6, 7) and action != "status":
             raise PanelRequestError("PANEL_INSTALLATION_RECONCILIATION_REQUIRED")
         hold = self.hold_state(value)
         request = self.request_state(value)
@@ -389,14 +391,14 @@ class PanelRequestGuard:
         result = {"local_admission": "CLOSED" if hold and hold["phase"] == "HELD" else "NOT_HELD",
                 "maintenance": hold, "request_pending": bool(request and request["phase"] != "RESPONSE_ACCEPTED"),
                 "quiescence": "NOT_PROVEN"}
-        if value and value["schema_version"] in (3, 4, 5, 6):
+        if value and value["schema_version"] in (3, 4, 5, 6, 7):
             result["installation"] = value["installation"]
-        if value and value["schema_version"] in (4, 5, 6):
+        if value and value["schema_version"] in (4, 5, 6, 7):
             # Boot/cgroup/invocation identity is private reconciliation state.
             result["stop"] = {"phase": value["stop"]["phase"]}
-        if value and value["schema_version"] == 5:
+        if value and value["schema_version"] in (5, 7):
             result["start"] = {"phase": value["start"]["phase"]}
-        if value and value["schema_version"] == 6:
+        if value and value["schema_version"] in (6, 7):
             result["replacement"] = {"phase": value["replacement"]["phase"]}
         return result
 
