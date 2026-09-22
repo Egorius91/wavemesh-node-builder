@@ -2,7 +2,13 @@ name: tests
 
 on:
   push:
+    branches: [main]
   pull_request:
+
+# Only superseded PR checks are disposable; keep main verification separate.
+concurrency:
+  group: builder-tests-${{ github.event_name }}-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
 
 permissions:
   contents: read
