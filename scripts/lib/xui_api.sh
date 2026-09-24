@@ -3,6 +3,7 @@
 XUI_COOKIE_JAR="${XUI_COOKIE_JAR:-/tmp/wavemesh-xui-cookies.txt}"
 XUI_CSRF_TOKEN="${XUI_CSRF_TOKEN:-}"
 XUI_API_TIMEOUT="${XUI_API_TIMEOUT:-15}"
+WM_PANEL_REQUEST_GUARD="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)/agent/panel_request_guard.py"
 
 wm_xui_base_url() {
   printf 'http://127.0.0.1:%s%s' "$PANEL_PORT" "$PANEL_PATH"
@@ -41,15 +42,13 @@ PY
 }
 
 wm_xui_request() {
-  local method="$1" path="$2" content_type="${3:-json}" payload="${4:-}" url body_file status auth_mode
+  local method="$1" path="$2" content_type="${3:-json}" payload="${4:-}" url body_file status
   url="$(wm_xui_api_url "$path")"
   body_file="$(mktemp)"
-  auth_mode="cookie"
   local args=(--silent --show-error --connect-timeout 5 --max-time "$XUI_API_TIMEOUT" --output "$body_file" --write-out '%{http_code}' --request "$method")
 
   if [[ -n "${PANEL_TOKEN:-}" ]]; then
     args+=(-H "Authorization: Bearer ${PANEL_TOKEN}")
-    auth_mode="bearer"
   else
     [[ -s "$XUI_COOKIE_JAR" ]] || wm_xui_login || { rm -f "$body_file"; return 1; }
     args+=(-b "$XUI_COOKIE_JAR" -c "$XUI_COOKIE_JAR")
@@ -66,9 +65,16 @@ wm_xui_request() {
     *) rm -f "$body_file"; wm_warn "Unsupported 3X-UI request content type"; return 1 ;;
   esac
 
-  status="$(curl "${args[@]}" "$url" 2>/dev/null || true)"
+  # The same durable uncertainty barrier is used by the Python Agent. The helper
+  # invokes only curl, never an arbitrary shell command. Credentials stay in the
+  # private pipe/child arguments and are not stored in the journal or diagnostics.
+  status="$(python3 - "$method" "$path" "$url" "${args[@]}" <<'PY' | python3 "$WM_PANEL_REQUEST_GUARD" 2>/dev/null || true
+import json, sys
+print(json.dumps({"method": sys.argv[1], "path": sys.argv[2], "url": sys.argv[3], "args": sys.argv[4:]}))
+PY
+)"
   if [[ ! "$status" =~ ^2[0-9][0-9]$ ]]; then
-    wm_warn "3X-UI ${method} ${path} failed with HTTP ${status:-transport-error} (${auth_mode} auth)"
+    wm_warn "3X-UI request failed; reconcile before retry"
     rm -f "$body_file"
     return 1
   fi
@@ -80,7 +86,7 @@ wm_xui_request_success() {
   local response
   response="$(wm_xui_request "$@")" || return 1
   if ! printf '%s' "$response" | wm_xui_response_success; then
-    wm_warn "3X-UI operation failed: $(printf '%s' "$response" | wm_xui_response_message)"
+    wm_warn "3X-UI operation was not accepted"
     return 1
   fi
   printf '%s' "$response"
