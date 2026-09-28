@@ -44,6 +44,13 @@ class FakeState:
     def pending_acknowledgement(self):
         return self.pending_ack
 
+    def pending_activation_committed(self, expected_identity_uri):
+        return bool(self.pending_ack and self.active and
+                    self.active_hash == self.pending_ack.request_hash)
+
+    def clear_pending_request(self):
+        self.pending_cleared = True
+
 
 class LifecycleHarness:
     def __init__(self, state: FakeState, failure=None) -> None:
@@ -223,6 +230,7 @@ class NodeMtlsRuntimeTests(unittest.TestCase):
                 ("acknowledge", "mtls"),
             ])
             self.assertIsNone(state.pending_ack)
+            self.assertTrue(state.pending_cleared)
 
     def test_expired_delivery_blocks_when_matching_identity_is_not_active(self) -> None:
         with tempfile.TemporaryDirectory() as directory:

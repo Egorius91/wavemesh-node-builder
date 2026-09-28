@@ -180,6 +180,16 @@ class FakeMtlsState:
             return None
         return json.loads(self.active_path.read_text(encoding="utf-8"))["request_hash"]
 
+    def clear_pending_request(self):
+        for path in (self.pending_key, self.pending_csr, self.pending_metadata):
+            path.unlink(missing_ok=True)
+
+    def pending_activation_committed(self, expected_identity_uri):
+        acknowledgement = self.pending_acknowledgement()
+        active = self.active_identity(expected_identity_uri)
+        return bool(acknowledgement and active and
+                    self.active_request_hash(active) == acknowledgement.request_hash)
+
 
 class NodeRecoveryTests(unittest.TestCase):
     def setUp(self) -> None:
@@ -206,7 +216,7 @@ class NodeRecoveryTests(unittest.TestCase):
                     "WAVEMESH_AGENT_TOKEN_EXPIRES_AT=2026-08-01T00:00:00.000Z",
                     "WAVEMESH_AGENT_MTLS_MODE=shadow",
                     "WAVEMESH_AGENT_MTLS_ENVIRONMENT=staging",
-                    f"WAVEMESH_AGENT_MTLS_STATE_ROOT={self.tls_root}",
+                    f"WAVEMESH_AGENT_MTLS_STATE_ROOT={self.tls_root.as_posix()}",
                     "",
                 ]
             ),
@@ -374,6 +384,46 @@ class NodeRecoveryTests(unittest.TestCase):
 
         self.assertEqual([method for method, _ in calls], ["GET", "POST"])
         self.assertFalse(self.token_file.exists())
+
+    def test_restart_during_activated_pending_cleanup_retries_only_ack(self) -> None:
+        for removed in (0, 1, 2, 3):
+            with self.subTest(removed=removed):
+                self.temporary.cleanup()
+                self.setUp()
+                first = self.client()
+                activate = first.state.activate_pending_certificate
+
+                def interrupted_cleanup(*args):
+                    paths = (first.state.pending_key, first.state.pending_csr,
+                             first.state.pending_metadata)
+                    contents = [path.read_bytes() for path in paths]
+                    active = activate(*args)
+                    for path, content in list(zip(paths, contents))[removed:]:
+                        path.write_bytes(content)
+                    raise RuntimeError("crash during pending cleanup")
+
+                first.state.activate_pending_certificate = interrupted_cleanup
+                with mock.patch.object(recovery.request, "urlopen",
+                                       return_value=FakeResponse(self.delivery(), 201)):
+                    with self.assertRaisesRegex(RuntimeError, "crash during pending cleanup"):
+                        first.apply()
+                restarted = self.client()
+                remaining = [path.exists() for path in (
+                    restarted.state.pending_key, restarted.state.pending_csr,
+                    restarted.state.pending_metadata)]
+                restarted.check()
+                self.assertEqual(remaining, [path.exists() for path in (
+                    restarted.state.pending_key, restarted.state.pending_csr,
+                    restarted.state.pending_metadata)])
+                with mock.patch.object(recovery.request, "urlopen",
+                                       return_value=FakeResponse(self.acknowledgement(), 201)) as network:
+                    result = restarted.apply()
+                self.assertTrue(result["ok"])
+                self.assertEqual(network.call_count, 1)
+                self.assertTrue(network.call_args.args[0].full_url.endswith("/acknowledge"))
+                self.assertFalse(restarted.state.pending_csr.exists())
+                self.assertFalse(restarted.state.pending_metadata.exists())
+                self.temporary.cleanup()
 
     def test_lost_ack_response_retries_only_same_ack_after_restart(self) -> None:
         first = self.client()

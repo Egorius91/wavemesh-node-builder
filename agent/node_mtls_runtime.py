@@ -213,6 +213,9 @@ class NodeMtlsRuntime:
                         else self._bearer_lifecycle_client()
                     )
                     lifecycle.retrieve(pending_ack.credential_id)
+                if not self.state.pending_activation_committed(self._expected_identity_uri()):
+                    raise MtlsRuntimeError("Pending acknowledgement has no matching active identity")
+                self.state.clear_pending_request()
                 self._mtls_lifecycle_client().acknowledge(pending_ack.credential_id)
                 self._clear_retry(MtlsAgentState.SHADOW_READY)
                 return self.status()

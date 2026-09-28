@@ -10,6 +10,7 @@ import shutil
 import subprocess
 import sys
 import tempfile
+from types import SimpleNamespace
 import unittest
 from unittest import mock
 
@@ -32,6 +33,57 @@ def assert_posix_mode(case: unittest.TestCase, path: Path, expected: int) -> Non
 
 @unittest.skipUnless(OPENSSL, "OpenSSL is required")
 class NodeMtlsStateTests(unittest.TestCase):
+    def test_activation_remnants_require_matching_active_ack_and_file_lineage(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            state = mtls.NodeMtlsState(Path(directory) / "tls", openssl_binary=OPENSSL)
+            pending = state.prepare_pending_request()
+            state.record_pending_acknowledgement(
+                "credential_mtls_123", pending.request_hash,
+                datetime.now(timezone.utc) + timedelta(minutes=15),
+            )
+            active_metadata = state.root / "committed.metadata.json"
+            mtls.atomic_write_json(active_metadata, {
+                "request_hash": pending.request_hash,
+                "public_key_hash": pending.public_key_hash,
+            }, 0o600)
+            active = SimpleNamespace(metadata=active_metadata)
+            with mock.patch.object(state, "active_identity", return_value=None):
+                self.assertFalse(state.pending_activation_committed(IDENTITY))
+                self.assertTrue(state.pending_key.exists())
+            with mock.patch.object(state, "active_identity", return_value=active):
+                self.assertTrue(state.pending_activation_committed(IDENTITY))
+                with mock.patch.object(state, "_csr_hash", return_value="f" * 64):
+                    with self.assertRaisesRegex(mtls.MtlsStateError, "CSR does not match activated"):
+                        state.pending_activation_committed(IDENTITY)
+                self.assertTrue(state.pending_csr.exists())
+                with mock.patch.object(state, "_private_key_public_hash", return_value="f" * 64):
+                    with self.assertRaisesRegex(mtls.MtlsStateError, "private key does not match activated"):
+                        state.pending_activation_committed(IDENTITY)
+                is_symlink = Path.is_symlink
+                with mock.patch.object(Path, "is_symlink", lambda path: (
+                    path == state.pending_metadata or is_symlink(path)
+                )):
+                    with self.assertRaisesRegex(mtls.MtlsStateError, "path is unsafe"):
+                        state.pending_activation_committed(IDENTITY)
+                self.assertTrue(state.pending_key.exists())
+                state.pending_key.unlink()
+                self.assertTrue(state.pending_activation_committed(IDENTITY))
+                state.pending_csr.unlink()
+                self.assertTrue(state.pending_activation_committed(IDENTITY))
+                mtls.atomic_write_json(state.pending_metadata, {
+                    "request_hash": "f" * 64,
+                    "public_key_hash": pending.public_key_hash,
+                }, 0o600)
+                with self.assertRaisesRegex(mtls.MtlsStateError, "does not match activated"):
+                    state.pending_activation_committed(IDENTITY)
+                self.assertTrue(state.pending_metadata.exists())
+                mtls.atomic_write_json(active_metadata, {
+                    "request_hash": "e" * 64,
+                    "public_key_hash": pending.public_key_hash,
+                }, 0o600)
+                self.assertFalse(state.pending_activation_committed(IDENTITY))
+                self.assertTrue(state.pending_metadata.exists())
+
     def test_pending_request_is_private_idempotent_and_secret_free(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
             state = mtls.NodeMtlsState(Path(directory) / "tls", openssl_binary=OPENSSL)
