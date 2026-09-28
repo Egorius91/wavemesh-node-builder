@@ -360,6 +360,32 @@ class NodeMtlsState:
                 pass
         self._fsync_directory(self.pending_dir)
 
+    def pending_activation_committed(self, expected_identity_uri: str) -> bool:
+        """Verify that pending remnants belong to a durably activated delivery."""
+        acknowledgement = self.pending_acknowledgement()
+        if acknowledgement is None:
+            return False
+        active = self.active_identity(expected_identity_uri)
+        if active is None or self.active_request_hash(active) != acknowledgement.request_hash:
+            return False
+        metadata = read_json_object(active.metadata)
+        public_key_hash = require_sha256(metadata, "public_key_hash")
+        for path in (self.pending_key, self.pending_csr, self.pending_metadata):
+            if path.is_symlink():
+                raise MtlsStateError("Pending mTLS activation path is unsafe")
+            if path.exists():
+                self._ensure_safe_regular_file(path)
+        if self.pending_key.exists() and self._private_key_public_hash(self.pending_key) != public_key_hash:
+            raise MtlsStateError("Pending private key does not match activated delivery")
+        if self.pending_csr.exists() and self._csr_hash(self.pending_csr) != acknowledgement.request_hash:
+            raise MtlsStateError("Pending CSR does not match activated delivery")
+        if self.pending_metadata.exists():
+            pending = read_json_object(self.pending_metadata)
+            if (require_sha256(pending, "request_hash") != acknowledgement.request_hash
+                    or require_sha256(pending, "public_key_hash") != public_key_hash):
+                raise MtlsStateError("Pending metadata does not match activated delivery")
+        return True
+
     def _load_and_validate_pending(self) -> PendingCertificateRequest:
         self._ensure_safe_regular_file(self.pending_key)
         self._ensure_safe_regular_file(self.pending_csr)

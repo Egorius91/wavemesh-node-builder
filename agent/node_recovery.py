@@ -96,7 +96,7 @@ class RecoveryClient:
     def check(self) -> dict[str, Any]:
         self._assert_no_legacy_state()
         marker = self._load_marker(required=False)
-        pending_present = self._pending_request_present()
+        pending_present = self._pending_request_present(marker)
         acknowledgement = self.state.pending_acknowledgement()
 
         if marker is not None:
@@ -138,6 +138,11 @@ class RecoveryClient:
         self._assert_no_legacy_state()
         marker = self._load_marker(required=False)
         acknowledgement = self.state.pending_acknowledgement()
+
+        if marker is not None and acknowledgement is not None:
+            self._assert_ack_matches_marker(marker, acknowledgement)
+            if self.state.pending_activation_committed(self.expected_identity_uri):
+                self.state.clear_pending_request()
 
         if marker is not None and marker.get("acknowledged_at") is not None:
             self._validate_local_state(
@@ -584,7 +589,7 @@ class RecoveryClient:
         if active_request_hash != require_sha256(marker, "request_hash"):
             raise RecoveryError("Active mTLS identity does not match the recovery request")
 
-    def _pending_request_present(self) -> bool:
+    def _pending_request_present(self, marker: dict[str, Any] | None = None) -> bool:
         paths = (
             self.state.pending_key,
             self.state.pending_csr,
@@ -592,6 +597,11 @@ class RecoveryClient:
         )
         existing = [path.exists() for path in paths]
         if any(existing) and not all(existing):
+            acknowledgement = self.state.pending_acknowledgement()
+            if marker is not None and acknowledgement is not None:
+                self._assert_ack_matches_marker(marker, acknowledgement)
+                if self.state.pending_activation_committed(self.expected_identity_uri):
+                    return False
             raise RecoveryError(
                 "Partial pending mTLS identity exists; refusing to regenerate"
             )
