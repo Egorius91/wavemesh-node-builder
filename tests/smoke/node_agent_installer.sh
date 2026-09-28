@@ -41,6 +41,9 @@ run_installer() {
 }
 
 run_rollback() {
+  # Simulate the boot-time tmpfiles action inside the disposable root.
+  mkdir -p "$DESTDIR/run/lock"
+  touch "$DESTDIR/run/lock/wavemesh-node.lock"
   PATH="$BIN_DIR:$PATH" \
   WAVEMESH_AGENT_DESTDIR="$DESTDIR" \
   WAVEMESH_AGENT_SYSTEMCTL="$BIN_DIR/systemctl" \
@@ -51,7 +54,7 @@ run_rollback() {
 
 run_installer
 
-for file in node_mtls_client.py node_mtls_runtime.py node_mtls_state.py runtime_findings.py; do
+for file in node_mtls_client.py node_mtls_runtime.py node_mtls_state.py runtime_findings.py panel_request_guard.py; do
   [[ -f "$DESTDIR/usr/local/lib/wavemesh-agent/$file" ]]
   [[ "$(stat -c '%a' "$DESTDIR/usr/local/lib/wavemesh-agent/$file")" == 644 ]]
 done
@@ -125,6 +128,49 @@ fi
 : > "$SYSTEMCTL_LOG"
 run_rollback --latest --restart
 grep -Fx 'restart wavemesh-node-agent.service' "$SYSTEMCTL_LOG" >/dev/null
+
+# Synthetic pending request must stop source/env rollback before any restart.
+journal="$DESTDIR/var/lib/wavemesh-agent/panel-requests"
+python3 - "$journal/state.json" <<'PY'
+import json,os,sys
+with open(sys.argv[1], 'w') as output:
+    json.dump({'schema_version':1,'phase':'DISPATCH_INTENT','attempt_id':'a'*64,'request_digest':'b'*64}, output)
+os.chmod(sys.argv[1], 0o600)
+PY
+cp "$journal/state.json" "$TEMP_DIR/pending.before"
+cp "$DESTDIR/usr/local/lib/wavemesh-agent/node_agent.py" "$TEMP_DIR/agent.before-pending"
+cp "$DESTDIR/etc/wavemesh-agent/agent.env" "$TEMP_DIR/env.before-pending"
+: > "$SYSTEMCTL_LOG"
+if run_rollback --latest --restart >/dev/null 2>&1; then
+  echo "rollback accepted an unresolved panel request" >&2; exit 1
+fi
+cmp "$TEMP_DIR/pending.before" "$journal/state.json"
+cmp "$TEMP_DIR/agent.before-pending" "$DESTDIR/usr/local/lib/wavemesh-agent/node_agent.py"
+cmp "$TEMP_DIR/env.before-pending" "$DESTDIR/etc/wavemesh-agent/agent.env"
+[[ ! -s "$SYSTEMCTL_LOG" ]]
+
+# A confirmed response still forbids restoring a version without the barrier.
+python3 - "$journal/state.json" <<'PY'
+import json,sys
+path=sys.argv[1]
+with open(path) as source: value=json.load(source)
+value['phase']='RESPONSE_ACCEPTED'
+with open(path,'w') as output: json.dump(value,output)
+PY
+first_backup="$(find "$backup_root" -mindepth 1 -maxdepth 1 -type d | sort | head -n 1)"
+if run_rollback --backup "${first_backup##*/}" --restart >/dev/null 2>&1; then
+  echo "rollback discarded panel request protection" >&2; exit 1
+fi
+cmp "$TEMP_DIR/agent.before-pending" "$DESTDIR/usr/local/lib/wavemesh-agent/node_agent.py"
+[[ ! -s "$SYSTEMCTL_LOG" ]]
+chmod 0755 "$journal"
+if run_rollback --latest >/dev/null 2>&1; then
+  echo "rollback accepted unsafe panel journal permissions" >&2; exit 1
+fi
+[[ "$(stat -c '%a' "$journal")" == 755 ]]
+chmod 0700 "$journal"
+# Reset only this synthetic fixture for the independent no-history legacy test.
+rm "$journal/state.json"
 
 printf '\n# unit-change-marker\n' >> "$DESTDIR/etc/systemd/system/wavemesh-node-agent.service"
 : > "$SYSTEMCTL_LOG"

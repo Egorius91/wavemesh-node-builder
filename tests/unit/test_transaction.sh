@@ -7,6 +7,7 @@ tmp="$(mktemp -d)"
 trap 'rm -rf "$tmp"' EXIT
 
 WM_STATE_DIR="$tmp/state"
+export WAVEMESH_PANEL_REQUEST_STATE_DIR="$tmp/panel-requests"
 WM_CONFIG_JSON="$WM_STATE_DIR/config.json"
 WM_RUNTIME_JSON="$WM_STATE_DIR/runtime.json"
 WM_SUB_DIR="$tmp/subscriptions"

@@ -4,6 +4,11 @@ WM_TRANSACTION_TOOL="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/transaction_s
 WM_TRANSACTION_ROOT="${WM_TRANSACTION_ROOT:-$WM_STATE_DIR/transactions}"
 WM_TRANSACTION_KEEP="${WM_TRANSACTION_KEEP:-20}"
 WM_ACTIVE_TRANSACTION=""
+WM_TRANSACTION_PANEL_GUARD="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)/agent/panel_request_guard.py"
+
+wm_transaction_panel_admission() {
+  python3 "$WM_TRANSACTION_PANEL_GUARD" --check-open >/dev/null 2>&1
+}
 
 wm_atomic_install_json() {
   python3 "$WM_TRANSACTION_TOOL" atomic-install --source "$1" --target "$2"
@@ -54,6 +59,7 @@ PY
 
 wm_transaction_begin() {
   local operation="$1" transaction pending=""
+  wm_transaction_panel_admission || { wm_fail "Panel request reconciliation is required before a transaction"; return 1; }
   if ! pending="$(python3 "$WM_TRANSACTION_TOOL" check --root "$WM_TRANSACTION_ROOT")"; then
     wm_fail "Incomplete transaction detected: ${pending}. Run: wavemesh transaction recover --id ${pending}"
   fi
@@ -102,6 +108,9 @@ wm_transaction_wait_xui() {
 wm_transaction_rollback() {
   local transaction="$1" message="${2:-automatic rollback}" failed=0 db="" nginx_conf="${WM_NGINX_MANAGED_CONF:-/etc/nginx/wavemesh-managed-locations.conf}"
   trap - EXIT INT TERM HUP
+  # The caller holds the shared Node mutation lock. An HTTP timeout can outlive
+  # that process; do not restore a panel DB/config snapshot over its unknown work.
+  wm_transaction_panel_admission || { wm_warn "Panel request reconciliation is required before rollback"; return 1; }
   python3 "$WM_TRANSACTION_TOOL" mark --transaction "$transaction" --status recovering --message "$message" || failed=1
   [[ ! -f "$transaction/config.before.json" ]] || wm_atomic_install_json "$transaction/config.before.json" "$WM_CONFIG_JSON" || failed=1
   if [[ -f "$transaction/runtime.before.absent" ]]; then rm -f "$WM_RUNTIME_JSON"; elif [[ -f "$transaction/runtime.before.json" ]]; then wm_atomic_install_json "$transaction/runtime.before.json" "$WM_RUNTIME_JSON" || failed=1; fi

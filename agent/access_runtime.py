@@ -19,6 +19,16 @@ from typing import Any
 from urllib import error, parse, request
 import uuid
 
+# Load the sibling module by exact path, including when an embedded caller loads
+# this file through importlib rather than placing agent/ on sys.path.
+import importlib.util
+_guard_spec = importlib.util.spec_from_file_location("wavemesh_panel_request_guard", Path(__file__).with_name("panel_request_guard.py"))
+_guard_module = importlib.util.module_from_spec(_guard_spec)
+_guard_spec.loader.exec_module(_guard_module)
+MAX_RESPONSE = _guard_module.MAX_RESPONSE
+PanelRequestError = _guard_module.PanelRequestError
+PanelRequestGuard = _guard_module.PanelRequestGuard
+
 SAFE_ID = re.compile(r"^[A-Za-z0-9_-]{8,128}$")
 DAY_MILLISECONDS = 24 * 60 * 60 * 1000
 NODE_MUTATION_LOCK = Path("/run/lock/wavemesh-node.lock")
@@ -176,6 +186,15 @@ class PanelClient:
         self.timeout = timeout
 
     def call(self, method: str, path: str, payload: dict[str, Any] | None = None) -> dict[str, Any]:
+        try:
+            return PanelRequestGuard().execute(
+                method, path, self.base, payload,
+                lambda: self._call(method, path, payload),
+            )[0]
+        except PanelRequestError as exc:
+            raise ProvisionError(str(exc)) from None
+
+    def _call(self, method: str, path: str, payload: dict[str, Any] | None):
         body = None if payload is None else json.dumps(payload, separators=(",", ":")).encode()
         req = request.Request(
             self.base + path,
@@ -189,16 +208,18 @@ class PanelClient:
         )
         try:
             with request.urlopen(req, timeout=self.timeout) as response:
-                raw = response.read()
+                raw = response.read(MAX_RESPONSE + 1)
         except (error.HTTPError, error.URLError) as exc:
-            raise ProvisionError("3X-UI request failed") from exc
+            raise ProvisionError("3X-UI request failed") from None
+        if len(raw) > MAX_RESPONSE:
+            raise ProvisionError("3X-UI response is too large")
         try:
             value = json.loads(raw.decode())
         except (UnicodeDecodeError, json.JSONDecodeError) as exc:
             raise ProvisionError("3X-UI returned invalid JSON") from exc
         if not isinstance(value, dict) or value.get("success") is not True:
             raise ProvisionError("3X-UI operation was rejected")
-        return value
+        return value, raw
 
 
 @fenced_access("access.provision")
