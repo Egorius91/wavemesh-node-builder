@@ -281,6 +281,7 @@ class FakeLifecycleState:
         self.active = active
         self.pending = pending
         self.request_hash = active_request_hash
+        self.pending_cleared = False
 
     def active_identity(self, _expected_identity_uri: str):
         return self.active
@@ -291,14 +292,29 @@ class FakeLifecycleState:
     def active_request_hash(self, _active) -> str | None:
         return self.request_hash
 
+    def pending_activation_committed(self, _expected_identity_uri: str) -> bool:
+        return bool(
+            self.pending
+            and self.active
+            and self.request_hash == self.pending.request_hash
+        )
+
+    def clear_pending_request(self) -> None:
+        self.pending_cleared = True
+
 
 class FakeLifecycleClient:
-    def __init__(self) -> None:
+    def __init__(self, state: FakeLifecycleState | None = None) -> None:
+        self.state = state
         self.retrieved: list[str] = []
         self.acknowledged: list[str] = []
 
     def retrieve(self, credential_id: str) -> None:
         self.retrieved.append(credential_id)
+        if self.state is not None:
+            pending = self.state.pending_acknowledgement()
+            if pending is not None and pending.credential_id == credential_id:
+                self.state.request_hash = pending.request_hash
 
     def acknowledge(self, credential_id: str) -> None:
         self.acknowledged.append(credential_id)
@@ -349,7 +365,7 @@ class PrimaryMtlsRuntimeTests(unittest.TestCase):
                 active_request_hash="a" * 64,
             )
             instance = runtime.NodeMtlsRuntime(self._config(directory), state=state)
-            lifecycle = FakeLifecycleClient()
+            lifecycle = FakeLifecycleClient(state)
 
             with mock.patch.object(
                 runtime,
@@ -371,6 +387,7 @@ class PrimaryMtlsRuntimeTests(unittest.TestCase):
 
             self.assertEqual(lifecycle.retrieved, ["credential_12345678"])
             self.assertEqual(lifecycle.acknowledged, ["credential_12345678"])
+            self.assertTrue(state.pending_cleared)
             self.assertEqual(result.state, runtime.MtlsAgentState.SHADOW_READY)
 
     def test_runtime_forwards_request_headers_to_mtls_transport(self) -> None:
