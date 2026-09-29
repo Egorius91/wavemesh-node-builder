@@ -23,12 +23,20 @@ wm_lock_mutation() {
 
 wm_transaction_snapshot() {
   local transaction="$1" db="" nginx_conf="${WM_NGINX_MANAGED_CONF:-/etc/nginx/wavemesh-managed-locations.conf}"
+  if declare -F wm_xray_get_template >/dev/null && [[ "${NODE_ROLE:-}" == "entry" ]]; then
+    if [[ "${WM_XRAY_SNAPSHOT_REQUIRED:-1}" == "1" ]]; then
+      [[ -n "${WM_XRAY_PREFLIGHT_FILE:-}" && -f "$WM_XRAY_PREFLIGHT_FILE" ]] || return 1
+      wm_xray_assert_log_policy "$WM_XRAY_PREFLIGHT_FILE" || return 1
+      cp "$WM_XRAY_PREFLIGHT_FILE" "$transaction/xray.before.json" || return 1
+    fi
+    [[ -z "${WM_XRAY_PREFLIGHT_FILE:-}" ]] || rm -f "$WM_XRAY_PREFLIGHT_FILE"
+    WM_XRAY_PREFLIGHT_FILE=""
+  fi
   cp "$WM_CONFIG_JSON" "$transaction/config.before.json"
   if [[ -f "$WM_RUNTIME_JSON" ]]; then cp "$WM_RUNTIME_JSON" "$transaction/runtime.before.json"; else : > "$transaction/runtime.before.absent"; fi
   if [[ -f "$nginx_conf" ]]; then cp "$nginx_conf" "$transaction/nginx.before.conf"; else : > "$transaction/nginx.before.absent"; fi
   mkdir -p "$transaction/subscriptions.before"
   if [[ -d "$WM_SUB_DIR" ]]; then cp -a "$WM_SUB_DIR/." "$transaction/subscriptions.before/"; else : > "$transaction/subscriptions.before.absent"; fi
-  if declare -F wm_xray_get_template >/dev/null && [[ "${NODE_ROLE:-}" == "entry" ]]; then wm_xray_get_template "$transaction/xray.before.json" || return 1; fi
   db="$(python3 - "$WM_CONFIG_JSON" <<'PY'
 import json,sys
 cfg=json.load(open(sys.argv[1],encoding="utf-8"))
@@ -57,7 +65,14 @@ wm_transaction_begin() {
   if ! pending="$(python3 "$WM_TRANSACTION_TOOL" check --root "$WM_TRANSACTION_ROOT")"; then
     wm_fail "Incomplete transaction detected: ${pending}. Run: wavemesh transaction recover --id ${pending}"
   fi
-  transaction="$(python3 "$WM_TRANSACTION_TOOL" begin --root "$WM_TRANSACTION_ROOT" --operation "$operation" --pid "$$")" || wm_fail "Could not create transaction"
+  if declare -F wm_xray_policy_preflight >/dev/null && [[ "${NODE_ROLE:-}" == "entry" ]]; then
+    wm_xray_policy_preflight || wm_fail "Xray private log policy preflight failed; no transaction was created"
+  fi
+  transaction="$(python3 "$WM_TRANSACTION_TOOL" begin --root "$WM_TRANSACTION_ROOT" --operation "$operation" --pid "$$")" || {
+    [[ -z "${WM_XRAY_PREFLIGHT_FILE:-}" ]] || rm -f "$WM_XRAY_PREFLIGHT_FILE"
+    WM_XRAY_PREFLIGHT_FILE=""
+    wm_fail "Could not create transaction"
+  }
   WM_ACTIVE_TRANSACTION="$transaction"; export WM_ACTIVE_TRANSACTION
   trap 'wm_transaction_exit_handler $?' EXIT
   trap 'exit 130' INT; trap 'exit 143' TERM; trap 'exit 129' HUP
@@ -72,7 +87,9 @@ wm_transaction_post_rollback_check() {
   systemctl is-active --quiet nginx || return 1
   if [[ -f "$transaction/x-ui.before.db" || -f "$transaction/xray.before.json" ]]; then systemctl is-active --quiet x-ui || return 1; fi
   if [[ -f "$transaction/xray.before.json" ]] && declare -F wm_xray_get_template >/dev/null; then
+    wm_xray_assert_log_policy "$transaction/xray.before.json" || return 1
     wm_xray_get_template "$readback" || return 1
+    wm_xray_assert_log_policy "$readback" || return 1
     python3 - "$transaction/xray.before.json" "$readback" <<'PY' || return 1
 import json,sys
 if json.load(open(sys.argv[1],encoding="utf-8")) != json.load(open(sys.argv[2],encoding="utf-8")):
@@ -102,6 +119,11 @@ wm_transaction_wait_xui() {
 wm_transaction_rollback() {
   local transaction="$1" message="${2:-automatic rollback}" failed=0 db="" nginx_conf="${WM_NGINX_MANAGED_CONF:-/etc/nginx/wavemesh-managed-locations.conf}"
   trap - EXIT INT TERM HUP
+  if [[ -f "$transaction/xray.before.json" ]] && declare -F wm_xray_assert_log_policy >/dev/null && ! wm_xray_assert_log_policy "$transaction/xray.before.json"; then
+    python3 "$WM_TRANSACTION_TOOL" mark --transaction "$transaction" --status rollback_failed --message "Xray snapshot rejected by private log policy" || true
+    wm_warn "Rollback stopped: saved Xray snapshot is outside the private log policy; the protected snapshot was retained"
+    return 1
+  fi
   python3 "$WM_TRANSACTION_TOOL" mark --transaction "$transaction" --status recovering --message "$message" || failed=1
   [[ ! -f "$transaction/config.before.json" ]] || wm_atomic_install_json "$transaction/config.before.json" "$WM_CONFIG_JSON" || failed=1
   if [[ -f "$transaction/runtime.before.absent" ]]; then rm -f "$WM_RUNTIME_JSON"; elif [[ -f "$transaction/runtime.before.json" ]]; then wm_atomic_install_json "$transaction/runtime.before.json" "$WM_RUNTIME_JSON" || failed=1; fi
@@ -141,6 +163,7 @@ wm_transaction_exit_handler() {
   if (( status != 0 )) && [[ -n "${WM_ACTIVE_TRANSACTION:-}" ]]; then
     if ! wm_transaction_rollback "$WM_ACTIVE_TRANSACTION" "command exited with status ${status}"; then wm_warn "Automatic rollback failed; run wavemesh transaction recover --id $(basename "$WM_ACTIVE_TRANSACTION")"; fi
   fi
+  [[ -z "${WM_XRAY_PREFLIGHT_FILE:-}" ]] || rm -f "$WM_XRAY_PREFLIGHT_FILE"
   exit "$status"
 }
 
@@ -150,6 +173,7 @@ wm_transaction_commit() {
   find "$transaction" -type f -exec chmod 600 {} +
   python3 "$WM_TRANSACTION_TOOL" mark --transaction "$transaction" --status committed
   WM_ACTIVE_TRANSACTION=""; trap - EXIT INT TERM HUP
+  [[ -z "${WM_XRAY_PREFLIGHT_FILE:-}" ]] || rm -f "$WM_XRAY_PREFLIGHT_FILE"
   python3 "$WM_TRANSACTION_TOOL" prune --root "$WM_TRANSACTION_ROOT" --keep "$WM_TRANSACTION_KEEP"
   python3 "$WM_TRANSACTION_TOOL" prune-backups --root "$WM_STATE_DIR/backups" --keep "$WM_TRANSACTION_KEEP"
 }
