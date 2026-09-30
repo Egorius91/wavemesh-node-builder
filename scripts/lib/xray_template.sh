@@ -30,7 +30,7 @@ wm_xray_assert_log_policy() {
 }
 
 wm_xray_policy_preflight() {
-  [[ "${NODE_ROLE:-}" == "entry" ]] || return 0
+  [[ "${NODE_ROLE:-}" == "entry" || "${NODE_ROLE:-}" == "exit" ]] || return 0
   local file
   file="$(mktemp)" || return 1
   chmod 600 "$file"
@@ -40,6 +40,30 @@ wm_xray_policy_preflight() {
   fi
   WM_XRAY_PREFLIGHT_FILE="$file"
   export WM_XRAY_PREFLIGHT_FILE
+}
+
+# A safe effective snapshot is insufficient if restoring SQLite would start
+# x-ui with an unsafe stored template (or an unpinned native default).
+wm_xray_assert_db_log_policy() {
+  local database="$1" snapshot="${2:-}"
+  python3 - "$database" "$WM_XRAY_TEMPLATE_TOOL" "$snapshot" <<'PY' >/dev/null 2>&1
+import importlib.util,json,sqlite3,sys
+from pathlib import Path
+sys.dont_write_bytecode=True
+spec=importlib.util.spec_from_file_location("xray_template",sys.argv[2])
+policy=importlib.util.module_from_spec(spec); spec.loader.exec_module(policy)
+database=sqlite3.connect(Path(sys.argv[1]).resolve().as_uri()+"?mode=ro",uri=True)
+try:
+    rows=database.execute("SELECT value FROM settings WHERE key=?",("xrayTemplateConfig",)).fetchall()
+finally:
+    database.close()
+if len(rows) != 1:
+    raise ValueError("Stored Xray policy is unavailable")
+template=json.loads(rows[0][0])
+policy.validate_log_policy(template)
+if sys.argv[3] and template != json.load(open(sys.argv[3],encoding="utf-8")):
+    raise ValueError("Stored Xray template differs from effective snapshot")
+PY
 }
 
 wm_xray_test_outbound() {

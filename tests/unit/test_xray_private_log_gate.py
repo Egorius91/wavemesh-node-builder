@@ -2,6 +2,7 @@ import os
 import json
 import shutil
 import subprocess
+import sys
 import tempfile
 from pathlib import Path
 
@@ -18,12 +19,15 @@ with tempfile.TemporaryDirectory() as name:
     state = temp / "state"
     transaction_root = state / "transactions"
     posted = temp / "post-called"
+    bash_env = temp / "bash-env.sh"
+    bash_env.write_text('python3(){ "' + Path(sys.executable).as_posix() + '" "$@"; }; export -f python3;\n', encoding="utf-8")
     env = {
         **os.environ,
         "NODE_ROLE": "entry",
         "WM_STATE_DIR": str(state),
         "WM_TRANSACTION_ROOT": str(transaction_root),
         "POST_MARKER": str(posted),
+        "BASH_ENV": str(bash_env),
     }
 
     # Transaction preflight rejects before creating its transaction directory.

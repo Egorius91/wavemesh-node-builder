@@ -23,8 +23,9 @@ wm_lock_mutation() {
 
 wm_transaction_snapshot() {
   local transaction="$1" db="" nginx_conf="${WM_NGINX_MANAGED_CONF:-/etc/nginx/wavemesh-managed-locations.conf}"
-  if declare -F wm_xray_get_template >/dev/null && [[ "${NODE_ROLE:-}" == "entry" ]]; then
-    if [[ "${WM_XRAY_SNAPSHOT_REQUIRED:-1}" == "1" ]]; then
+  if [[ "${NODE_ROLE:-}" == "entry" || "${NODE_ROLE:-}" == "exit" ]]; then
+    declare -F wm_xray_assert_log_policy >/dev/null || return 1
+    if [[ "${NODE_ROLE:-}" == "exit" || "${WM_XRAY_SNAPSHOT_REQUIRED:-1}" == "1" ]]; then
       [[ -n "${WM_XRAY_PREFLIGHT_FILE:-}" && -f "$WM_XRAY_PREFLIGHT_FILE" ]] || return 1
       wm_xray_assert_log_policy "$WM_XRAY_PREFLIGHT_FILE" || return 1
       cp "$WM_XRAY_PREFLIGHT_FILE" "$transaction/xray.before.json" || return 1
@@ -49,15 +50,21 @@ PY
   if [[ -n "$db" ]]; then
     [[ -f "$db" ]] || { wm_warn "Configured 3X-UI database is missing: ${db}"; return 1; }
     printf '%s\n' "$db" > "$transaction/x-ui.before.db.path"
-    python3 - "$db" "$transaction/x-ui.before.db" <<'PY'
+    python3 - "$db" "$transaction/x-ui.before.db" <<'PY' || return 1
 import sqlite3,sys
 source=sqlite3.connect(sys.argv[1]); target=sqlite3.connect(sys.argv[2])
 try: source.backup(target)
 finally: target.close(); source.close()
 PY
   fi
-  find "$transaction" -type d -exec chmod 700 {} +
-  find "$transaction" -type f -exec chmod 600 {} +
+  find "$transaction" -type d -exec chmod 700 {} + || return 1
+  find "$transaction" -type f -exec chmod 600 {} + || return 1
+  if [[ -n "$db" && ( "${NODE_ROLE:-}" == "entry" || "${NODE_ROLE:-}" == "exit" ) ]]; then
+    declare -F wm_xray_assert_db_log_policy >/dev/null || return 1
+    local snapshot=""
+    [[ ! -f "$transaction/xray.before.json" ]] || snapshot="$transaction/xray.before.json"
+    wm_xray_assert_db_log_policy "$transaction/x-ui.before.db" "$snapshot" || return 1
+  fi
 }
 
 wm_transaction_begin() {
@@ -65,8 +72,9 @@ wm_transaction_begin() {
   if ! pending="$(python3 "$WM_TRANSACTION_TOOL" check --root "$WM_TRANSACTION_ROOT")"; then
     wm_fail "Incomplete transaction detected: ${pending}. Run: wavemesh transaction recover --id ${pending}"
   fi
-  if declare -F wm_xray_policy_preflight >/dev/null && [[ "${NODE_ROLE:-}" == "entry" ]]; then
-    wm_xray_policy_preflight || wm_fail "Xray private log policy preflight failed; no transaction was created"
+  if [[ "${NODE_ROLE:-}" == "entry" || "${NODE_ROLE:-}" == "exit" ]]; then
+    declare -F wm_xray_policy_preflight >/dev/null || { wm_fail "Xray policy helper is unavailable; no transaction was created"; return 1; }
+    wm_xray_policy_preflight || { wm_fail "Xray private log policy preflight failed; no transaction was created"; return 1; }
   fi
   transaction="$(python3 "$WM_TRANSACTION_TOOL" begin --root "$WM_TRANSACTION_ROOT" --operation "$operation" --pid "$$")" || {
     [[ -z "${WM_XRAY_PREFLIGHT_FILE:-}" ]] || rm -f "$WM_XRAY_PREFLIGHT_FILE"
@@ -77,6 +85,43 @@ wm_transaction_begin() {
   trap 'wm_transaction_exit_handler $?' EXIT
   trap 'exit 130' INT; trap 'exit 143' TERM; trap 'exit 129' HUP
   wm_transaction_snapshot "$transaction" || wm_fail "Could not capture transaction backups"
+}
+
+wm_transaction_assert_xray_recovery() {
+  local transaction="$1" role snapshot=""
+  # Recovery CLI has not loaded the saved role yet. Inspect it before changing
+  # live config; retain the operation guard for incomplete legacy snapshots.
+  role="$(python3 - "$transaction" 2>/dev/null <<'PY'
+import json,sys
+from pathlib import Path
+directory=Path(sys.argv[1]); role=""
+config=directory/"config.before.json"
+if config.is_file():
+    role=json.load(config.open(encoding="utf-8")).get("node",{}).get("role","")
+plan=directory/"plan.json"
+if plan.is_file() and json.load(plan.open(encoding="utf-8")).get("operation","").startswith("exit-peer-"):
+    role="exit"
+print(role)
+PY
+)" || return 1
+  # An unloaded CLI role must not classify an unidentified DB backup as
+  # standalone. Only an explicit saved role preserves that compatibility.
+  if [[ -e "$transaction/x-ui.before.db" || -e "$transaction/x-ui.before.db.path" ]]; then
+    [[ "$role" == "entry" || "$role" == "exit" || "$role" == "standalone" ]] || return 1
+  fi
+  if [[ -f "$transaction/xray.before.json" ]]; then
+    snapshot="$transaction/xray.before.json"
+    declare -F wm_xray_assert_log_policy >/dev/null || return 1
+    wm_xray_assert_log_policy "$snapshot" || return 1
+  fi
+  [[ "$role" != "exit" || -n "$snapshot" ]] || return 1
+  if [[ "$role" == "entry" || "$role" == "exit" || -n "$snapshot" ]]; then
+    if [[ -e "$transaction/x-ui.before.db" || -e "$transaction/x-ui.before.db.path" ]]; then
+      [[ -f "$transaction/x-ui.before.db" && -f "$transaction/x-ui.before.db.path" ]] || return 1
+      declare -F wm_xray_assert_db_log_policy >/dev/null || return 1
+      wm_xray_assert_db_log_policy "$transaction/x-ui.before.db" "$snapshot" || return 1
+    fi
+  fi
 }
 
 wm_transaction_post_rollback_check() {
@@ -119,9 +164,9 @@ wm_transaction_wait_xui() {
 wm_transaction_rollback() {
   local transaction="$1" message="${2:-automatic rollback}" failed=0 db="" nginx_conf="${WM_NGINX_MANAGED_CONF:-/etc/nginx/wavemesh-managed-locations.conf}"
   trap - EXIT INT TERM HUP
-  if [[ -f "$transaction/xray.before.json" ]] && declare -F wm_xray_assert_log_policy >/dev/null && ! wm_xray_assert_log_policy "$transaction/xray.before.json"; then
+  if ! wm_transaction_assert_xray_recovery "$transaction"; then
     python3 "$WM_TRANSACTION_TOOL" mark --transaction "$transaction" --status rollback_failed --message "Xray snapshot rejected by private log policy" || true
-    wm_warn "Rollback stopped: saved Xray snapshot is outside the private log policy; the protected snapshot was retained"
+    wm_warn "Rollback stopped: Xray recovery policy could not be proven; protected snapshots were retained"
     return 1
   fi
   python3 "$WM_TRANSACTION_TOOL" mark --transaction "$transaction" --status recovering --message "$message" || failed=1

@@ -1,7 +1,7 @@
-# Entry Xray private logging policy
+# Entry and Exit Xray private logging policy
 
-WaveMesh Builder now accepts Entry Xray mutations only when the current Xray
-template has this logging policy:
+WaveMesh Builder accepts Entry and Exit Xray mutations only when the current
+Xray template has this logging policy:
 
 ```json
 {
@@ -31,12 +31,15 @@ only the policy failure; they do not print the Xray configuration.
 Every Entry transaction, including subscription and inbound changes, reads and
 validates Xray before creating the transaction. Subscription transactions do
 not capture or restore an Xray template because they do not call the Xray
-configuration update API. Standalone route and balancer helpers validate before
-creating their backup. The final Xray update function validates every candidate,
-including rollback candidates. Rollback also validates a saved snapshot before
-restoring any state. If an older incomplete transaction contains an unsafe
-Xray snapshot, Builder marks rollback failed, retains the mode-0600 snapshot,
-and requires operator repair; it does not replay that snapshot.
+configuration update API. Exit create/remove transactions also validate before
+transaction creation and retain the safe effective Xray template for recovery.
+Standalone route and balancer helpers validate before creating their backup.
+The final Xray update function validates every candidate, including rollback
+candidates. Recovery validates the saved role, Xray snapshot, and backed-up
+SQLite template before restoring live state. If an older or inconsistent
+transaction contains an unsafe, missing, or unknown-role snapshot, Builder
+marks rollback failed, retains private evidence, and requires operator repair;
+it does not replay or normalize that snapshot.
 
 ## Runtime preflight before enabling this policy
 
@@ -60,8 +63,9 @@ unrelated services access to the error log. The exact runtime UID, directory
 ACL, rotation mechanism, and limits are host evidence and are intentionally not
 guessed by this source change.
 
-This covers Builder-managed Entry Xray JSON updates and their rollback paths.
-It does not establish logging behavior for Xray processes on Exit nodes,
-3X-UI's own panel logs, third-party panel behavior, or historical files. It
-does not clean existing logs. Those remain separate runtime reviews. A passing
-source test is not deployment or staging acceptance.
+This covers Builder-managed Entry and Exit Xray JSON updates and recovery
+guards. It does not establish filesystem permissions, rotation, or effective
+policy on either host, or logging behavior for direct panel/third-party writers,
+3X-UI's own panel logs, or historical files. It does not clean existing logs.
+Those remain separate runtime reviews. A passing source test is not deployment
+or staging acceptance.
