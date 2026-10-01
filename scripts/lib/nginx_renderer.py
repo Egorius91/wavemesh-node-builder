@@ -56,7 +56,21 @@ def render_location(path,port,allowed_ips,stream_timeouts=False):
 def render_native_alias(path,target,port):
     validate_path(path); target=normalize_path(target)
     return "\n".join([f"location {path} {{",f"    proxy_pass http://127.0.0.1:{int(port)}{target};","    proxy_http_version 1.1;","    proxy_set_header Host $host;","    proxy_set_header X-Forwarded-Proto https;","    proxy_set_header X-Forwarded-Host $host;","    proxy_set_header X-Forwarded-Port 443;","    proxy_redirect off;","    proxy_buffering off;","    proxy_request_buffering off;","}"])
+def panel_log_prefixes(config):
+    # Native UI and API share these two reader families. Keep local SSH/file
+    # diagnostics; no HTTP ingress needs to proxy these sensitive readers.
+    base = config.get("panel", {}).get("path")
+    if not base:
+        if config.get("node", {}).get("role") == "entry":
+            raise ValueError("Entry panel path is required for log ingress confinement")
+        return ()
+    if not isinstance(base, str) or not re.fullmatch(r"/(?:[A-Za-z0-9_-]+/)+", base):
+        raise ValueError("panel path must contain only literal nonempty path segments")
+    return tuple(base + "panel/api/server/" + family + "/"
+                 for family in ("logs", "xraylogs"))
+
 def render(config,additional_native_path=None,native_alias=None,additional_native_port=None):
+    log_prefixes = panel_log_prefixes(config)
     subscription_path=configured_subscription_base(config)
     seen={config.get("panel",{}).get("path"),config.get("network",{}).get("xhttp",{}).get("path")}; blocks=[]
     subscription_paths=[]
@@ -96,6 +110,13 @@ def render(config,additional_native_path=None,native_alias=None,additional_nativ
         entry=route["entry"]; path=entry["public_path"]
         if path in seen: raise ValueError(f"managed path collision: {path}")
         seen.add(path); blocks.append(render_location(path,entry["local_port"],[],stream_timeouts=True))
+    # A longer managed prefix must never bypass the reserved log families.
+    if any(isinstance(path, str) and path.startswith(prefix)
+           for path in seen for prefix in log_prefixes):
+        raise ValueError("managed path overlaps a reserved native log reader")
+    denials = ["\n".join([f"location ^~ {prefix} {{", "    return 403;", "}"])
+               for prefix in log_prefixes]
+    blocks = denials + blocks
     # This include is loaded at server scope. Request URIs can contain subIds,
     # and nginx upstream errors also copy the URI even with access logging off.
     privacy = "access_log off;\nerror_log /dev/null;\n"

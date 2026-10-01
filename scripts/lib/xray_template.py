@@ -9,6 +9,78 @@ MATCH_KEYS = {"domain", "ip", "port", "sourcePort", "localPort", "network", "sou
 XRAY_API_PORT = 62789
 AUTO_PROBE_URL = "https://www.google.com/generate_204"
 AUTO_PROBE_INTERVAL = "30s"
+PRIVATE_ERROR_LOG = "/var/log/wavemesh-node/xray-error.log"
+LOG_LEVELS = {"debug", "info", "warning", "error", "none"}
+
+
+def validate_log_shape(template, allow_missing_policy_fields=False):
+    """Reject unsupported Xray log shapes without ever rendering their values."""
+    log = template.get("log")
+    allowed = {"access", "error", "loglevel", "dnsLog", "maskAddress"}
+    required = {"access", "error", "loglevel"}
+    if not isinstance(log, dict) or not required.issubset(log) or not set(log).issubset(allowed):
+        raise ValueError("Xray log policy has an unsupported shape")
+    if not allow_missing_policy_fields and set(log) != allowed:
+        raise ValueError("Xray log policy is incomplete")
+    if not isinstance(log["access"], str) or not log["access"].strip():
+        raise ValueError("Xray access log stream is omitted or empty")
+    if not isinstance(log["error"], str) or not log["error"].strip():
+        raise ValueError("Xray error log stream is omitted or empty")
+    if not isinstance(log["loglevel"], str) or log["loglevel"] not in LOG_LEVELS:
+        raise ValueError("Xray log level is unknown")
+    if "dnsLog" in template or "maskAddress" in template:
+        raise ValueError("Xray privacy log settings must be nested in log")
+    if "dnsLog" in log and not isinstance(log["dnsLog"], bool):
+        raise ValueError("Xray DNS log setting has an unsupported shape")
+    if "maskAddress" in log and not isinstance(log["maskAddress"], str):
+        raise ValueError("Xray address masking setting has an unsupported shape")
+
+
+def normalize_log_policy(template):
+    """Return a copy with the selected private log policy applied."""
+    log = template.get("log")
+    allowed = {"access", "error", "loglevel", "dnsLog", "maskAddress"}
+    if not isinstance(log, dict) or "loglevel" not in log or not set(log).issubset(allowed):
+        raise ValueError("Xray log policy has an unsupported migration shape")
+    if "dnsLog" in template or "maskAddress" in template:
+        raise ValueError("Xray privacy log settings must be nested in log")
+    if not isinstance(log["loglevel"], str) or log["loglevel"] not in LOG_LEVELS:
+        raise ValueError("Xray log level is unknown")
+    for stream in ("access", "error"):
+        if stream in log and not isinstance(log[stream], str):
+            raise ValueError("Xray log stream has an unsupported shape")
+    if "dnsLog" in log and not isinstance(log["dnsLog"], bool):
+        raise ValueError("Xray DNS log setting has an unsupported shape")
+    if "maskAddress" in log and not isinstance(log["maskAddress"], str):
+        raise ValueError("Xray address masking setting has an unsupported shape")
+    result = json.loads(json.dumps(template))
+    result["log"].update({
+        "access": "none",
+        "error": PRIVATE_ERROR_LOG,
+        "loglevel": "error" if template["log"]["loglevel"] == "error" else "warning",
+        "dnsLog": False,
+        "maskAddress": "full",
+    })
+    return result
+
+
+def validate_log_policy(template):
+    validate_log_shape(template)
+    if template["log"]["access"] != "none":
+        raise ValueError("Xray access logging must be disabled")
+    if template["log"]["error"] != PRIVATE_ERROR_LOG:
+        raise ValueError("Xray error log sink does not match the private policy")
+    if template["log"]["loglevel"] not in {"warning", "error"}:
+        raise ValueError("Xray log level is less restrictive than warning")
+    if template["log"].get("dnsLog") is not False:
+        raise ValueError("Xray DNS logging must be disabled")
+    if template["log"].get("maskAddress") != "full":
+        raise ValueError("Xray addresses must be fully masked")
+
+
+def copy_policy_safe_template(template):
+    validate_log_policy(template)
+    return json.loads(json.dumps(template))
 
 
 def read_json(path):
@@ -67,7 +139,7 @@ def merge(template, outbound, inbound_tag, outbound_tag, rule_tag):
     if not inbound_tag.startswith("wm-route-") or not rule_tag.startswith("wm-rule-"):
         raise ValueError("managed route tags must use wm- prefixes")
 
-    result = json.loads(json.dumps(template))
+    result = copy_policy_safe_template(template)
     ensure_xray_api(result)
     outbounds = result.setdefault("outbounds", [])
     outbounds[:] = [item for item in outbounds if item.get("tag") != outbound_tag]
@@ -96,7 +168,7 @@ def merge_balancer(template, selectors, inbound_tag, balancer_tag, rule_tag, str
     if strategy != "leastPing":
         raise ValueError("only leastPing is supported for Auto Route")
 
-    result = json.loads(json.dumps(template))
+    result = copy_policy_safe_template(template)
     ensure_xray_api(result)
     available = {item.get("tag") for item in result.get("outbounds", [])}
     missing = [tag for tag in selectors if tag not in available]
@@ -125,6 +197,7 @@ def merge_balancer(template, selectors, inbound_tag, balancer_tag, rule_tag, str
 
 
 def verify_balancer(template, selectors, inbound_tag, balancer_tag, rule_tag, strategy="leastPing"):
+    validate_log_policy(template)
     selectors = list(dict.fromkeys(selectors))
     routing = template.get("routing", {})
     balancers = [item for item in routing.get("balancers", []) if item.get("tag") == balancer_tag]
@@ -150,7 +223,7 @@ def verify_balancer(template, selectors, inbound_tag, balancer_tag, rule_tag, st
 
 
 def remove(template, inbound_tag, outbound_tag, rule_tag):
-    result = json.loads(json.dumps(template))
+    result = copy_policy_safe_template(template)
     result["outbounds"] = [item for item in result.get("outbounds", []) if item.get("tag") != outbound_tag]
     routing = result.setdefault("routing", {})
     routing["rules"] = [item for item in routing.get("rules", []) if item.get("ruleTag") != rule_tag and not (item.get("inboundTag") == [inbound_tag] and item.get("outboundTag") == outbound_tag)]
@@ -158,7 +231,7 @@ def remove(template, inbound_tag, outbound_tag, rule_tag):
 
 
 def remove_balancer(template, inbound_tag, balancer_tag, rule_tag):
-    result = json.loads(json.dumps(template))
+    result = copy_policy_safe_template(template)
     routing = result.setdefault("routing", {})
     routing["rules"] = [item for item in routing.get("rules", []) if item.get("ruleTag") != rule_tag and not (item.get("inboundTag") == [inbound_tag] and item.get("balancerTag") == balancer_tag)]
     routing["balancers"] = [item for item in routing.get("balancers", []) if item.get("tag") != balancer_tag]
@@ -211,8 +284,22 @@ def main():
     remove_balancer_parser.add_argument("--rule-tag", required=True)
     remove_balancer_parser.add_argument("--output", required=True)
 
+    policy_parser = sub.add_parser("assert-log-policy")
+    policy_parser.add_argument("--template", required=True)
+
+    candidate_parser = sub.add_parser("normalize-log-policy-candidate")
+    candidate_parser.add_argument("--template", required=True)
+    candidate_parser.add_argument("--output", required=True)
+
     args = parser.parse_args()
     template = read_json(args.template)
+    if args.command == "assert-log-policy":
+        validate_log_policy(template)
+        return
+    if args.command == "normalize-log-policy-candidate":
+        result = normalize_log_policy(template)
+        Path(args.output).write_text(json.dumps(result, indent=2, sort_keys=True) + "\n", encoding="utf-8")
+        return
     if args.command == "merge":
         result = merge(template, read_json(args.outbound), args.inbound_tag, args.outbound_tag, args.rule_tag)
     elif args.command == "remove":

@@ -127,6 +127,7 @@ wm_runtime_apply_public_state() {
 wm_runtime_remove_xray_routes() {
   local config="$1" affected="$2" original="$3" candidate="$4" route_id inbound_tag outbound_tag rule_tag next readback
   wm_xray_get_template "$original" || return 1
+  wm_xray_assert_log_policy "$original" || { wm_warn "Xray route removal blocked by private log policy"; return 1; }
   cp "$original" "$candidate"
   while IFS=$'\t' read -r route_id inbound_tag outbound_tag rule_tag; do
     [[ -n "$route_id" ]] || continue
@@ -143,6 +144,7 @@ PY
   wm_xray_apply_template "$candidate" || return 1
   readback="${candidate}.readback"
   wm_xray_get_template "$readback" || return 1
+  wm_xray_assert_log_policy "$readback" || { wm_warn "Xray removal read-back violates private log policy"; return 1; }
   python3 - "$config" "$affected" "$readback" <<'PY'
 import json,sys
 cfg=json.load(open(sys.argv[1],encoding="utf-8")); ids=set(json.load(open(sys.argv[2],encoding="utf-8"))); template=json.load(open(sys.argv[3],encoding="utf-8"))
