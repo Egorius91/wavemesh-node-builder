@@ -17,7 +17,7 @@ mkdir -p "$WM_STATE_DIR" "$WM_SUB_DIR/users"
 xui_db="$tmp/x-ui.db"
 python3 - "$WM_CONFIG_JSON" "$xui_db" <<'PY'
 import json,sqlite3,sys
-json.dump({"schema_version":2,"installation":{"xui":{"database_path":sys.argv[2]}}},open(sys.argv[1],"w",encoding="utf-8"))
+json.dump({"schema_version":2,"node":{"role":"standalone"},"installation":{"xui":{"database_path":sys.argv[2]}}},open(sys.argv[1],"w",encoding="utf-8"))
 db=sqlite3.connect(sys.argv[2]); db.execute("create table state(value text)"); db.execute("insert into state values ('original')"); db.commit(); db.close()
 PY
 printf '{"node_status":"healthy"}\n' > "$WM_RUNTIME_JSON"
