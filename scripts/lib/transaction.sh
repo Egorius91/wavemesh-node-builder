@@ -23,12 +23,21 @@ wm_lock_mutation() {
 
 wm_transaction_snapshot() {
   local transaction="$1" db="" nginx_conf="${WM_NGINX_MANAGED_CONF:-/etc/nginx/wavemesh-managed-locations.conf}"
+  if [[ "${NODE_ROLE:-}" == "entry" || "${NODE_ROLE:-}" == "exit" ]]; then
+    declare -F wm_xray_assert_log_policy >/dev/null || return 1
+    if [[ "${NODE_ROLE:-}" == "exit" || "${WM_XRAY_SNAPSHOT_REQUIRED:-1}" == "1" ]]; then
+      [[ -n "${WM_XRAY_PREFLIGHT_FILE:-}" && -f "$WM_XRAY_PREFLIGHT_FILE" ]] || return 1
+      wm_xray_assert_log_policy "$WM_XRAY_PREFLIGHT_FILE" || return 1
+      cp "$WM_XRAY_PREFLIGHT_FILE" "$transaction/xray.before.json" || return 1
+    fi
+    [[ -z "${WM_XRAY_PREFLIGHT_FILE:-}" ]] || rm -f "$WM_XRAY_PREFLIGHT_FILE"
+    WM_XRAY_PREFLIGHT_FILE=""
+  fi
   cp "$WM_CONFIG_JSON" "$transaction/config.before.json"
   if [[ -f "$WM_RUNTIME_JSON" ]]; then cp "$WM_RUNTIME_JSON" "$transaction/runtime.before.json"; else : > "$transaction/runtime.before.absent"; fi
   if [[ -f "$nginx_conf" ]]; then cp "$nginx_conf" "$transaction/nginx.before.conf"; else : > "$transaction/nginx.before.absent"; fi
   mkdir -p "$transaction/subscriptions.before"
   if [[ -d "$WM_SUB_DIR" ]]; then cp -a "$WM_SUB_DIR/." "$transaction/subscriptions.before/"; else : > "$transaction/subscriptions.before.absent"; fi
-  if declare -F wm_xray_get_template >/dev/null && [[ "${NODE_ROLE:-}" == "entry" ]]; then wm_xray_get_template "$transaction/xray.before.json" || return 1; fi
   db="$(python3 - "$WM_CONFIG_JSON" <<'PY'
 import json,sys
 cfg=json.load(open(sys.argv[1],encoding="utf-8"))
@@ -41,15 +50,21 @@ PY
   if [[ -n "$db" ]]; then
     [[ -f "$db" ]] || { wm_warn "Configured 3X-UI database is missing: ${db}"; return 1; }
     printf '%s\n' "$db" > "$transaction/x-ui.before.db.path"
-    python3 - "$db" "$transaction/x-ui.before.db" <<'PY'
+    python3 - "$db" "$transaction/x-ui.before.db" <<'PY' || return 1
 import sqlite3,sys
 source=sqlite3.connect(sys.argv[1]); target=sqlite3.connect(sys.argv[2])
 try: source.backup(target)
 finally: target.close(); source.close()
 PY
   fi
-  find "$transaction" -type d -exec chmod 700 {} +
-  find "$transaction" -type f -exec chmod 600 {} +
+  find "$transaction" -type d -exec chmod 700 {} + || return 1
+  find "$transaction" -type f -exec chmod 600 {} + || return 1
+  if [[ -n "$db" && ( "${NODE_ROLE:-}" == "entry" || "${NODE_ROLE:-}" == "exit" ) ]]; then
+    declare -F wm_xray_assert_db_log_policy >/dev/null || return 1
+    local snapshot=""
+    [[ ! -f "$transaction/xray.before.json" ]] || snapshot="$transaction/xray.before.json"
+    wm_xray_assert_db_log_policy "$transaction/x-ui.before.db" "$snapshot" || return 1
+  fi
 }
 
 wm_transaction_begin() {
@@ -57,11 +72,56 @@ wm_transaction_begin() {
   if ! pending="$(python3 "$WM_TRANSACTION_TOOL" check --root "$WM_TRANSACTION_ROOT")"; then
     wm_fail "Incomplete transaction detected: ${pending}. Run: wavemesh transaction recover --id ${pending}"
   fi
-  transaction="$(python3 "$WM_TRANSACTION_TOOL" begin --root "$WM_TRANSACTION_ROOT" --operation "$operation" --pid "$$")" || wm_fail "Could not create transaction"
+  if [[ "${NODE_ROLE:-}" == "entry" || "${NODE_ROLE:-}" == "exit" ]]; then
+    declare -F wm_xray_policy_preflight >/dev/null || { wm_fail "Xray policy helper is unavailable; no transaction was created"; return 1; }
+    wm_xray_policy_preflight || { wm_fail "Xray private log policy preflight failed; no transaction was created"; return 1; }
+  fi
+  transaction="$(python3 "$WM_TRANSACTION_TOOL" begin --root "$WM_TRANSACTION_ROOT" --operation "$operation" --pid "$$")" || {
+    [[ -z "${WM_XRAY_PREFLIGHT_FILE:-}" ]] || rm -f "$WM_XRAY_PREFLIGHT_FILE"
+    WM_XRAY_PREFLIGHT_FILE=""
+    wm_fail "Could not create transaction"
+  }
   WM_ACTIVE_TRANSACTION="$transaction"; export WM_ACTIVE_TRANSACTION
   trap 'wm_transaction_exit_handler $?' EXIT
   trap 'exit 130' INT; trap 'exit 143' TERM; trap 'exit 129' HUP
   wm_transaction_snapshot "$transaction" || wm_fail "Could not capture transaction backups"
+}
+
+wm_transaction_assert_xray_recovery() {
+  local transaction="$1" role snapshot=""
+  # Recovery CLI has not loaded the saved role yet. Inspect it before changing
+  # live config; retain the operation guard for incomplete legacy snapshots.
+  role="$(python3 - "$transaction" 2>/dev/null <<'PY'
+import json,sys
+from pathlib import Path
+directory=Path(sys.argv[1]); role=""
+config=directory/"config.before.json"
+if config.is_file():
+    role=json.load(config.open(encoding="utf-8")).get("node",{}).get("role","")
+plan=directory/"plan.json"
+if plan.is_file() and json.load(plan.open(encoding="utf-8")).get("operation","").startswith("exit-peer-"):
+    role="exit"
+print(role)
+PY
+)" || return 1
+  # An unloaded CLI role must not classify an unidentified DB backup as
+  # standalone. Only an explicit saved role preserves that compatibility.
+  if [[ -e "$transaction/x-ui.before.db" || -e "$transaction/x-ui.before.db.path" ]]; then
+    [[ "$role" == "entry" || "$role" == "exit" || "$role" == "standalone" ]] || return 1
+  fi
+  if [[ -f "$transaction/xray.before.json" ]]; then
+    snapshot="$transaction/xray.before.json"
+    declare -F wm_xray_assert_log_policy >/dev/null || return 1
+    wm_xray_assert_log_policy "$snapshot" || return 1
+  fi
+  [[ "$role" != "exit" || -n "$snapshot" ]] || return 1
+  if [[ "$role" == "entry" || "$role" == "exit" || -n "$snapshot" ]]; then
+    if [[ -e "$transaction/x-ui.before.db" || -e "$transaction/x-ui.before.db.path" ]]; then
+      [[ -f "$transaction/x-ui.before.db" && -f "$transaction/x-ui.before.db.path" ]] || return 1
+      declare -F wm_xray_assert_db_log_policy >/dev/null || return 1
+      wm_xray_assert_db_log_policy "$transaction/x-ui.before.db" "$snapshot" || return 1
+    fi
+  fi
 }
 
 wm_transaction_post_rollback_check() {
@@ -72,7 +132,9 @@ wm_transaction_post_rollback_check() {
   systemctl is-active --quiet nginx || return 1
   if [[ -f "$transaction/x-ui.before.db" || -f "$transaction/xray.before.json" ]]; then systemctl is-active --quiet x-ui || return 1; fi
   if [[ -f "$transaction/xray.before.json" ]] && declare -F wm_xray_get_template >/dev/null; then
+    wm_xray_assert_log_policy "$transaction/xray.before.json" || return 1
     wm_xray_get_template "$readback" || return 1
+    wm_xray_assert_log_policy "$readback" || return 1
     python3 - "$transaction/xray.before.json" "$readback" <<'PY' || return 1
 import json,sys
 if json.load(open(sys.argv[1],encoding="utf-8")) != json.load(open(sys.argv[2],encoding="utf-8")):
@@ -102,6 +164,11 @@ wm_transaction_wait_xui() {
 wm_transaction_rollback() {
   local transaction="$1" message="${2:-automatic rollback}" failed=0 db="" nginx_conf="${WM_NGINX_MANAGED_CONF:-/etc/nginx/wavemesh-managed-locations.conf}"
   trap - EXIT INT TERM HUP
+  if ! wm_transaction_assert_xray_recovery "$transaction"; then
+    python3 "$WM_TRANSACTION_TOOL" mark --transaction "$transaction" --status rollback_failed --message "Xray snapshot rejected by private log policy" || true
+    wm_warn "Rollback stopped: Xray recovery policy could not be proven; protected snapshots were retained"
+    return 1
+  fi
   python3 "$WM_TRANSACTION_TOOL" mark --transaction "$transaction" --status recovering --message "$message" || failed=1
   [[ ! -f "$transaction/config.before.json" ]] || wm_atomic_install_json "$transaction/config.before.json" "$WM_CONFIG_JSON" || failed=1
   if [[ -f "$transaction/runtime.before.absent" ]]; then rm -f "$WM_RUNTIME_JSON"; elif [[ -f "$transaction/runtime.before.json" ]]; then wm_atomic_install_json "$transaction/runtime.before.json" "$WM_RUNTIME_JSON" || failed=1; fi
@@ -141,6 +208,7 @@ wm_transaction_exit_handler() {
   if (( status != 0 )) && [[ -n "${WM_ACTIVE_TRANSACTION:-}" ]]; then
     if ! wm_transaction_rollback "$WM_ACTIVE_TRANSACTION" "command exited with status ${status}"; then wm_warn "Automatic rollback failed; run wavemesh transaction recover --id $(basename "$WM_ACTIVE_TRANSACTION")"; fi
   fi
+  [[ -z "${WM_XRAY_PREFLIGHT_FILE:-}" ]] || rm -f "$WM_XRAY_PREFLIGHT_FILE"
   exit "$status"
 }
 
@@ -150,6 +218,7 @@ wm_transaction_commit() {
   find "$transaction" -type f -exec chmod 600 {} +
   python3 "$WM_TRANSACTION_TOOL" mark --transaction "$transaction" --status committed
   WM_ACTIVE_TRANSACTION=""; trap - EXIT INT TERM HUP
+  [[ -z "${WM_XRAY_PREFLIGHT_FILE:-}" ]] || rm -f "$WM_XRAY_PREFLIGHT_FILE"
   python3 "$WM_TRANSACTION_TOOL" prune --root "$WM_TRANSACTION_ROOT" --keep "$WM_TRANSACTION_KEEP"
   python3 "$WM_TRANSACTION_TOOL" prune-backups --root "$WM_STATE_DIR/backups" --keep "$WM_TRANSACTION_KEEP"
 }

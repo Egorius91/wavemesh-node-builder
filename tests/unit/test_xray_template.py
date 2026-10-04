@@ -11,6 +11,16 @@ outbound = root / "tests/fixtures/xray-outbound-de.json"
 
 with tempfile.TemporaryDirectory() as name:
     temp = Path(name)
+    subprocess.run([
+        sys.executable, str(tool), "assert-log-policy", "--template", str(template),
+    ], check=True, capture_output=True, text=True)
+    error_level = json.loads(template.read_text(encoding="utf-8"))
+    error_level["log"]["loglevel"] = "error"
+    error_level_file = temp / "error-level.json"
+    error_level_file.write_text(json.dumps(error_level), encoding="utf-8")
+    subprocess.run([
+        sys.executable, str(tool), "assert-log-policy", "--template", str(error_level_file),
+    ], check=True, capture_output=True, text=True)
     first = temp / "first.json"
     second = temp / "second.json"
     removed = temp / "removed.json"
@@ -29,6 +39,7 @@ with tempfile.TemporaryDirectory() as name:
     merge(template, first)
     merge(first, second)
     data = json.loads(second.read_text())
+    assert data["log"] == {"access": "none", "error": "/var/log/wavemesh-node/xray-error.log", "loglevel": "warning", "dnsLog": False, "maskAddress": "full"}
     assert data["api"]["tag"] == "api" and "RoutingService" in data["api"]["services"]
     assert data["inbounds"][0]["listen"] == "127.0.0.1" and data["inbounds"][0]["port"] == 62789
     assert [x["tag"] for x in data["outbounds"]].count("wm-exit-de-fra-1") == 1
@@ -116,5 +127,69 @@ with tempfile.TemporaryDirectory() as name:
     assert all(item.get("tag") != "wm-balancer-auto-europe" for item in removed_auto["routing"].get("balancers", []))
     assert all(item.get("ruleTag") != "wm-rule-auto-europe" for item in removed_auto["routing"]["rules"])
     assert "observatory" not in removed_auto
+    assert removed_auto["log"] == data["log"]
+
+    # Unsafe and unknown log shapes fail closed without echoing config values.
+    for label, change in (
+        ("access", lambda value: value["log"].update(access="/sensitive/access.log")),
+        ("empty-error", lambda value: value["log"].update(error="")),
+        ("unknown-key", lambda value: value["log"].update(extra="private-marker")),
+        ("dns", lambda value: value["log"].update(dnsLog=True)),
+        ("mask", lambda value: value["log"].update(maskAddress="")),
+        ("misplaced", lambda value: value.update(dnsLog=True)),
+        ("omitted-stream", lambda value: value["log"].pop("error")),
+    ):
+        unsafe = json.loads(template.read_text(encoding="utf-8"))
+        change(unsafe)
+        unsafe_file = temp / f"unsafe-{label}.json"
+        unsafe_file.write_text(json.dumps(unsafe), encoding="utf-8")
+        result = subprocess.run([
+            sys.executable, str(tool), "assert-log-policy", "--template", str(unsafe_file),
+        ], check=False, capture_output=True, text=True)
+        assert result.returncode != 0
+        assert "/sensitive/access.log" not in result.stderr and "private-marker" not in result.stderr
+        rejected_candidate = temp / f"rejected-{label}.json"
+        mutation = subprocess.run([
+            sys.executable, str(tool), "merge",
+            "--template", str(unsafe_file), "--outbound", str(outbound),
+            "--inbound-tag", "wm-route-de-fra-1", "--outbound-tag", "wm-exit-de-fra-1",
+            "--rule-tag", "wm-rule-de-fra-1", "--output", str(rejected_candidate),
+        ], check=False, capture_output=True, text=True)
+        assert mutation.returncode != 0 and not rejected_candidate.exists()
+        assert "/sensitive/access.log" not in mutation.stderr and "private-marker" not in mutation.stderr
+
+    # The offline normalizer converts the known legacy shape into a safe
+    # candidate without applying it to a running panel.
+    for label, legacy_log in (
+        ("loglevel-only", {"loglevel": "warning"}),
+        ("empty-streams", {"access": "", "error": "", "loglevel": "warning"}),
+    ):
+        legacy = json.loads(template.read_text(encoding="utf-8"))
+        legacy["log"] = legacy_log
+        legacy_file = temp / f"legacy-{label}.json"
+        migration_candidate = temp / f"migration-candidate-{label}.json"
+        legacy_file.write_text(json.dumps(legacy), encoding="utf-8")
+        subprocess.run([
+            sys.executable, str(tool), "normalize-log-policy-candidate",
+            "--template", str(legacy_file), "--output", str(migration_candidate),
+        ], check=True, capture_output=True, text=True)
+        normalized = json.loads(migration_candidate.read_text(encoding="utf-8"))
+        subprocess.run([
+            sys.executable, str(tool), "assert-log-policy", "--template", str(migration_candidate),
+        ], check=True, capture_output=True, text=True)
+        assert normalized["log"] == {"access": "none", "error": "/var/log/wavemesh-node/xray-error.log", "loglevel": "warning", "dnsLog": False, "maskAddress": "full"}
+        assert {key: value for key, value in normalized.items() if key != "log"} == {key: value for key, value in legacy.items() if key != "log"}
+
+    unknown_legacy = json.loads(template.read_text(encoding="utf-8"))
+    unknown_legacy["log"] = {"loglevel": "warning", "privateField": "sensitive"}
+    unknown_file = temp / "unknown-legacy.json"
+    unknown_file.write_text(json.dumps(unknown_legacy), encoding="utf-8")
+    rejected_migration = temp / "rejected-migration.json"
+    result = subprocess.run([
+        sys.executable, str(tool), "normalize-log-policy-candidate",
+        "--template", str(unknown_file), "--output", str(rejected_migration),
+    ], check=False, capture_output=True, text=True)
+    assert result.returncode != 0 and not rejected_migration.exists()
+    assert "sensitive" not in result.stderr
 
 print("xray template tests: OK")
