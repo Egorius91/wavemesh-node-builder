@@ -39,8 +39,27 @@ else
   [[ -f "$RECOVERY_PENDING" && ! -L "$RECOVERY_PENDING" ]] || fail recovery_token_missing
 fi
 
-install -d -o root -g root -m 0700 "$(dirname "$LOCK_FILE")" "$BACKUP_ROOT"
-exec 9>"$LOCK_FILE"
+lock_parent="$(dirname "$LOCK_FILE")"
+[[ -d "$lock_parent" && ! -L "$lock_parent" ]] || fail recovery_lock_parent_unsafe
+[[ "$(stat -c '%u' "$lock_parent")" == "0" ]] || fail recovery_lock_parent_owner
+# /run/lock is shared system state. Validate it without chmod/chown; a sticky
+# root-owned directory is also valid on platforms using mode 1777.
+lock_parent_mode="$(stat -c '%a' "$lock_parent")"
+[[ "$lock_parent_mode" =~ ^[0-7]{3,4}$ ]] || fail recovery_lock_parent_mode
+(( (8#$lock_parent_mode & 0022) == 0 || (8#$lock_parent_mode & 01000) != 0 )) || fail recovery_lock_parent_writable
+install -d -o root -g root -m 0700 "$BACKUP_ROOT"
+if [[ ! -e "$LOCK_FILE" && ! -L "$LOCK_FILE" ]]; then
+  (umask 077; set -o noclobber; : > "$LOCK_FILE") || fail recovery_lock_creation_raced
+fi
+[[ -f "$LOCK_FILE" && ! -L "$LOCK_FILE" ]] || fail recovery_lock_file_unsafe
+[[ "$(stat -c '%u' "$LOCK_FILE")" == "0" ]] || fail recovery_lock_file_owner
+[[ "$(stat -c '%h' "$LOCK_FILE")" == "1" ]] || fail recovery_lock_file_links
+lock_mode="$(stat -c '%a' "$LOCK_FILE")"
+[[ "$lock_mode" =~ ^[0-7]{3,4}$ ]] || fail recovery_lock_file_mode
+(( (8#$lock_mode & 0022) == 0 )) || fail recovery_lock_file_writable
+# Root ownership plus the admitted parent/sticky bit prevents non-root
+# replacement between validation and open. Never truncate an existing lock.
+exec 9<"$LOCK_FILE"
 flock -n 9 || fail recovery_already_running
 
 backup_id="$(date -u +%Y%m%dT%H%M%SZ)-$$"
