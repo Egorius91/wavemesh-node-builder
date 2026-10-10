@@ -25,6 +25,107 @@ import runtime_state as runtime
 
 
 class ExitObservationTests(unittest.TestCase):
+    def test_actual_common_loader_does_not_write_or_source_state(self):
+        bash = shutil.which("bash") or ("C:/Program Files/Git/bin/bash.exe" if os.name == "nt" else None)
+        self.assertIsNotNone(bash)
+        script = r'''
+set -Eeuo pipefail
+export PATH="/usr/bin:/bin:$PATH"
+python3() { "$TEST_PYTHON" "$@"; }
+WM_LIB_DIR="$TEST_ROOT/scripts"
+source "$WM_LIB_DIR/00_common.sh"
+source "$WM_LIB_DIR/commands/runtime.sh"
+WM_STATE_DIR="$TEST_STATE"; WM_CONFIG_JSON="$TEST_STATE/config.json"
+wm_xui_request_success() { [[ -z "$PANEL_USERNAME" && -z "$PANEL_PASSWORD" && -z "$CLIENT_UUIDS" ]]; [[ -n "$PANEL_TOKEN" ]] || touch "$TEST_STATE/unexpected-login"; [[ "$*" == 'GET /panel/api/inbounds/list none' ]]; }
+systemctl() { return 0; }
+wm_xray_process_running() { return 0; }
+ss() { printf 'LISTEN 0 10 127.0.0.1:2053\n'; }
+openssl() { return 0; }
+wm_exit_diagnostics_json
+'''
+        with tempfile.TemporaryDirectory() as directory:
+            state = Path(directory)
+            config = {
+                "schema_version": 2, "node": {"role": "exit"},
+                "server": {"domain": "example.invalid"}, "tls": {},
+                "panel": {"listen_port": 2053, "path": "/panel/", "api_auth": {"token": "private-fixture-do-not-emit"}, "username": "unused", "password": "unused"},
+                "network": {"xhttp": {"port": 10080, "path": "/relay/"}, "subscription": {"path": "/sub/"}},
+                "web_identity": {"company_name": "unused"}, "clients": [],
+            }
+            (state / "runtime.json").write_text('{"unchanged":true}')
+            (state / "route.marker").write_text("unchanged")
+
+            def snapshot():
+                return {p.name: (p.read_bytes(), p.stat().st_mode, p.stat().st_mtime_ns) for p in state.iterdir() if p.is_file()}
+
+            for env_exists in (True, False):
+                with self.subTest(env_exists=env_exists):
+                    env = state / "config.env"
+                    if env_exists:
+                        env.write_text('touch "$TEST_STATE/source-marker"\n')
+                        env.chmod(0o640)
+                    elif env.exists():
+                        env.unlink()
+                    (state / "config.json").write_text(json.dumps(config))
+                    before = snapshot()
+                    done = subprocess.run([bash, "-c", script], env={**os.environ, "TEST_ROOT": ROOT.as_posix(), "TEST_STATE": state.as_posix(), "TEST_PYTHON": Path(sys.executable).as_posix()}, capture_output=True, text=True, timeout=20)
+                    self.assertTrue(before == snapshot(), "state bytes/mode/mtime changed")
+                    self.assertEqual(done.returncode, 0, "valid Exit config was rejected")
+                    self.assertEqual(json.loads(done.stdout)["node_status"], "healthy")
+                    self.assertNotIn("private-fixture", done.stdout + done.stderr)
+
+            variants = []
+            opaque = json.loads(json.dumps(config))
+            opaque["panel"]["path"] = '/$(touch "$TEST_STATE/injection-marker")/`touch "$TEST_STATE/backtick-marker"`/\'quoted/'
+            opaque["panel"]["api_auth"]["token"] = opaque["panel"]["path"]
+            opaque["panel"]["password"] = {"unused": "never interpreted"}
+            opaque["clients"] = [{"uuid": "unused"}]
+            variants.append(("opaque-quotes", json.dumps(opaque), "healthy"))
+            missing_token = json.loads(json.dumps(config))
+            del missing_token["panel"]["api_auth"]["token"]
+            variants.append(("missing-bearer", json.dumps(missing_token), "unhealthy"))
+            variants.extend([(label, value, None) for label, value in (
+                ("missing-file", None), ("malformed-json", '{"private-fixture":'),
+                ("array-config", "[]"), ("missing-fields", "{}"),
+            )])
+            for port in (True, "2053", 0, 65536, None):
+                invalid = json.loads(json.dumps(config))
+                invalid["panel"]["listen_port"] = port
+                variants.append(("invalid-port-" + str(port), json.dumps(invalid), None))
+            for field, value in (("path", "no-slash"), ("path", "/bad\0path"), ("path", "/bad\npath"), ("path", None)):
+                invalid = json.loads(json.dumps(config))
+                invalid["panel"][field] = value
+                variants.append(("invalid-path", json.dumps(invalid), None))
+            for token in ("bad\0token", "bad\ntoken", None, []):
+                invalid = json.loads(json.dumps(config))
+                invalid["panel"]["api_auth"]["token"] = token
+                variants.append(("invalid-token", json.dumps(invalid), None))
+            for role in ("entry", "", None, []):
+                invalid = json.loads(json.dumps(config))
+                invalid["node"]["role"] = role
+                variants.append(("invalid-role", json.dumps(invalid), None))
+            invalid = json.loads(json.dumps(config))
+            invalid["server"]["domain"] = '../../$(touch "$TEST_STATE/domain-marker")'
+            variants.append(("invalid-domain", json.dumps(invalid), None))
+            (state / "config.env").write_text('touch "$TEST_STATE/source-marker"\n')
+            for label, body, expected in variants:
+                with self.subTest(config_case=label):
+                    target = state / "config.json"
+                    if body is None:
+                        target.unlink(missing_ok=True)
+                    else:
+                        target.write_text(body)
+                    before = snapshot()
+                    done = subprocess.run([bash, "-c", script], env={**os.environ, "TEST_ROOT": ROOT.as_posix(), "TEST_STATE": state.as_posix(), "TEST_PYTHON": Path(sys.executable).as_posix()}, capture_output=True, text=True, timeout=20)
+                    self.assertTrue(before == snapshot(), "state bytes/mode/mtime changed")
+                    self.assertNotIn("private-fixture", done.stdout + done.stderr)
+                    if expected is None:
+                        self.assertNotEqual(done.returncode, 0)
+                        self.assertEqual(done.stdout, "")
+                    else:
+                        self.assertEqual(done.returncode, 0, "valid Exit config was rejected")
+                        self.assertEqual(json.loads(done.stdout)["node_status"], expected)
+
     def test_native_control_health_requires_every_factual_probe(self):
         required = {"service": "active", "api": "reachable", "xray": "running", "panel_bind": "loopback", "bearer": "valid", "nginx": "active", "tls": "valid"}
         self.assertEqual(runtime.control_health({"control": required})["node_status"], "healthy")
@@ -51,7 +152,7 @@ set -Eeuo pipefail
 python3() { "$TEST_PYTHON" "$@"; }
 WM_LIB_DIR="$TEST_ROOT/scripts"
 source "$WM_LIB_DIR/commands/runtime.sh"
-wm_load_config() { NODE_ROLE="${TEST_ROLE:-exit}"; PANEL_TOKEN=private-fixture-do-not-emit; PANEL_PORT=2053; DOMAIN=example.invalid; [[ "$FAULT" != bearer ]] || PANEL_TOKEN=""; }
+wm_load_exit_diagnostic_config() { NODE_ROLE="${TEST_ROLE:-exit}"; PANEL_TOKEN=private-fixture-do-not-emit; PANEL_PORT=2053; DOMAIN=example.invalid; [[ "$FAULT" != bearer ]] || PANEL_TOKEN=""; }
 wm_fail() { printf '%s\n' "$*" >&2; exit 1; }
 wm_xui_request_success() { [[ "$*" == 'GET /panel/api/inbounds/list none' ]]; printf 'private-fixture-do-not-emit'; [[ "$FAULT" != api ]]; }
 systemctl() { [[ "$*" == 'is-active --quiet x-ui' || "$*" == 'is-active --quiet nginx' ]]; [[ "$FAULT" != "$3" ]]; }

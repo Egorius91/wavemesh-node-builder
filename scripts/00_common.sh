@@ -334,6 +334,35 @@ wm_load_config() {
   source "$WM_STATE_DIR/config.env"
 }
 
+wm_load_exit_diagnostic_config() {
+  local -a fields=()
+  # Read only the Exit probe inputs. Do not source/export/migrate config.env.
+  # Validate before emitting any fields; failed subprocesses cannot yield a
+  # partially usable config. NUL framing avoids shell interpretation entirely.
+  mapfile -d '' -t fields < <(python3 - "$WM_CONFIG_JSON" <<'PY'
+import json, re, sys
+try:
+    with open(sys.argv[1], encoding="utf-8") as handle:
+        cfg = json.load(handle)
+    panel = cfg["panel"]
+    port = panel["listen_port"]
+    fields = [cfg["node"]["role"], cfg["server"]["domain"], str(port), panel["path"], panel.get("api_auth", {}).get("token", panel.get("token", ""))]
+    if type(port) is not int or not 1 <= port <= 65535:
+        raise ValueError()
+    if not all(isinstance(value, str) and not any(ord(c) < 32 or ord(c) == 127 for c in value) for value in fields):
+        raise ValueError()
+    if fields[0] != "exit" or not re.fullmatch(r"[A-Za-z0-9.-]{1,253}", fields[1]) or not fields[3].startswith("/"):
+        raise ValueError()
+    encoded = ("\0".join(fields) + "\0").encode("utf-8")
+except (OSError, ValueError, KeyError, TypeError, AttributeError):
+    sys.exit(1)
+sys.stdout.buffer.write(encoded)
+PY
+)
+  [[ ${#fields[@]} == 5 ]] || wm_fail "Missing or invalid Exit diagnostic configuration"
+  NODE_ROLE="${fields[0]}"; DOMAIN="${fields[1]}"; PANEL_PORT="${fields[2]}"; PANEL_PATH="${fields[3]}"; PANEL_TOKEN="${fields[4]}"
+}
+
 wm_install_cli() {
   local project_dir
   project_dir="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"

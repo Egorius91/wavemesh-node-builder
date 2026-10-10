@@ -63,7 +63,7 @@ PY
 
 wm_exit_diagnostics_json() {
   local probes api_ok=false result=0
-  wm_load_config
+  wm_load_exit_diagnostic_config
   [[ "$NODE_ROLE" == "exit" ]] || wm_fail "JSON diagnostics requires an exit node"
   probes="$(mktemp)"; chmod 600 "$probes"
   # Do not fall back to panel login or expose its response/configuration.

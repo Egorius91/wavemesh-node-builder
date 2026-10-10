@@ -30,7 +30,10 @@ from an active x-ui service, authenticated bearer API read, running Xray process
 loopback panel listener, active nginx service, and unexpired TLS certificate.
 Every required probe must pass; missing probes or faults report `unhealthy`
 and the heartbeat stays `degraded`. No routes or downstream Exit counts apply
-to this observation. Control readiness does not prove relay/peer configuration,
+to this observation. Exit diagnostics reads only its probe inputs from
+`config.json`; it does not source or write `config.env`, migrate configuration,
+or fall back to a panel login. Invalid/missing configuration fails closed.
+Control readiness does not prove relay/peer configuration,
 VPN traffic, privacy acceptance, or release readiness. Command mode remains
 disabled by default; diagnostics does not enable polling or execution.
 
