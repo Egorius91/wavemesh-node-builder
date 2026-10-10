@@ -226,6 +226,14 @@ def transition(previous, success, enabled=True, misconfigured=False):
     return status, 0, failures
 
 
+def control_health(probes):
+    """Native control readiness; no relay traffic or peer acceptance claim."""
+    required = {"service": "active", "api": "reachable", "xray": "running", "panel_bind": "loopback", "bearer": "valid", "nginx": "active", "tls": "valid"}
+    control = probes.get("control") if isinstance(probes, dict) else None
+    healthy = isinstance(control, dict) and all(control.get(key) == expected for key, expected in required.items())
+    return {"node_status": "healthy" if healthy else "unhealthy", "observed_at": utc_now(), "routes": []}
+
+
 def evaluate(config, previous, inbounds_response, template, nginx_text, subscription_dir, probes):
     observed_at = utc_now()
     actual_inbounds = parse_inbounds(inbounds_response)
@@ -381,6 +389,8 @@ def main():
     plan.add_argument("--config", required=True); plan.add_argument("--runtime", required=True); plan.add_argument("--json", action="store_true")
     status = sub.add_parser("status")
     status.add_argument("--config", required=True); status.add_argument("--runtime", required=True); status.add_argument("--json", action="store_true")
+    control = sub.add_parser("control-health")
+    control.add_argument("--probes", required=True)
     sync = sub.add_parser("sync")
     sync.add_argument("--config", required=True); sync.add_argument("--runtime", required=True); sync.add_argument("--output", required=True)
     args = parser.parse_args()
@@ -404,6 +414,8 @@ def main():
         print(json.dumps(actions, indent=2) if args.json else ("No managed drift detected" if not actions else "\n".join(f"{item['route_id']}\t{item['component']}\t{item['action']}" for item in actions)))
     elif args.command == "status":
         print(render_status(load(args.config), load(args.runtime, {}), args.json))
+    elif args.command == "control-health":
+        print(json.dumps(control_health(load(args.probes, {})), separators=(",", ":")))
     else:
         atomic(args.output, sync_runtime(load(args.config), load(args.runtime, {})))
 

@@ -44,16 +44,9 @@ PY
   chmod 600 "$file"
 }
 
-wm_runtime_health() {
-  local as_json=0 requested_exit="" transaction inbounds template probes nginx_file api_ok=false api_state=unreachable xui_service=inactive xray_state=stopped panel_bind=exposed bearer_state=invalid nginx_state=inactive tls_state=invalid
-  while [[ $# -gt 0 ]]; do case "$1" in --json) as_json=1; shift;; --exit-id) requested_exit="${2:-}"; shift 2;; *) wm_fail "Unknown health option: $1";; esac; done
-  wm_load_config; wm_require_entry_role
-  if [[ -n "$requested_exit" ]] && ! python3 -c 'import json,sys; cfg=json.load(open(sys.argv[1],encoding="utf-8")); sys.exit(0 if any(x.get("id")==sys.argv[2] for x in cfg.get("exits",[])) else 1)' "$WM_CONFIG_JSON" "$requested_exit"; then wm_fail "Exit not found: ${requested_exit}"; fi
-  transaction="$(mktemp -d)"; chmod 700 "$transaction"
-  inbounds="$transaction/inbounds.json"; template="$transaction/xray.json"; probes="$transaction/probes.json"; nginx_file="${WM_NGINX_MANAGED_CONF:-/etc/nginx/wavemesh-managed-locations.conf}"
-  printf '{"obj":[]}\n' > "$inbounds"; printf '{}\n' > "$template"
-  if wm_xui_request_success GET /panel/api/inbounds/list none > "$inbounds"; then api_ok=true; api_state=reachable; fi
-  wm_xray_get_template "$template" || printf '{}\n' > "$template"
+wm_runtime_control_probe() {
+  local probes="$1" api_ok="$2" api_state=unreachable xui_service=inactive xray_state=stopped panel_bind=exposed bearer_state=invalid nginx_state=inactive tls_state=invalid
+  $api_ok && api_state=reachable || true
   systemctl is-active --quiet x-ui && xui_service=active || true
   wm_xray_process_running && xray_state=running || true
   if ss -ltnH 2>/dev/null | awk '{print $4}' | grep -Eq "^(127\\.0\\.0\\.1|\\[::1\\]):${PANEL_PORT}$"; then panel_bind=loopback; fi
@@ -66,6 +59,32 @@ data={"control":{"service":os.environ["XUI_SERVICE"],"api":os.environ["API_STATE
 with open(os.environ["PROBES"],"w",encoding="utf-8") as out: json.dump(data,out,separators=(",",":")); out.write("\n")
 PY
   chmod 600 "$probes"
+}
+
+wm_exit_diagnostics_json() {
+  local probes api_ok=false result=0
+  wm_load_config
+  [[ "$NODE_ROLE" == "exit" ]] || wm_fail "JSON diagnostics requires an exit node"
+  probes="$(mktemp)"; chmod 600 "$probes"
+  # Do not fall back to panel login or expose its response/configuration.
+  if [[ -n "${PANEL_TOKEN:-}" ]] && wm_xui_request_success GET /panel/api/inbounds/list none >/dev/null 2>&1; then api_ok=true; fi
+  wm_runtime_control_probe "$probes" "$api_ok"
+  python3 "$WM_RUNTIME_TOOL" control-health --probes "$probes" || result=$?
+  rm -f "$probes"
+  return "$result"
+}
+
+wm_runtime_health() {
+  local as_json=0 requested_exit="" transaction inbounds template probes nginx_file api_ok=false
+  while [[ $# -gt 0 ]]; do case "$1" in --json) as_json=1; shift;; --exit-id) requested_exit="${2:-}"; shift 2;; *) wm_fail "Unknown health option: $1";; esac; done
+  wm_load_config; wm_require_entry_role
+  if [[ -n "$requested_exit" ]] && ! python3 -c 'import json,sys; cfg=json.load(open(sys.argv[1],encoding="utf-8")); sys.exit(0 if any(x.get("id")==sys.argv[2] for x in cfg.get("exits",[])) else 1)' "$WM_CONFIG_JSON" "$requested_exit"; then wm_fail "Exit not found: ${requested_exit}"; fi
+  transaction="$(mktemp -d)"; chmod 700 "$transaction"
+  inbounds="$transaction/inbounds.json"; template="$transaction/xray.json"; probes="$transaction/probes.json"; nginx_file="${WM_NGINX_MANAGED_CONF:-/etc/nginx/wavemesh-managed-locations.conf}"
+  printf '{"obj":[]}\n' > "$inbounds"; printf '{}\n' > "$template"
+  if wm_xui_request_success GET /panel/api/inbounds/list none > "$inbounds"; then api_ok=true; fi
+  wm_xray_get_template "$template" || printf '{}\n' > "$template"
+  wm_runtime_control_probe "$probes" "$api_ok"
 
   local route_id exit_id inbound_tag outbound_tag inbound_file outbound_file started latency route_ok outbound_ok error
   while IFS=$'\t' read -r route_id exit_id inbound_tag outbound_tag; do

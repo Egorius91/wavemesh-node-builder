@@ -24,6 +24,16 @@ The agent reports route IDs, Exit IDs, enabled state, health state, latency, and
 aggregate Exit counts. It omits display names, outbound tags, selectors,
 credentials, UUIDs, subscription material, panel paths, domains, and URLs.
 
+On an Exit, the agent uses `wavemesh diagnostics --json` instead of the
+Entry-only cascade and Auto Route checks. It reports native control readiness
+from an active x-ui service, authenticated bearer API read, running Xray process,
+loopback panel listener, active nginx service, and unexpired TLS certificate.
+Every required probe must pass; missing probes or faults report `unhealthy`
+and the heartbeat stays `degraded`. No routes or downstream Exit counts apply
+to this observation. Control readiness does not prove relay/peer configuration,
+VPN traffic, privacy acceptance, or release readiness. Command mode remains
+disabled by default; diagnostics does not enable polling or execution.
+
 ## Prerequisites
 
 - an installed WaveMesh node with `/etc/wavemesh-node/config.json`;
@@ -76,7 +86,7 @@ sudo python3 agent/node_agent.py once \
   --env-file /etc/wavemesh-agent/agent.env
 ```
 
-This performs credential rotation only when due, refreshes cascade health,
+This performs credential rotation only when due, refreshes role-specific health,
 sends one changed-state observation, and sends one heartbeat.
 
 ## Install the service
