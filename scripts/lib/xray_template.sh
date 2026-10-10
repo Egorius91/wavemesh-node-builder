@@ -67,7 +67,7 @@ PY
 }
 
 wm_xray_test_outbound() {
-  local outbound_file="$1" all_file="$2" outbound all payload response_file result rc error
+  local outbound_file="$1" all_file="$2" outbound all payload response_file result rc
   outbound="$(cat "$outbound_file")"; all="$(python3 - "$all_file" <<'PY'
 import json,sys
 print(json.dumps(json.load(open(sys.argv[1],encoding="utf-8")).get("outbounds",[]),separators=(",",":")))
@@ -89,8 +89,7 @@ PY
   fi
   rm -f "$response_file"
   if (( rc != 0 )); then
-    error="$(printf '%s' "$result" | python3 -c 'import json,sys; print((json.load(sys.stdin).get("error") or "unsupported testOutbound result")[:200])' 2>/dev/null || printf 'unsupported testOutbound result')"
-    wm_warn "3X-UI outbound data-plane probe failed: ${error}"
+    wm_warn "3X-UI outbound data-plane probe failed"
     return 1
   fi
 }

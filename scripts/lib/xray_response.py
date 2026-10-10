@@ -92,6 +92,8 @@ def main():
     response = json.loads(Path(args.response).read_text(encoding="utf-8"))
     if args.kind == "test-outbound":
         result = extract_test_outbound(response)
+        # Panel-controlled error text is internal data, not a public diagnostic.
+        result["error"] = None if result["success"] else "outbound probe failed"
         print(json.dumps(result, separators=(",", ":"), sort_keys=True))
         raise SystemExit(0 if result["success"] else 1)
     if not args.output:

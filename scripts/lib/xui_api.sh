@@ -41,7 +41,7 @@ PY
 }
 
 wm_xui_request() {
-  local method="$1" path="$2" content_type="${3:-json}" payload="${4:-}" url body_file status auth_mode
+  local method="$1" path="$2" content_type="${3:-json}" payload="${4:-}" url body_file status auth_mode diagnostic_status
   url="$(wm_xui_api_url "$path")"
   body_file="$(mktemp)"
   auth_mode="cookie"
@@ -68,7 +68,9 @@ wm_xui_request() {
 
   status="$(curl "${args[@]}" "$url" 2>/dev/null || true)"
   if [[ ! "$status" =~ ^2[0-9][0-9]$ ]]; then
-    wm_warn "3X-UI ${method} ${path} failed with HTTP ${status:-transport-error} (${auth_mode} auth)"
+    diagnostic_status="transport-error"
+    [[ "$status" =~ ^[0-9]{3}$ ]] && diagnostic_status="$status"
+    wm_warn "3X-UI request failed with HTTP ${diagnostic_status} (${auth_mode} auth)"
     rm -f "$body_file"
     return 1
   fi
@@ -80,7 +82,7 @@ wm_xui_request_success() {
   local response
   response="$(wm_xui_request "$@")" || return 1
   if ! printf '%s' "$response" | wm_xui_response_success; then
-    wm_warn "3X-UI operation failed: $(printf '%s' "$response" | wm_xui_response_message)"
+    wm_warn "3X-UI operation failed"
     return 1
   fi
   printf '%s' "$response"
