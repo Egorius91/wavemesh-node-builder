@@ -766,8 +766,13 @@ class NodeAgent:
             pass
 
     def collect_and_send_observation(self) -> None:
-        route_health = run_json_command(["wavemesh", "cascade", "health", "--json"], timeout=90)
-        auto_health = run_json_command(["wavemesh", "cascade", "auto", "health", "--json"], timeout=90)
+        config = read_json_file(NODE_CONFIG_PATH, default={})
+        if (config.get("node") or {}).get("role") == "exit":
+            route_health = run_json_command(["wavemesh", "diagnostics", "--json"], timeout=90)
+            auto_health = {}
+        else:
+            route_health = run_json_command(["wavemesh", "cascade", "health", "--json"], timeout=90)
+            auto_health = run_json_command(["wavemesh", "cascade", "auto", "health", "--json"], timeout=90)
         state = build_observation_state(route_health, auto_health)
         assert_redacted(state)
         self.last_health_state = state
