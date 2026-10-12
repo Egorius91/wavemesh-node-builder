@@ -555,6 +555,27 @@ def validate_identity_uri(value: str) -> None:
         raise MtlsStateError("Node mTLS identity URI is invalid")
 
 
+def canonical_csr_pem(value: str) -> str:
+    """Match SaaS foundation.normalizePem for CSR requestHash, not DER hashing.
+
+    Keep the persisted OpenSSL serialization unchanged. ECMAScript trim handles
+    BOM/Unicode whitespace differently from Python's implicit str.strip set.
+    The canonical body is one base64 line and the result has no final newline.
+    """
+    if not isinstance(value, str) or "\0" in value:
+        raise MtlsStateError("CSR PEM value is invalid")
+    js_trim = "\t\v\f \u00a0\ufeff\n\r\u2028\u2029\u1680\u202f\u205f\u3000" + "".join(chr(item) for item in range(0x2000, 0x200B))
+    trimmed = value.strip(js_trim).replace("\r\n", "\n")
+    begin = "-----BEGIN CERTIFICATE REQUEST-----"
+    end = "-----END CERTIFICATE REQUEST-----"
+    if not trimmed.startswith(begin + "\n") or not trimmed.endswith("\n" + end):
+        raise MtlsStateError("CSR PEM envelope is invalid")
+    body = trimmed[len(begin) + 1:-(len(end) + 1)].replace("\n", "")
+    if len(body) < 16 or re.fullmatch(r"[A-Za-z0-9+/=]+", body) is None:
+        raise MtlsStateError("CSR PEM body is invalid")
+    return begin + "\n" + body + "\n" + end
+
+
 def validate_pem(value: str, label: str) -> bytes:
     if not isinstance(value, str) or "\0" in value:
         raise MtlsStateError("PEM value is invalid")

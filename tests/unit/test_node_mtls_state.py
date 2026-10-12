@@ -4,6 +4,7 @@ from __future__ import annotations
 import importlib.util
 from datetime import datetime, timedelta, timezone
 import json
+import hashlib
 import os
 from pathlib import Path
 import shutil
@@ -33,6 +34,36 @@ def assert_posix_mode(case: unittest.TestCase, path: Path, expected: int) -> Non
 
 @unittest.skipUnless(OPENSSL, "OpenSSL is required")
 class NodeMtlsStateTests(unittest.TestCase):
+    def test_real_wrapped_csr_matches_saas_canonical_bytes_without_changing_der_or_pending(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            state = mtls.NodeMtlsState(Path(directory) / "tls", openssl_binary=OPENSSL)
+            pending = state.prepare_pending_request()
+            original = state.pending_csr.read_bytes()
+            lines = pending.csr_pem.strip().splitlines()
+            self.assertGreater(len(lines[1:-1]), 1, "OpenSSL fixture must contain a wrapped body")
+            body = "".join(lines[1:-1])
+            self.assertGreaterEqual(len(body), 16)
+            self.assertRegex(body, r"^[A-Za-z0-9+/=]+$")
+            # Independent SaaS normalizePem byte contract: only envelope/body
+            # content is used here; no call to the implementation under test.
+            expected = "-----BEGIN CERTIFICATE REQUEST-----\n" + body + "\n-----END CERTIFICATE REQUEST-----"
+            expected_hash = hashlib.sha256(expected.encode("ascii")).hexdigest()
+            rewrapped = "\r\n".join([lines[0], *[body[index:index + 37] for index in range(0, len(body), 37)], lines[-1]])
+            variants = (pending.csr_pem, pending.csr_pem.rstrip("\n"), pending.csr_pem.replace("\n", "\r\n"), rewrapped, expected)
+            for index, variant in enumerate(variants):
+                with self.subTest(shape=index):
+                    self.assertEqual(mtls.canonical_csr_pem(variant).encode("ascii"), expected.encode("ascii"))
+                    self.assertEqual(hashlib.sha256(mtls.canonical_csr_pem(variant).encode()).hexdigest(), expected_hash)
+                    variant_file = state.pending_dir / "canonical-shape.csr"
+                    mtls.atomic_write_bytes(variant_file, variant.encode(), 0o600)
+                    self.assertEqual(state._csr_hash(variant_file), pending.request_hash)
+                    state._run(["req", "-in", str(variant_file), "-verify", "-noout"])
+                    pub = state._run_bytes(["req", "-in", str(variant_file), "-pubkey", "-noout"])
+                    pub_der = state._run_bytes(["pkey", "-pubin", "-outform", "DER"], input_bytes=pub)
+                    self.assertEqual(hashlib.sha256(pub_der).hexdigest(), pending.public_key_hash)
+            self.assertEqual(state.pending_csr.read_bytes(), original)
+            self.assertEqual(state.prepare_pending_request(), pending)
+
     def test_activation_remnants_require_matching_active_ack_and_file_lineage(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
             state = mtls.NodeMtlsState(Path(directory) / "tls", openssl_binary=OPENSSL)
@@ -367,6 +398,23 @@ def run_openssl(arguments: list[str]) -> None:
     )
     if completed.returncode != 0:
         raise AssertionError(completed.stderr.decode("utf-8", errors="replace"))
+
+
+class CanonicalCsrPemTests(unittest.TestCase):
+    def test_saas_trim_body_wrap_and_no_final_newline_contract(self):
+        begin, body, end = "-----BEGIN CERTIFICATE REQUEST-----", "QUJDREVGR0hJSktMTU5PUA==", "-----END CERTIFICATE REQUEST-----"
+        expected = begin + "\n" + body + "\n" + end
+        value = "\ufeff\u00a0\t" + begin + "\r\n" + body[:16] + "\r\n" + body[16:] + "\r\n" + end + "\r\n\t\u00a0"
+        self.assertEqual(mtls.canonical_csr_pem(value), expected)
+        self.assertFalse(mtls.canonical_csr_pem(value).endswith("\n"))
+
+    def test_saas_rejects_short_body_internal_space_cr_and_non_js_trim_whitespace(self):
+        begin, body, end = "-----BEGIN CERTIFICATE REQUEST-----", "QUJDREVGR0hJSktMTU5PUA==", "-----END CERTIFICATE REQUEST-----"
+        valid = begin + "\n" + body + "\n" + end
+        for value in (begin + "\nshort\n" + end, valid.replace(body, body[:8] + " " + body[8:]),
+                      valid.replace(body, body[:8] + "\r" + body[8:]), "\u0085" + valid, valid + "\0"):
+            with self.assertRaises(mtls.MtlsStateError):
+                mtls.canonical_csr_pem(value)
 
 
 if __name__ == "__main__":

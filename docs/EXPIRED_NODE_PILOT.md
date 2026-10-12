@@ -62,7 +62,10 @@ The supervisor calls it before reserve. The resulting `localRequestHash`,
 `pendingPublicKeyHash` and `pemRequestHash` are mandatory reserve bindings. The
 pending public key is distinct from the expired leaf's `publicKeyHash`; comparing
 these keys would incorrectly reject a normal recovery that uses a fresh key.
-`pemRequestHash` is SHA256 of stripped, CRLF-normalized PEM plus its final newline.
+`pemRequestHash` is SHA256 of SaaS foundation canonical CSR PEM: trim surrounding
+ECMAScript whitespace, normalize CRLF to LF, collapse all body LF into one base64
+line, and return `BEGIN\nBODY\nEND` with **no final newline**. The original persisted
+OpenSSL CSR serialization is retained; `localRequestHash` remains SHA256 of CSR DER.
 Every successful protocol response also returns the verified
 `helperSourceSha256` and immutable `configSha256` for the central pinned
 artifact/config admission.

@@ -28,6 +28,7 @@ try:
         PRIVATE_FILE_MODE,
         atomic_write_json,
         unique_json_object,
+        canonical_csr_pem,
     )
 except ImportError:  # pragma: no cover - package-style imports in tests
     from .node_agent import (
@@ -43,6 +44,7 @@ except ImportError:  # pragma: no cover - package-style imports in tests
         PRIVATE_FILE_MODE,
         atomic_write_json,
         unique_json_object,
+        canonical_csr_pem,
     )
 
 DEFAULT_ENV_FILE = Path("/etc/wavemesh-agent/agent.env")
@@ -77,7 +79,7 @@ def validate_no_sign_proof(proof: dict, marker: dict, pending: Any) -> None:
         if not isinstance(item, str) or str(UUID(item)) != item or UUID(item).version != 4:
             raise RecoveryError("No-SIGN final receipt identity invalid")
     require_scope_id(proof["authorization_id"], "Recovery authorization ID")
-    canonical_pem = pending.csr_pem.strip().replace("\r\n", "\n") + "\n"
+    canonical_pem = canonical_csr_pem(pending.csr_pem)
     if (proof["operation_id"] != marker.get("operation_id") or proof["local_request_hash"] != marker["request_hash"]
             or proof["pending_public_key_hash"] != marker["public_key_hash"]
             or proof["local_request_hash"] != pending.request_hash or proof["pending_public_key_hash"] != pending.public_key_hash

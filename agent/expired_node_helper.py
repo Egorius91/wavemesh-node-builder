@@ -15,7 +15,7 @@ import sys
 from uuid import UUID
 
 from node_expired_identity import inspect_expired, private_path
-from node_mtls_state import MtlsStateError, atomic_write_json, atomic_write_bytes, read_json_object, unique_json_object
+from node_mtls_state import MtlsStateError, atomic_write_json, atomic_write_bytes, read_json_object, unique_json_object, canonical_csr_pem
 from node_recovery import RecoveryClient, RECOVERY_TOKEN_PATTERN, require_credential_id, validate_no_sign_proof
 
 CONFIG = Path("/etc/wavemesh-agent/expired-pilot.json")
@@ -346,7 +346,7 @@ def reconcile_persisted_credential(client: RecoveryClient, marker: dict, data: d
     if marker.get("operation_id") != data["operationId"] or local_hash != marker["request_hash"] or not HASH.fullmatch(pem_hash or ""):
         raise MtlsStateError("Persisted receipt CSR binding mismatch")
     pending = client.state._load_and_validate_pending()
-    canonical_pem = pending.csr_pem.strip().replace("\r\n", "\n") + "\n"
+    canonical_pem = canonical_csr_pem(pending.csr_pem)
     if hashlib.sha256(canonical_pem.encode()).hexdigest() != pem_hash:
         raise MtlsStateError("Persisted receipt canonical CSR binding mismatch")
     client._write_marker(client._bind_credential(marker, credential))

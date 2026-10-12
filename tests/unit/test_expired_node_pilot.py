@@ -119,10 +119,10 @@ class CapabilityTests(unittest.TestCase):
             execute.assert_called_once()
 
     def no_sign_fixture(self):
-        pem = "-----BEGIN CERTIFICATE REQUEST-----\nfixture\n-----END CERTIFICATE REQUEST-----\n"
+        pem = "-----BEGIN CERTIFICATE REQUEST-----\nRml4dHVyZUNzclBlbQ==\n-----END CERTIFICATE REQUEST-----\n"
         pending = SimpleNamespace(csr_pem=pem, request_hash="1" * 64, public_key_hash="2" * 64)
         proof = {"schema_version": 1, "receipt_id": str(uuid4()), "operation_id": self.binding["operationId"],
-                 "authorization_id": "authorization_12345678", "pem_request_hash": hashlib.sha256(pem.encode()).hexdigest(),
+                 "authorization_id": "authorization_12345678", "pem_request_hash": hashlib.sha256(mtls.canonical_csr_pem(pem).encode()).hexdigest(),
                  "local_request_hash": pending.request_hash, "pending_public_key_hash": pending.public_key_hash,
                  "observed_at": datetime.now(timezone.utc).isoformat()}
         marker = {"operation_id": self.binding["operationId"], "dispatch_state": "KNOWN_NO_SIGN", "credential_id": None,

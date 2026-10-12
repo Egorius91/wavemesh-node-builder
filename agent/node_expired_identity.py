@@ -6,7 +6,7 @@ from pathlib import Path
 import re
 import stat
 
-from node_mtls_state import NodeMtlsState, MtlsStateError, read_json_object, require_sha256, sha256_text
+from node_mtls_state import NodeMtlsState, MtlsStateError, read_json_object, require_sha256, sha256_text, canonical_csr_pem
 
 
 def private_path(path: Path, directory: bool = False, max_bytes: int | None = 256 * 1024) -> None:
@@ -112,7 +112,7 @@ def inspect_expired(state: NodeMtlsState, identity: str, baseline: dict, minimum
         pending = state._load_and_validate_pending()
         pending_hash = pending.request_hash
         pending_public_hash = pending.public_key_hash
-        pem_hash = hashlib.sha256((pending.csr_pem.strip().replace("\r\n", "\n") + "\n").encode()).hexdigest()
+        pem_hash = hashlib.sha256(canonical_csr_pem(pending.csr_pem).encode()).hexdigest()
     return {"ok": True, "code": "INTACT_EXPIRED", "certificateFingerprintHash": fingerprint,
             "certificateSerialHash": sha256_text(serial), "publicKeyHash": public_hash,
             "identityUriHash": sha256_text(identity), "trustedCaBundleSha256": ca_hash,

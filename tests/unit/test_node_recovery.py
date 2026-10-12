@@ -522,7 +522,7 @@ class NodeRecoveryTests(unittest.TestCase):
     def test_exact_final_pre_sign_refusal_persists_proof_but_no_direct_retry(self):
         operation = str(uuid4())
         proof = {"schema_version": 1, "receipt_id": str(uuid4()), "operation_id": operation,
-                 "authorization_id": "authorization_12345678", "pem_request_hash": hashlib.sha256(CSR.encode()).hexdigest(),
+                 "authorization_id": "authorization_12345678", "pem_request_hash": hashlib.sha256(recovery.canonical_csr_pem(CSR).encode()).hexdigest(),
                  "local_request_hash": REQUEST_HASH, "pending_public_key_hash": PUBLIC_KEY_HASH,
                  "observed_at": recovery.format_timestamp(datetime.now(timezone.utc))}
         error = recovery.error.HTTPError("https://example.invalid/recover", 409, "refused", {},
@@ -542,7 +542,7 @@ class NodeRecoveryTests(unittest.TestCase):
     def test_mismatched_no_sign_receipt_never_downgrades_unknown_dispatch(self):
         operation = str(uuid4())
         proof = {"schema_version": 1, "receipt_id": str(uuid4()), "operation_id": str(uuid4()),
-                 "authorization_id": "authorization_12345678", "pem_request_hash": hashlib.sha256(CSR.encode()).hexdigest(),
+                 "authorization_id": "authorization_12345678", "pem_request_hash": hashlib.sha256(recovery.canonical_csr_pem(CSR).encode()).hexdigest(),
                  "local_request_hash": REQUEST_HASH, "pending_public_key_hash": PUBLIC_KEY_HASH,
                  "observed_at": recovery.format_timestamp(datetime.now(timezone.utc))}
         error = recovery.error.HTTPError("https://example.invalid/recover", 409, "refused", {},
