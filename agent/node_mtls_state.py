@@ -400,6 +400,10 @@ class NodeMtlsState:
             raise MtlsStateError("Pending CSR hash does not match metadata")
         if public_key_hash != self._private_key_public_hash(self.pending_key):
             raise MtlsStateError("Pending private key hash does not match metadata")
+        csr_public_pem = self._run_bytes(["req", "-in", str(self.pending_csr), "-pubkey", "-noout"])
+        csr_public_der = self._run_bytes(["pkey", "-pubin", "-outform", "DER"], input_bytes=csr_public_pem)
+        if hashlib.sha256(csr_public_der).hexdigest() != public_key_hash:
+            raise MtlsStateError("Pending CSR public key does not match private key")
         csr_pem = self.pending_csr.read_text(encoding="utf-8")
         validate_pem(csr_pem, "CERTIFICATE REQUEST")
         return PendingCertificateRequest(
@@ -551,6 +555,27 @@ def validate_identity_uri(value: str) -> None:
         raise MtlsStateError("Node mTLS identity URI is invalid")
 
 
+def canonical_csr_pem(value: str) -> str:
+    """Match SaaS foundation.normalizePem for CSR requestHash, not DER hashing.
+
+    Keep the persisted OpenSSL serialization unchanged. ECMAScript trim handles
+    BOM/Unicode whitespace differently from Python's implicit str.strip set.
+    The canonical body is one base64 line and the result has no final newline.
+    """
+    if not isinstance(value, str) or "\0" in value:
+        raise MtlsStateError("CSR PEM value is invalid")
+    js_trim = "\t\v\f \u00a0\ufeff\n\r\u2028\u2029\u1680\u202f\u205f\u3000" + "".join(chr(item) for item in range(0x2000, 0x200B))
+    trimmed = value.strip(js_trim).replace("\r\n", "\n")
+    begin = "-----BEGIN CERTIFICATE REQUEST-----"
+    end = "-----END CERTIFICATE REQUEST-----"
+    if not trimmed.startswith(begin + "\n") or not trimmed.endswith("\n" + end):
+        raise MtlsStateError("CSR PEM envelope is invalid")
+    body = trimmed[len(begin) + 1:-(len(end) + 1)].replace("\n", "")
+    if len(body) < 16 or re.fullmatch(r"[A-Za-z0-9+/=]+", body) is None:
+        raise MtlsStateError("CSR PEM body is invalid")
+    return begin + "\n" + body + "\n" + end
+
+
 def validate_pem(value: str, label: str) -> bytes:
     if not isinstance(value, str) or "\0" in value:
         raise MtlsStateError("PEM value is invalid")
@@ -609,9 +634,18 @@ def fsync_directory(path: Path) -> None:
         os.close(descriptor)
 
 
+def unique_json_object(pairs: list[tuple[str, Any]]) -> dict[str, Any]:
+    value: dict[str, Any] = {}
+    for key, item in pairs:
+        if key in value:
+            raise MtlsStateError("mTLS metadata contains duplicate fields")
+        value[key] = item
+    return value
+
+
 def read_json_object(path: Path) -> dict[str, Any]:
     try:
-        decoded = json.loads(path.read_text(encoding="utf-8"))
+        decoded = json.loads(path.read_text(encoding="utf-8"), object_pairs_hook=unique_json_object)
     except (OSError, UnicodeDecodeError, json.JSONDecodeError) as exc:
         raise MtlsStateError("mTLS metadata is unreadable") from exc
     if not isinstance(decoded, dict):
