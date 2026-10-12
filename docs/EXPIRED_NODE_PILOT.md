@@ -167,6 +167,16 @@ configuration/source/profile checks. Mode0644 allows sshd lookup while preventin
 machine-user edits. Machine SSH uses `wavemesh-expiry` at the admitted IP, with
 the exact HostKeyAlias.
 
+Installed Python source is root0600, and the two root-only wrappers are0700.
+The existing service executes Python as root, and sudo executes the forced
+wrapper as root. Home and `.ssh` are0711, providing the machine identity only the
+traversal needed for SSH lookup, without listing directories. The authorized
+file contains a public Ed25519 key plus its fixed restriction and remains0644;
+sudoers remains root0440. Installation permissions come from each fixed
+destination's owner purpose. Private configuration/source payloads cannot be
+published through the public authorized_keys branch: promotion requires its
+distinct staged payload hash before any permission change.
+
 Failures preserve backups, journal and phase. Re-running `mode=install` is
 rejected. Protected `mode=status` reads status without advancing; `mode=reconcile`
 with the identical envelope permits bounded readback/continuation. Changed

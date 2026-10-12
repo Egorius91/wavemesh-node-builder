@@ -241,6 +241,14 @@ class InstallerTests(unittest.TestCase):
     def test_terminal_exact_readback_and_changed_payload_are_fail_closed(self):
         result = self.subject.execute(self.payload)
         self.assertEqual(result["code"], "INSTALLED_DISABLED")
+        if os.name != "nt":
+            for name, path in self.subject.destinations.items():
+                self.assertEqual(stat.S_IMODE(path.stat().st_mode), 0o700 if name.endswith(".sh") else 0o600)
+            self.assertEqual(stat.S_IMODE(self.subject.home.stat().st_mode), 0o711)
+            self.assertEqual(stat.S_IMODE((self.subject.home / ".ssh").stat().st_mode), 0o711)
+            self.assertEqual(stat.S_IMODE(self.subject.authorized.stat().st_mode), 0o644)
+            self.assertEqual(stat.S_IMODE(self.subject.sudoers.stat().st_mode), 0o440)
+            self.assertEqual(stat.S_IMODE(self.subject.config_path.stat().st_mode), 0o600)
         count = len(self.subject.programs)
         with self.assertRaisesRegex(installer.InstallStop, "EXPLICIT_RECONCILIATION"):
             self.subject.execute(self.payload)
@@ -252,6 +260,19 @@ class InstallerTests(unittest.TestCase):
         again = self.subject.execute({**self.payload, "mode": "reconcile"})
         self.assertEqual(again["lineageId"], result["lineageId"])
         self.assertEqual(count, len(self.subject.programs))
+
+    def test_private_payload_cannot_be_promoted_as_public_ssh_key(self):
+        with mock.patch.object(self.subject, "promote", side_effect=installer.InstallStop("SIMULATED_PRE_PROMOTION_STOP")):
+            with self.assertRaises(installer.InstallStop):
+                self.subject.execute(self.payload)
+        staged = self.subject.verify_staged()
+        before = self.snapshot()
+        with self.assertRaisesRegex(installer.InstallStop, "PROMOTION_PAYLOAD_OWNER_MISMATCH"):
+            self.subject.promote(self.subject.authorized, staged["config.json"])
+        self.assertEqual(before, self.snapshot())
+        self.assertFalse(self.subject.authorized.exists())
+        with self.assertRaisesRegex(installer.InstallStop, "PROMOTION_TARGET_NOT_OWNED"):
+            self.subject.promote(self.root / "unowned-public-file", staged["config.json"])
 
 
 if __name__ == "__main__":

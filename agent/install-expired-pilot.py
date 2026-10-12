@@ -185,7 +185,7 @@ class PilotInstaller:
                      self.etc / "tls/acknowledgement.pending.json"):
             self.check(path, absent=True)
         if self.home.exists() or self.home.is_symlink():
-            self.check(self.home, directory=True, mode=0o755)
+            self.check(self.home, directory=True, mode=0o711)
             if any(self.home.iterdir()):
                 raise InstallStop("UNRELATED_HOME_CONTENT")
         if self.install_root.exists() or self.install_root.is_symlink():
@@ -233,16 +233,68 @@ class PilotInstaller:
             if old["present"] and (not HASH.fullmatch(old.get("sha256", "")) or not isinstance(old.get("mode"), int) or not 0 <= old["mode"] <= 0o777):
                 raise InstallStop("INVALID_OLD_SOURCE_RECEIPT")
 
-    def private_directory(self, path: Path, mode: int = 0o700) -> None:
+    def private_directory(self, path: Path) -> None:
         if path.exists() or path.is_symlink():
-            self.check(path, directory=True, mode=mode)
+            self.check(path, directory=True, mode=0o700)
         else:
             self.parents(path)
-            path.mkdir(mode=mode)
-            os.chmod(path, mode)
+            path.mkdir(mode=0o700)
+            os.chmod(path, 0o700)
             fsync_directory(path.parent)
 
-    def promote(self, target: Path, content: bytes, mode: int, old: dict | None = None) -> None:
+    def ssh_lookup_directory(self, path: Path) -> None:
+        if path not in (self.home, self.home / ".ssh"):
+            raise InstallStop("SSH_LOOKUP_DIRECTORY_NOT_OWNED")
+        if path.exists() or path.is_symlink():
+            self.check(path, directory=True, mode=0o711)
+        else:
+            self.parents(path)
+            path.mkdir(mode=0o711)
+            # The unprivileged SSH identity needs traversal, not directory listing.
+            os.chmod(path, 0o711)
+            fsync_directory(path.parent)
+
+    def owned_file_name(self, target: Path) -> str:
+        if target == self.config_path:
+            return "config.json"
+        if target == self.sudoers:
+            return "sudoers"
+        if target == self.authorized:
+            return "authorized_keys"
+        for name, path in self.destinations.items():
+            if target == path:
+                return name
+        raise InstallStop("PROMOTION_TARGET_NOT_OWNED")
+
+    def owned_file_mode(self, target: Path) -> int:
+        name = self.owned_file_name(target)
+        if name in ("recover.sh", "expired-node-forced-command.sh"):
+            return 0o700
+        if name == "sudoers":
+            return 0o440
+        if name == "authorized_keys":
+            return 0o644
+        return 0o600
+
+    def chmod_owned_file(self, path: Path, target: Path) -> None:
+        name = self.owned_file_name(target)
+        if name in ("recover.sh", "expired-node-forced-command.sh"):
+            os.chmod(path, 0o700)
+        elif name == "sudoers":
+            os.chmod(path, 0o440)
+        elif name == "authorized_keys":
+            # Public Ed25519 key and fixed forced command only. This branch can
+            # never publish config/source/backup bytes: promotion verifies its
+            # separately staged public-key payload hash before reaching chmod.
+            os.chmod(path, 0o644)
+        else:
+            os.chmod(path, 0o600)
+
+    def promote(self, target: Path, content: bytes, old: dict | None = None) -> None:
+        name = self.owned_file_name(target)
+        mode = self.owned_file_mode(target)
+        if digest(content) != self.journal["stagedHashes"][name]:
+            raise InstallStop("PROMOTION_PAYLOAD_OWNER_MISMATCH")
         self.parents(target)
         if target.exists() or target.is_symlink():
             self.check(target)
@@ -250,7 +302,7 @@ class PilotInstaller:
             if actual == digest(content):
                 # Exact already-promoted bytes are reconciled in place; never
                 # replace another identical capability inode unnecessarily.
-                os.chmod(target, mode)
+                self.chmod_owned_file(target, target)
                 self.check(target, mode=mode)
                 return
             if actual != digest(content) and (old is None or not old.get("present") or actual != old["sha256"] or stat.S_IMODE(target.stat().st_mode) != old["mode"]):
@@ -264,7 +316,7 @@ class PilotInstaller:
                 raise InstallStop("PROMOTION_TEMP_CHANGED")
         else:
             atomic_write_bytes(temporary, content, 0o600)
-        os.chmod(temporary, mode)
+        self.chmod_owned_file(temporary, target)
         os.replace(temporary, target)
         fsync_directory(target.parent)
         self.check(target, mode=mode)
@@ -342,7 +394,7 @@ class PilotInstaller:
     def verify_live_source(self, staged: dict[str, bytes]) -> None:
         for name, path in self.destinations.items():
             self.parents(path)
-            self.check(path, mode=0o755 if name.endswith(".sh") else 0o644)
+            self.check(path, mode=self.owned_file_mode(path))
             if path.read_bytes() != staged[name]:
                 raise InstallStop("LIVE_SOURCE_CHANGED")
         profile = self.etc / "agent.env"
@@ -359,8 +411,8 @@ class PilotInstaller:
         if phase in ("STAGED", "SOURCE_PROMOTING"):
             self.write_journal("SOURCE_PROMOTING")
             for name, target in self.destinations.items():
-                self.promote(target, staged[name], 0o755 if name.endswith(".sh") else 0o644, self.journal["old"][name])
-            self.promote(self.config_path, staged["config.json"], 0o600)
+                self.promote(target, staged[name], self.journal["old"][name])
+            self.promote(self.config_path, staged["config.json"])
             self.private_directory(self.etc / "expired-pilot.operations")
             delivery_lock = self.etc / "expired-pilot.delivery.lock"
             if not delivery_lock.exists() and not delivery_lock.is_symlink():
@@ -392,8 +444,8 @@ class PilotInstaller:
             row = self.known_account(self.account())
             self.journal["accountUid"] = row["uid"]
             self.journal["accountGid"] = row["gid"]
-            self.private_directory(self.home, 0o755)
-            self.private_directory(self.home / ".ssh", 0o755)
+            self.ssh_lookup_directory(self.home)
+            self.ssh_lookup_directory(self.home / ".ssh")
             self.write_journal("ACCOUNT_CREATED")
             phase = "ACCOUNT_CREATED"
         if phase in ("ACCOUNT_CREATED", "CAPABILITY_PROMOTING"):
@@ -401,10 +453,10 @@ class PilotInstaller:
             self.known_account(self.account())
             self.assert_disabled(staged["config.json"])
             self.write_journal("CAPABILITY_PROMOTING")
-            self.promote(self.sudoers, staged["sudoers"], 0o440)
+            self.promote(self.sudoers, staged["sudoers"])
             self.run_program(["/usr/sbin/visudo", "-cf", str(self.sudoers)])
             self.assert_disabled(staged["config.json"])
-            self.promote(self.authorized, staged["authorized_keys"], 0o644)
+            self.promote(self.authorized, staged["authorized_keys"])
             self.write_journal("INSTALLED_DISABLED")
         return self.readback(staged)
 
@@ -412,7 +464,7 @@ class PilotInstaller:
         self.assert_disabled(staged["config.json"])
         self.known_account(self.account())
         for name, path in self.destinations.items():
-            self.check(path, mode=0o755 if name.endswith(".sh") else 0o644)
+            self.check(path, mode=self.owned_file_mode(path))
             if digest(path.read_bytes()) != self.journal["stagedHashes"][name]:
                 raise InstallStop("LIVE_SOURCE_READBACK_FAILED")
         for path, name, mode in ((self.authorized, "authorized_keys", 0o644), (self.sudoers, "sudoers", 0o440)):
