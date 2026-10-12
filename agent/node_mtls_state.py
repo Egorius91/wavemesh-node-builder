@@ -400,6 +400,10 @@ class NodeMtlsState:
             raise MtlsStateError("Pending CSR hash does not match metadata")
         if public_key_hash != self._private_key_public_hash(self.pending_key):
             raise MtlsStateError("Pending private key hash does not match metadata")
+        csr_public_pem = self._run_bytes(["req", "-in", str(self.pending_csr), "-pubkey", "-noout"])
+        csr_public_der = self._run_bytes(["pkey", "-pubin", "-outform", "DER"], input_bytes=csr_public_pem)
+        if hashlib.sha256(csr_public_der).hexdigest() != public_key_hash:
+            raise MtlsStateError("Pending CSR public key does not match private key")
         csr_pem = self.pending_csr.read_text(encoding="utf-8")
         validate_pem(csr_pem, "CERTIFICATE REQUEST")
         return PendingCertificateRequest(
@@ -609,9 +613,18 @@ def fsync_directory(path: Path) -> None:
         os.close(descriptor)
 
 
+def unique_json_object(pairs: list[tuple[str, Any]]) -> dict[str, Any]:
+    value: dict[str, Any] = {}
+    for key, item in pairs:
+        if key in value:
+            raise MtlsStateError("mTLS metadata contains duplicate fields")
+        value[key] = item
+    return value
+
+
 def read_json_object(path: Path) -> dict[str, Any]:
     try:
-        decoded = json.loads(path.read_text(encoding="utf-8"))
+        decoded = json.loads(path.read_text(encoding="utf-8"), object_pairs_hook=unique_json_object)
     except (OSError, UnicodeDecodeError, json.JSONDecodeError) as exc:
         raise MtlsStateError("mTLS metadata is unreadable") from exc
     if not isinstance(decoded, dict):

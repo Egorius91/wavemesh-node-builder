@@ -35,6 +35,7 @@ jobs:
           done
           python3 tests/e2e/test_multi_exit.py
       - name: Bash and adapter tests
+        # Root ownership and permissions are part of the constrained pilot boundary.
         run: |
           set -Eeuo pipefail
           bash tests/unit/test_baseline.sh
@@ -46,5 +47,9 @@ jobs:
           bash tests/smoke/node_agent_installer.sh
           bash tests/smoke/node_agent_rollback_latest.sh
           bash -n bin/wavemesh agent/*.sh scripts/commands/*.sh scripts/lib/*.sh
+      - name: Native expiry pilot ownership and PKI proof
+        run: |
+          sudo python3 tests/unit/test_expired_node_pilot.py
+          sudo python3 tests/unit/test_expired_pilot_installer.py
       - name: Patch hygiene
         run: git diff --check

@@ -4,6 +4,7 @@
 from __future__ import annotations
 
 import argparse
+import hashlib
 from datetime import datetime, timezone
 import json
 import os
@@ -23,8 +24,10 @@ try:
     )
     from node_mtls_state import (
         NodeMtlsState,
+        MtlsStateError,
         PRIVATE_FILE_MODE,
         atomic_write_json,
+        unique_json_object,
     )
 except ImportError:  # pragma: no cover - package-style imports in tests
     from .node_agent import (
@@ -36,8 +39,10 @@ except ImportError:  # pragma: no cover - package-style imports in tests
     )
     from .node_mtls_state import (
         NodeMtlsState,
+        MtlsStateError,
         PRIVATE_FILE_MODE,
         atomic_write_json,
+        unique_json_object,
     )
 
 DEFAULT_ENV_FILE = Path("/etc/wavemesh-agent/agent.env")
@@ -54,6 +59,33 @@ MARKER_VERSION = 2
 
 class RecoveryError(AgentError):
     pass
+
+
+class KnownNoSignRefusal(RecoveryError):
+    def __init__(self, proof: dict) -> None:
+        super().__init__("KNOWN_NO_SIGN_RECONCILE: exact final response requires independent receipt readback")
+        self.proof = proof
+
+
+def validate_no_sign_proof(proof: dict, marker: dict, pending: Any) -> None:
+    from uuid import UUID
+    fields = {"schema_version", "receipt_id", "operation_id", "authorization_id", "pem_request_hash", "local_request_hash", "pending_public_key_hash", "observed_at"}
+    if not isinstance(proof, dict) or set(proof) != fields or proof.get("schema_version") != 1:
+        raise RecoveryError("No-SIGN final receipt schema invalid")
+    for name in ("receipt_id", "operation_id"):
+        item = proof[name]
+        if not isinstance(item, str) or str(UUID(item)) != item or UUID(item).version != 4:
+            raise RecoveryError("No-SIGN final receipt identity invalid")
+    require_scope_id(proof["authorization_id"], "Recovery authorization ID")
+    canonical_pem = pending.csr_pem.strip().replace("\r\n", "\n") + "\n"
+    if (proof["operation_id"] != marker.get("operation_id") or proof["local_request_hash"] != marker["request_hash"]
+            or proof["pending_public_key_hash"] != marker["public_key_hash"]
+            or proof["local_request_hash"] != pending.request_hash or proof["pending_public_key_hash"] != pending.public_key_hash
+            or proof["pem_request_hash"] != hashlib.sha256(canonical_pem.encode()).hexdigest()):
+        raise RecoveryError("No-SIGN final receipt request binding mismatch")
+    observed = parse_timestamp(require_bounded_string(proof, "observed_at", 64))
+    if not -5 <= (datetime.now(timezone.utc) - observed).total_seconds() <= 600:
+        raise RecoveryError("No-SIGN final receipt observation invalid")
 
 
 class RecoveryClient:
@@ -85,6 +117,7 @@ class RecoveryClient:
         self.pending_file = env_file.with_name("recovery.pending")
         self.legacy_accepted_file = env_file.with_name("recovery.accepted.json")
         self.runtime_file = self.state_root / "runtime.json"
+        self.completed_file = env_file.with_name("recovery.completed.json")
 
     @property
     def expected_identity_uri(self) -> str:
@@ -185,17 +218,26 @@ class RecoveryClient:
                 raise RecoveryError(
                     "Pending recovery request is missing before server acceptance"
                 )
-            response = self._api_json(
-                recovery_token,
-                "POST",
-                "internal/v1/nodes/recover/certificates",
-                {
-                    "tenant_id": self.tenant_id,
-                    "node_id": self.node_id,
-                    "csr": pending.csr_pem,
-                },
-                expected=(201,),
-            )
+            # A process death or lost HTTP response may conceal a completed SIGN.
+            # Persist before dispatch; same CSR alone cannot justify another POST.
+            if marker.get("post_dispatched_at") is not None or marker.get("dispatch_state") != "READY":
+                if marker.get("dispatch_state") == "KNOWN_NO_SIGN":
+                    raise RecoveryError("KNOWN_NO_SIGN_RECONCILE: independently verify the final receipt before continuing")
+                raise RecoveryError("SIGN_OUTCOME_UNKNOWN: reconcile persisted credential before continuing")
+            marker = {**marker, "post_dispatched_at": format_timestamp(datetime.now(timezone.utc))}
+            self._write_marker(marker)
+            try:
+                response = self._api_json(
+                    recovery_token,
+                    "POST",
+                    "internal/v1/nodes/recover/certificates",
+                    {"tenant_id": self.tenant_id, "node_id": self.node_id, "csr": pending.csr_pem},
+                    expected=(201,),
+                )
+            except KnownNoSignRefusal as exc:
+                validate_no_sign_proof(exc.proof, marker, pending)
+                self._write_marker({**marker, "dispatch_state": "KNOWN_NO_SIGN", "no_sign_proof": exc.proof})
+                raise
             delivery = self._validate_delivery(response)
             marker = self._bind_credential(marker, delivery["credential_id"])
             self._write_marker(marker)
@@ -294,6 +336,8 @@ class RecoveryClient:
             self.state.clear_pending_acknowledgement(credential_id)
 
         self._write_runtime_shadow_ready()
+        # Preserve a private durable ACK receipt before deleting working state.
+        atomic_write_json(self.completed_file, marker, PRIVATE_FILE_MODE)
         safe_unlink(self.recovery_token_file)
         safe_unlink(self.pending_file)
 
@@ -338,9 +382,17 @@ class RecoveryClient:
                 status = response.status
                 raw = response.read(MAX_RESPONSE_BYTES + 1)
         except error.HTTPError as exc:
-            raw_problem = exc.read(MAX_RESPONSE_BYTES + 1)
+            try:
+                raw_problem = exc.read(MAX_RESPONSE_BYTES + 1)
+            finally:
+                exc.close()
             problem = parse_problem(raw_problem)
             code = safe_code(problem.get("code"))
+            if (exc.code == 409 and problem.get("code") == "NODE_EXPIRY_PILOT_PRE_SIGN_REFUSED" and method == "POST"
+                    and path == "internal/v1/nodes/recover/certificates"
+                    and os.environ.get("WAVEMESH_EXPIRY_PILOT_ADMISSION") == "1"
+                    and isinstance(problem.get("no_sign_proof"), dict)):
+                raise KnownNoSignRefusal(problem["no_sign_proof"]) from None
             retryable = bool(problem.get("retryable", False))
             raise RecoveryError(
                 "Recovery API rejected the request: "
@@ -375,12 +427,27 @@ class RecoveryClient:
             raise RecoveryError("Recovery certificate lifecycle state is invalid")
         certificate = require_bounded_string(response, "certificate", MAX_PEM_BYTES)
         chain = require_bounded_string(response, "chain", MAX_PEM_BYTES)
+        pilot_config = None
+        if os.environ.get("WAVEMESH_EXPIRY_PILOT_ADMISSION") == "1":
+            config_path = Path("/etc/wavemesh-agent/expired-pilot.json")
+            ensure_restricted_regular_file(config_path, "Pilot configuration")
+            pilot_config = json.loads(config_path.read_text(encoding="utf-8"), object_pairs_hook=unique_json_object)
+            normalized_chain = chain.strip().replace("\r\n", "\n") + "\n"
+            if hashlib.sha256(normalized_chain.encode()).hexdigest() != pilot_config.get("trustedCaBundleSha256"):
+                raise RecoveryError("Recovered delivery trust bundle differs from admitted pilot trust")
         not_before = parse_timestamp(require_bounded_string(response, "not_before", 64))
         expires_at = parse_timestamp(require_bounded_string(response, "expires_at", 64))
         delivery_expires_at = parse_timestamp(
             require_bounded_string(response, "delivery_expires_at", 64)
         )
         now = datetime.now(timezone.utc)
+        if pilot_config is not None:
+            from node_expired_identity import certificate_dates
+            actual_start, actual_end = certificate_dates(self.state, certificate.encode())
+            if actual_start != not_before or actual_end != expires_at:
+                raise RecoveryError("Recovered delivery timestamps differ from the signed certificate")
+            if (actual_end - now).total_seconds() <= pilot_config["rotateBeforeSeconds"] + 3600:
+                raise RecoveryError("Recovered certificate cannot cover the accepted rotation horizon")
         if expires_at <= now:
             raise RecoveryError("Recovered certificate is already expired")
         if delivery_expires_at <= now or delivery_expires_at > expires_at:
@@ -393,6 +460,8 @@ class RecoveryClient:
         if not isinstance(already_processed, bool):
             raise RecoveryError("Recovery replay metadata is invalid")
         recovery_reason = response.get("recovery_reason")
+        if pilot_config is not None and recovery_reason != "CERTIFICATE_EXPIRED":
+            raise RecoveryError("Pilot delivery must recover only certificate expiry")
         if recovery_reason is not None and recovery_reason not in {
             "LOST_KEY",
             "COMPROMISED_KEY",
@@ -454,7 +523,13 @@ class RecoveryClient:
             "credential_id": None,
             "acknowledged_at": None,
             "acknowledgement_replayed": None,
+            "dispatch_state": "READY",
         }
+        operation_id = os.environ.get("WAVEMESH_EXPIRY_OPERATION_ID")
+        if operation_id is not None:
+            from uuid import UUID
+            UUID(operation_id)
+            marker["operation_id"] = operation_id
         return marker
 
     def _bind_credential(
@@ -479,7 +554,7 @@ class RecoveryClient:
             return None
         ensure_restricted_regular_file(self.pending_file, "Recovery pending marker")
         try:
-            value = json.loads(self.pending_file.read_text(encoding="utf-8"))
+            value = json.loads(self.pending_file.read_text(encoding="utf-8"), object_pairs_hook=unique_json_object)
         except (OSError, UnicodeDecodeError, json.JSONDecodeError) as exc:
             raise RecoveryError("Recovery pending marker is unreadable") from exc
         if not isinstance(value, dict) or value.get("version") != MARKER_VERSION:
@@ -493,6 +568,8 @@ class RecoveryClient:
             raise RecoveryError("Recovery pending marker tenant ID does not match")
         require_sha256(value, "request_hash")
         require_sha256(value, "public_key_hash")
+        if value.get("post_dispatched_at") is not None:
+            parse_timestamp(require_bounded_string(value, "post_dispatched_at", 64))
         parse_timestamp(require_bounded_string(value, "created_at", 64))
         optional_credential_id(value.get("credential_id"))
         acknowledged_at = value.get("acknowledged_at")
@@ -740,8 +817,8 @@ def parse_problem(raw: bytes) -> dict[str, Any]:
     if len(raw) > MAX_RESPONSE_BYTES:
         return {}
     try:
-        value = json.loads(raw.decode("utf-8"))
-    except (UnicodeDecodeError, json.JSONDecodeError):
+        value = json.loads(raw.decode("utf-8"), object_pairs_hook=unique_json_object)
+    except (UnicodeDecodeError, json.JSONDecodeError, MtlsStateError):
         return {}
     if not isinstance(value, dict):
         return {}

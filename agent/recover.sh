@@ -65,6 +65,11 @@ flock -n 9 || fail recovery_already_running
 backup_id="$(date -u +%Y%m%dT%H%M%SZ)-$$"
 backup_dir="$BACKUP_ROOT/$backup_id"
 install -d -o root -g root -m 0700 "$backup_dir"
+if [[ "${WAVEMESH_EXPIRY_PILOT_ADMISSION:-0}" == 1 ]]; then
+  [[ "${WAVEMESH_EXPIRY_OPERATION_ID:-}" =~ ^[a-f0-9-]{36}$ ]] || fail expiry_operation_id_invalid
+  printf '%s\n' "$WAVEMESH_EXPIRY_OPERATION_ID" > "$backup_dir/pilot.operation.id"
+  chmod 0600 "$backup_dir/pilot.operation.id"
+fi
 
 printf 'node_recovery_started_at_utc=%s\n' "$(date -u +%Y-%m-%dT%H:%M:%SZ)"
 printf 'node_recovery_external_node_id=%s\n' "$EXTERNAL_NODE_ID"
@@ -108,6 +113,11 @@ printf 'node_recovery_private_backup=PASS\n'
 chmod 0600 "$backup_dir/preflight.json"
 printf 'node_recovery_client_preflight=PASS\n'
 
+if [[ "${WAVEMESH_EXPIRY_PILOT_ADMISSION:-0}" == 1 ]]; then
+  "$PYTHON" "$INSTALL_DIR/expired_node_helper.py" wrapper-admission || fail expiry_pilot_admission_failed
+  printf 'node_recovery_expiry_pilot_admission=PASS\n'
+fi
+
 systemctl stop "$SERVICE"
 if systemctl is-active --quiet "$SERVICE"; then
   fail agent_service_did_not_stop
@@ -127,7 +137,19 @@ chmod 0600 "$backup_dir/recovery-result.json" "$backup_dir/recovery-error.txt"
 
 if [[ "$recovery_rc" -ne 0 ]]; then
   printf 'node_recovery_remote_or_local_apply=FAILED\n' >&2
-  printf 'node_recovery_retry_safe=yes\n' >&2
+  # Only a durable credential/ACK binding permits continuation without SIGN.
+  retry_safe="$($PYTHON - "$RECOVERY_PENDING" <<'PY'
+import json
+import sys
+try:
+    marker = json.load(open(sys.argv[1], encoding="utf-8"))
+    known = isinstance(marker.get("credential_id"), str) and bool(marker["credential_id"])
+except Exception:
+    known = False
+print("yes" if known else "no")
+PY
+)"
+  printf 'node_recovery_retry_safe=%s\n' "$retry_safe" >&2
   printf 'node_recovery_agent_left_stopped=yes\n' >&2
   printf 'node_recovery_diagnostic=%s\n' "$backup_dir/recovery-error.txt" >&2
   exit "$recovery_rc"
@@ -181,7 +203,7 @@ fi
 [[ ! -e "$backup_dir/recovery.token.before" && ! -L "$backup_dir/recovery.token.before" ]] || fail recovery_backup_token_not_destroyed
 (
   cd "$backup_dir"
-  find . -type f ! -name SHA256SUMS -print0 | sort -z | xargs -0 sha256sum > SHA256SUMS.next
+  find . -type f ! -name SHA256SUMS ! -name SHA256SUMS.next -print0 | sort -z | xargs -0 sha256sum > SHA256SUMS.next
   chmod 0600 SHA256SUMS.next
   mv -fT SHA256SUMS.next SHA256SUMS
 )

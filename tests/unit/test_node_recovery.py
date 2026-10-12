@@ -3,6 +3,8 @@ from __future__ import annotations
 
 from datetime import datetime, timedelta, timezone
 import json
+import hashlib
+import io
 import os
 from pathlib import Path
 import stat
@@ -10,6 +12,7 @@ from types import SimpleNamespace
 import sys
 import tempfile
 import unittest
+from uuid import uuid4
 from unittest import mock
 
 ROOT = Path(__file__).resolve().parents[2]
@@ -307,7 +310,7 @@ class NodeRecoveryTests(unittest.TestCase):
         self.assertNotIn(CHAIN, rendered)
         self.assertEqual(result["credential_id"], CREDENTIAL_ID)
 
-    def test_ambiguous_post_keeps_same_csr_and_marker_for_retry(self) -> None:
+    def test_ambiguous_post_keeps_same_csr_but_never_dispatches_again(self) -> None:
         first = self.client()
         with mock.patch.object(
             recovery.request,
@@ -322,23 +325,13 @@ class NodeRecoveryTests(unittest.TestCase):
         self.assertEqual(marker["request_hash"], REQUEST_HASH)
         self.assertTrue(self.token_file.exists())
 
-        captured_bodies: list[dict[str, object]] = []
-
-        def retry(req, timeout):
-            del timeout
-            if req.full_url.endswith("/recover/certificates"):
-                body = json.loads(req.data.decode("utf-8"))
-                captured_bodies.append(body)
-                return FakeResponse(self.delivery(already_processed=True), 201)
-            if req.full_url.endswith(f"/{CREDENTIAL_ID}/acknowledge"):
-                return FakeResponse(self.acknowledgement(), 201)
-            raise AssertionError("unexpected recovery URL")
-
         restarted = self.client()
-        with mock.patch.object(recovery.request, "urlopen", side_effect=retry):
-            restarted.apply()
-
-        self.assertEqual(captured_bodies, [{"tenant_id": TENANT_ID, "node_id": NODE_ID, "csr": first_csr}])
+        with mock.patch.object(recovery.request, "urlopen") as transport:
+            with self.assertRaisesRegex(recovery.RecoveryError, "SIGN_OUTCOME_UNKNOWN"):
+                restarted.apply()
+            transport.assert_not_called()
+        self.assertEqual(restarted.state.pending_csr.read_text(encoding="utf-8"), first_csr)
+        self.assertIsNotNone(marker["post_dispatched_at"])
         self.assertEqual(first_csr, CSR)
 
     def test_restart_after_delivery_binding_retrieves_same_credential_then_acks(self) -> None:
@@ -502,9 +495,75 @@ class NodeRecoveryTests(unittest.TestCase):
         with self.assertRaisesRegex(recovery.RecoveryError, "Legacy temporary-bearer"):
             client.check()
 
+    def test_pilot_delivery_requires_fixed_trust_actual_dates_and_rotation_horizon(self) -> None:
+        import node_expired_identity
+        client = self.client()
+        delivery = self.delivery(recovery_reason="CERTIFICATE_EXPIRED")
+        start = recovery.parse_timestamp(delivery["not_before"])
+        end = recovery.parse_timestamp(delivery["expires_at"])
+        config = {"trustedCaBundleSha256": hashlib.sha256(CHAIN.encode()).hexdigest(), "rotateBeforeSeconds": 21600}
+        with mock.patch.dict(os.environ, {"WAVEMESH_EXPIRY_PILOT_ADMISSION": "1"}), \
+             mock.patch.object(recovery, "ensure_restricted_regular_file"), \
+             mock.patch.object(Path, "read_text", return_value=json.dumps(config)), \
+             mock.patch.object(node_expired_identity, "certificate_dates", return_value=(start, end)):
+            self.assertEqual(client._validate_delivery(delivery)["credential_id"], CREDENTIAL_ID)
+            with self.assertRaisesRegex(recovery.RecoveryError, "trust bundle differs"):
+                client._validate_delivery({**delivery, "chain": CHAIN + "unadmitted"})
+            with self.assertRaisesRegex(recovery.RecoveryError, "timestamps differ"):
+                client._validate_delivery({**delivery, "expires_at": recovery.format_timestamp(end + timedelta(hours=1))})
+            with self.assertRaisesRegex(recovery.RecoveryError, "only certificate expiry"):
+                client._validate_delivery({**delivery, "recovery_reason": "LOST_KEY"})
+            short_end = datetime.now(timezone.utc) + timedelta(hours=6)
+            short_end = recovery.parse_timestamp(recovery.format_timestamp(short_end))
+            with mock.patch.object(node_expired_identity, "certificate_dates", return_value=(start, short_end)):
+                with self.assertRaisesRegex(recovery.RecoveryError, "rotation horizon"):
+                    client._validate_delivery({**delivery, "expires_at": recovery.format_timestamp(short_end)})
+
+    def test_exact_final_pre_sign_refusal_persists_proof_but_no_direct_retry(self):
+        operation = str(uuid4())
+        proof = {"schema_version": 1, "receipt_id": str(uuid4()), "operation_id": operation,
+                 "authorization_id": "authorization_12345678", "pem_request_hash": hashlib.sha256(CSR.encode()).hexdigest(),
+                 "local_request_hash": REQUEST_HASH, "pending_public_key_hash": PUBLIC_KEY_HASH,
+                 "observed_at": recovery.format_timestamp(datetime.now(timezone.utc))}
+        error = recovery.error.HTTPError("https://example.invalid/recover", 409, "refused", {},
+                io.BytesIO(json.dumps({"code": "NODE_EXPIRY_PILOT_PRE_SIGN_REFUSED", "no_sign_proof": proof}).encode()))
+        client = self.client()
+        with mock.patch.dict(os.environ, {"WAVEMESH_EXPIRY_PILOT_ADMISSION": "1", "WAVEMESH_EXPIRY_OPERATION_ID": operation}), \
+             mock.patch.object(recovery.request, "urlopen", side_effect=error) as transport:
+            with self.assertRaisesRegex(recovery.RecoveryError, "KNOWN_NO_SIGN_RECONCILE"):
+                client.apply()
+            marker = json.loads(client.pending_file.read_text())
+            self.assertEqual(marker["no_sign_proof"], proof)
+            self.assertEqual(marker["dispatch_state"], "KNOWN_NO_SIGN")
+            with self.assertRaisesRegex(recovery.RecoveryError, "KNOWN_NO_SIGN_RECONCILE"):
+                self.client().apply()
+            transport.assert_called_once()
+
+    def test_mismatched_no_sign_receipt_never_downgrades_unknown_dispatch(self):
+        operation = str(uuid4())
+        proof = {"schema_version": 1, "receipt_id": str(uuid4()), "operation_id": str(uuid4()),
+                 "authorization_id": "authorization_12345678", "pem_request_hash": hashlib.sha256(CSR.encode()).hexdigest(),
+                 "local_request_hash": REQUEST_HASH, "pending_public_key_hash": PUBLIC_KEY_HASH,
+                 "observed_at": recovery.format_timestamp(datetime.now(timezone.utc))}
+        error = recovery.error.HTTPError("https://example.invalid/recover", 409, "refused", {},
+                io.BytesIO(json.dumps({"code": "NODE_EXPIRY_PILOT_PRE_SIGN_REFUSED", "no_sign_proof": proof}).encode()))
+        client = self.client()
+        with mock.patch.dict(os.environ, {"WAVEMESH_EXPIRY_PILOT_ADMISSION": "1", "WAVEMESH_EXPIRY_OPERATION_ID": operation}), \
+             mock.patch.object(recovery.request, "urlopen", side_effect=error) as transport:
+            with self.assertRaisesRegex(recovery.RecoveryError, "binding mismatch"):
+                client.apply()
+            marker = json.loads(client.pending_file.read_text())
+            self.assertNotIn("no_sign_proof", marker)
+            self.assertIsNotNone(marker["post_dispatched_at"])
+            with self.assertRaisesRegex(recovery.RecoveryError, "SIGN_OUTCOME_UNKNOWN"):
+                self.client().apply()
+            transport.assert_called_once()
+
     def test_recovery_token_requires_exact_private_permissions(self) -> None:
         unsafe_metadata = SimpleNamespace(st_mode=stat.S_IFREG | 0o640)
-        with mock.patch.object(Path, "lstat", return_value=unsafe_metadata):
+        # Exercise the Linux policy explicitly, even when this unit fixture runs
+        # on Windows where POSIX mode enforcement is intentionally unavailable.
+        with mock.patch.object(Path, "lstat", return_value=unsafe_metadata), mock.patch.object(recovery.os, "name", "posix"):
             with self.assertRaisesRegex(recovery.RecoveryError, "permissions must be 0600"):
                 recovery.read_restricted_token(
                     self.token_file,
