@@ -66,6 +66,7 @@ ETC_DIR="$DESTDIR/etc/wavemesh-agent"
 INSTALL_DIR="$DESTDIR/usr/local/lib/wavemesh-agent"
 UNIT_PATH="$DESTDIR/etc/systemd/system/$SERVICE"
 ROLLBACK_PATH="$DESTDIR/usr/local/sbin/wavemesh-node-agent-rollback"
+RECOVERY_PATH="$DESTDIR/usr/local/sbin/wavemesh-node-agent-recover"
 BACKUP_ROOT="$DESTDIR/var/lib/wavemesh-agent/backups"
 ENV_FILE="${WAVEMESH_AGENT_ENV:-$ETC_DIR/agent.env}"
 
@@ -135,6 +136,16 @@ restore_or_remove node_agent.py "$INSTALL_DIR/node_agent.py" 0755 0755
 restore_or_remove node_mtls_client.py "$INSTALL_DIR/node_mtls_client.py" 0644 0755
 restore_or_remove node_mtls_runtime.py "$INSTALL_DIR/node_mtls_runtime.py" 0644 0755
 restore_or_remove node_mtls_state.py "$INSTALL_DIR/node_mtls_state.py" 0644 0755
+# Older backups did not record these recovery dependencies. Preserve their
+# current bytes when no historical record exists; new installs always record
+# either the previous bytes or their explicit absence.
+for label in node_expired_identity.py node_recovery.py; do
+  if [[ -e "$backup_dir/$label" || -L "$backup_dir/$label" || -e "$backup_dir/$label.absent" || -L "$backup_dir/$label.absent" ]]; then
+    mode=0644
+    [[ "$label" != node_recovery.py ]] || mode=0755
+    restore_or_remove "$label" "$INSTALL_DIR/$label" "$mode" 0755
+  fi
+done
 restore_or_remove acceptance.py "$INSTALL_DIR/acceptance.py" 0755 0755
 restore_or_remove access_runtime.py "$INSTALL_DIR/access_runtime.py" 0755 0755
 # Historical backups predate this optional collector. Private evidence is never
@@ -149,6 +160,9 @@ if [[ -e "$backup_dir/wavemesh-node-lock.conf" || -e "$backup_dir/wavemesh-node-
   restore_or_remove wavemesh-node-lock.conf "$DESTDIR/etc/tmpfiles.d/wavemesh-node-lock.conf" 0644 0755
 fi
 restore_or_remove wavemesh-node-agent-rollback "$ROLLBACK_PATH" 0755 0755
+if [[ -e "$backup_dir/wavemesh-node-agent-recover" || -L "$backup_dir/wavemesh-node-agent-recover" || -e "$backup_dir/wavemesh-node-agent-recover.absent" || -L "$backup_dir/wavemesh-node-agent-recover.absent" ]]; then
+  restore_or_remove wavemesh-node-agent-recover "$RECOVERY_PATH" 0755 0755
+fi
 restore_or_remove agent.env "$ENV_FILE" 0600 0700
 
 if [[ -f "$ENV_FILE" ]] && grep -Eq -- '-----BEGIN [A-Z0-9 ]+-----' "$ENV_FILE"; then

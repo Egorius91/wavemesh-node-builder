@@ -106,6 +106,7 @@ AGENT_SOURCE="$PROJECT_DIR/agent/node_agent.py"
 CLIENT_SOURCE="$PROJECT_DIR/agent/node_mtls_client.py"
 RUNTIME_SOURCE="$PROJECT_DIR/agent/node_mtls_runtime.py"
 STATE_SOURCE="$PROJECT_DIR/agent/node_mtls_state.py"
+EXPIRED_IDENTITY_SOURCE="$PROJECT_DIR/agent/node_expired_identity.py"
 RECOVERY_CLIENT_SOURCE="$PROJECT_DIR/agent/node_recovery.py"
 ACCEPTANCE_SOURCE="$PROJECT_DIR/agent/acceptance.py"
 ACCESS_SOURCE="$PROJECT_DIR/agent/access_runtime.py"
@@ -120,6 +121,7 @@ for source in \
   "$CLIENT_SOURCE" \
   "$RUNTIME_SOURCE" \
   "$STATE_SOURCE" \
+  "$EXPIRED_IDENTITY_SOURCE" \
   "$RECOVERY_CLIENT_SOURCE" \
   "$ACCEPTANCE_SOURCE" \
   "$ACCESS_SOURCE" \
@@ -172,6 +174,7 @@ file_would_change "$AGENT_SOURCE" "$INSTALL_DIR/node_agent.py" && changed=true
 file_would_change "$CLIENT_SOURCE" "$INSTALL_DIR/node_mtls_client.py" && changed=true
 file_would_change "$RUNTIME_SOURCE" "$INSTALL_DIR/node_mtls_runtime.py" && changed=true
 file_would_change "$STATE_SOURCE" "$INSTALL_DIR/node_mtls_state.py" && changed=true
+file_would_change "$EXPIRED_IDENTITY_SOURCE" "$INSTALL_DIR/node_expired_identity.py" && changed=true
 file_would_change "$RECOVERY_CLIENT_SOURCE" "$INSTALL_DIR/node_recovery.py" && changed=true
 file_would_change "$ACCEPTANCE_SOURCE" "$INSTALL_DIR/acceptance.py" && changed=true
 file_would_change "$ACCESS_SOURCE" "$INSTALL_DIR/access_runtime.py" && changed=true
@@ -194,6 +197,7 @@ if [[ "$changed" == true ]]; then
   backup_file "$INSTALL_DIR/node_mtls_client.py" "$backup_dir" node_mtls_client.py 0644
   backup_file "$INSTALL_DIR/node_mtls_runtime.py" "$backup_dir" node_mtls_runtime.py 0644
   backup_file "$INSTALL_DIR/node_mtls_state.py" "$backup_dir" node_mtls_state.py 0644
+  backup_file "$INSTALL_DIR/node_expired_identity.py" "$backup_dir" node_expired_identity.py 0644
   backup_file "$INSTALL_DIR/node_recovery.py" "$backup_dir" node_recovery.py 0755
   backup_file "$INSTALL_DIR/acceptance.py" "$backup_dir" acceptance.py 0755
   backup_file "$INSTALL_DIR/access_runtime.py" "$backup_dir" access_runtime.py 0755
@@ -222,6 +226,7 @@ atomic_install_file "$AGENT_SOURCE" "$INSTALL_DIR/node_agent.py" 0755
 atomic_install_file "$CLIENT_SOURCE" "$INSTALL_DIR/node_mtls_client.py" 0644
 atomic_install_file "$RUNTIME_SOURCE" "$INSTALL_DIR/node_mtls_runtime.py" 0644
 atomic_install_file "$STATE_SOURCE" "$INSTALL_DIR/node_mtls_state.py" 0644
+atomic_install_file "$EXPIRED_IDENTITY_SOURCE" "$INSTALL_DIR/node_expired_identity.py" 0644
 atomic_install_file "$RECOVERY_CLIENT_SOURCE" "$INSTALL_DIR/node_recovery.py" 0755
 atomic_install_file "$ACCEPTANCE_SOURCE" "$INSTALL_DIR/acceptance.py" 0755
 atomic_install_file "$ACCESS_SOURCE" "$INSTALL_DIR/access_runtime.py" 0755
@@ -246,6 +251,7 @@ fi
   "$INSTALL_DIR/node_mtls_client.py" \
   "$INSTALL_DIR/node_mtls_runtime.py" \
   "$INSTALL_DIR/node_mtls_state.py" \
+  "$INSTALL_DIR/node_expired_identity.py" \
   "$INSTALL_DIR/node_recovery.py" \
   "$INSTALL_DIR/acceptance.py" \
   "$INSTALL_DIR/access_runtime.py"

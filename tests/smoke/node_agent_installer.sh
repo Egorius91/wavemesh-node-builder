@@ -51,11 +51,13 @@ run_rollback() {
 
 run_installer
 
-for file in node_mtls_client.py node_mtls_runtime.py node_mtls_state.py runtime_findings.py; do
+for file in node_mtls_client.py node_mtls_runtime.py node_mtls_state.py node_expired_identity.py runtime_findings.py; do
   [[ -f "$DESTDIR/usr/local/lib/wavemesh-agent/$file" ]]
   [[ "$(stat -c '%a' "$DESTDIR/usr/local/lib/wavemesh-agent/$file")" == 644 ]]
 done
 [[ "$(stat -c '%a' "$DESTDIR/usr/local/lib/wavemesh-agent/access_runtime.py")" == 755 ]]
+"${WAVEMESH_TEST_PYTHON:-/usr/bin/python3}" "$ROOT_DIR/tests/unit/test_installed_recovery_dependency.py" \
+  --installed-dir "$DESTDIR/usr/local/lib/wavemesh-agent"
 cmp "$ROOT_DIR/agent/wavemesh-node-lock.conf" "$DESTDIR/etc/tmpfiles.d/wavemesh-node-lock.conf"
 [[ ! -e "$DESTDIR/run/lock/wavemesh-node.lock" ]]
 [[ "$(stat -c '%a' "$DESTDIR/usr/local/lib/wavemesh-agent/node_agent.py")" == 755 ]]
@@ -102,7 +104,25 @@ if grep -Eq '(^| )(start|restart|try-restart|reload-or-restart)( |$)|--now' "$SY
   exit 1
 fi
 
+# A change to only the expiry dependency must trigger backup and adoption.
+printf '\n# dependency-only-change\n' >> "$DESTDIR/usr/local/lib/wavemesh-agent/node_expired_identity.py"
+cp "$DESTDIR/usr/local/lib/wavemesh-agent/node_expired_identity.py" "$TEMP_DIR/expiry.dependency-only"
+run_installer
+module_backup="$(find "$backup_root" -mindepth 1 -maxdepth 1 -type d | sort | tail -n 1)"
+cmp "$TEMP_DIR/expiry.dependency-only" "$module_backup/node_expired_identity.py"
+cmp "$ROOT_DIR/agent/node_expired_identity.py" "$DESTDIR/usr/local/lib/wavemesh-agent/node_expired_identity.py"
+run_rollback --latest
+cmp "$TEMP_DIR/expiry.dependency-only" "$DESTDIR/usr/local/lib/wavemesh-agent/node_expired_identity.py"
+run_installer
+second_backup_count="$(find "$backup_root" -mindepth 1 -maxdepth 1 -type d | wc -l)"
+
 printf '\n# previous-version-marker\n' >> "$DESTDIR/usr/local/lib/wavemesh-agent/node_agent.py"
+printf '\n# previous-expiry-module\n' >> "$DESTDIR/usr/local/lib/wavemesh-agent/node_expired_identity.py"
+printf '\n# previous-recovery-module\n' >> "$DESTDIR/usr/local/lib/wavemesh-agent/node_recovery.py"
+printf '\n# previous-recovery-wrapper\n' >> "$DESTDIR/usr/local/sbin/wavemesh-node-agent-recover"
+cp "$DESTDIR/usr/local/lib/wavemesh-agent/node_expired_identity.py" "$TEMP_DIR/expiry.before"
+cp "$DESTDIR/usr/local/lib/wavemesh-agent/node_recovery.py" "$TEMP_DIR/recovery.before"
+cp "$DESTDIR/usr/local/sbin/wavemesh-node-agent-recover" "$TEMP_DIR/wrapper.before"
 printf '\n# previous-lock-rule\n' >> "$DESTDIR/etc/tmpfiles.d/wavemesh-node-lock.conf"
 : > "$SYSTEMCTL_LOG"
 run_installer
@@ -117,6 +137,12 @@ fi
 run_rollback --latest
 grep -Fq 'previous-version-marker' "$DESTDIR/usr/local/lib/wavemesh-agent/node_agent.py"
 grep -Fq 'previous-lock-rule' "$DESTDIR/etc/tmpfiles.d/wavemesh-node-lock.conf"
+cmp "$TEMP_DIR/expiry.before" "$DESTDIR/usr/local/lib/wavemesh-agent/node_expired_identity.py"
+cmp "$TEMP_DIR/recovery.before" "$DESTDIR/usr/local/lib/wavemesh-agent/node_recovery.py"
+cmp "$TEMP_DIR/wrapper.before" "$DESTDIR/usr/local/sbin/wavemesh-node-agent-recover"
+[[ "$(stat -c '%a' "$DESTDIR/usr/local/lib/wavemesh-agent/node_expired_identity.py")" == 644 ]]
+[[ "$(stat -c '%a' "$DESTDIR/usr/local/lib/wavemesh-agent/node_recovery.py")" == 755 ]]
+[[ "$(stat -c '%a' "$DESTDIR/usr/local/sbin/wavemesh-node-agent-recover")" == 755 ]]
 if grep -Eq '(^| )restart( |$)' "$SYSTEMCTL_LOG"; then
   echo "rollback restarted the Agent without explicit request" >&2
   exit 1
@@ -157,6 +183,27 @@ if PATH="$BIN_DIR:$PATH" \
 fi
 [[ ! -e "$unsafe_dest/usr/local/lib/wavemesh-agent/node_agent.py" ]]
 
+# Missing and symlinked dependency sources must refuse before installation.
+unsafe_source="$TEMP_DIR/source-contract"
+mkdir -p "$unsafe_source"
+cp -R "$ROOT_DIR/agent" "$unsafe_source/agent"
+rm "$unsafe_source/agent/node_expired_identity.py"
+for kind in missing symlink; do
+  if [[ "$kind" == symlink ]]; then
+    ln -s "$ROOT_DIR/agent/node_expired_identity.py" "$unsafe_source/agent/node_expired_identity.py"
+  fi
+  if PATH="$BIN_DIR:$PATH" WAVEMESH_AGENT_DESTDIR="$TEMP_DIR/unused-$kind" \
+      WAVEMESH_AGENT_SYSTEMCTL="$BIN_DIR/systemctl" \
+      WAVEMESH_AGENT_PYTHON="${WAVEMESH_TEST_PYTHON:-/usr/bin/python3}" \
+      WAVEMESH_TEST_SYSTEMCTL_LOG="$SYSTEMCTL_LOG" \
+      bash "$unsafe_source/agent/install.sh" >"$TEMP_DIR/refusal-$kind.log" 2>&1; then
+    echo "installer accepted $kind expiry dependency source" >&2
+    exit 1
+  fi
+  grep -F 'Missing or unsafe installer source' "$TEMP_DIR/refusal-$kind.log" >/dev/null
+  [[ ! -e "$TEMP_DIR/unused-$kind" ]]
+done
+
 if command -v systemd-analyze >/dev/null 2>&1; then
   verify_dir="$TEMP_DIR/systemd-verify"
   mkdir -p "$verify_dir"
@@ -172,11 +219,20 @@ fi
 # Restore a pre-lock-rule backup without requiring newly introduced entries.
 latest_backup="$(find "$backup_root" -mindepth 1 -maxdepth 1 -type d | sort | tail -n 1)"
 rm -f "$latest_backup/wavemesh-node-lock.conf" "$latest_backup/wavemesh-node-lock.conf.absent"
+for label in node_expired_identity.py node_recovery.py wavemesh-node-agent-recover; do
+  rm -f "$latest_backup/$label" "$latest_backup/$label.absent"
+done
+cp "$DESTDIR/usr/local/lib/wavemesh-agent/node_expired_identity.py" "$TEMP_DIR/expiry.before-legacy"
+cp "$DESTDIR/usr/local/lib/wavemesh-agent/node_recovery.py" "$TEMP_DIR/recovery.before-legacy"
+cp "$DESTDIR/usr/local/sbin/wavemesh-node-agent-recover" "$TEMP_DIR/wrapper.before-legacy"
 rm -f "$latest_backup/runtime_findings.py" "$latest_backup/runtime_findings.py.absent"
 cp "$DESTDIR/usr/local/lib/wavemesh-agent/runtime_findings.py" "$TEMP_DIR/findings.before-legacy-rollback"
 cp "$DESTDIR/etc/tmpfiles.d/wavemesh-node-lock.conf" "$TEMP_DIR/rule.before-legacy-rollback"
 run_rollback --latest
 cmp "$TEMP_DIR/rule.before-legacy-rollback" "$DESTDIR/etc/tmpfiles.d/wavemesh-node-lock.conf"
+cmp "$TEMP_DIR/expiry.before-legacy" "$DESTDIR/usr/local/lib/wavemesh-agent/node_expired_identity.py"
+cmp "$TEMP_DIR/recovery.before-legacy" "$DESTDIR/usr/local/lib/wavemesh-agent/node_recovery.py"
+cmp "$TEMP_DIR/wrapper.before-legacy" "$DESTDIR/usr/local/sbin/wavemesh-node-agent-recover"
 cmp "$TEMP_DIR/findings.before-legacy-rollback" "$DESTDIR/usr/local/lib/wavemesh-agent/runtime_findings.py"
 grep -Fx 'private synthetic evidence' "$DESTDIR/var/lib/wavemesh-agent/runtime-findings/evidence-marker" >/dev/null
 
@@ -191,6 +247,9 @@ run_rollback --backup "${first_backup##*/}"
 [[ "$(stat -c '%i' "$DESTDIR/run/lock/wavemesh-node.lock")" == "$lock_inode" ]]
 [[ "$(cat "$DESTDIR/run/lock/wavemesh-node.lock")" == lock-sentinel ]]
 [[ ! -e "$DESTDIR/usr/local/lib/wavemesh-agent/runtime_findings.py" ]]
+[[ ! -e "$DESTDIR/usr/local/lib/wavemesh-agent/node_expired_identity.py" ]]
+[[ ! -e "$DESTDIR/usr/local/lib/wavemesh-agent/node_recovery.py" ]]
+[[ ! -e "$DESTDIR/usr/local/sbin/wavemesh-node-agent-recover" ]]
 grep -Fx 'private synthetic evidence' "$DESTDIR/var/lib/wavemesh-agent/runtime-findings/evidence-marker" >/dev/null
 
 echo "node agent installer smoke tests: OK"
