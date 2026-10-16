@@ -51,16 +51,20 @@ echo 'PASS: old behavior imports foreign ownership and writable modes'
 [[ "$(stat -c '%u:%g:%a' "$tmp/extract/x-ui/x-ui")" == 0:0:750 ]]
 echo 'PASS: tar extraction does not restore foreign ownership or permissions'
 
-assert_tree() {
+assert_custody() {
   local path metadata mode
   while IFS= read -r -d '' path; do
     metadata="$(stat -c '%u:%g' "$path")"
     [[ "$metadata" == 0:0 ]] || wm_fail "foreign installed owner: $path"
     if [[ ! -L "$path" ]]; then
       mode="$(stat -c '%a' "$path")"
-      (( (8#$mode & 0022) == 0 )) || wm_fail "writable installed path: $path"
+      (( (8#$mode & 06022) == 0 )) || wm_fail "unsafe installed mode: $path"
     fi
   done < <(find "$XUI_HOME" -print0)
+}
+
+assert_tree() {
+  assert_custody
   [[ -x "$XUI_RUNTIME_BIN" && -x "$XUI_HOME/bin/xray" ]]
   cmp "$tmp/source/x-ui/x-ui" "$XUI_RUNTIME_BIN"
   cmp "$tmp/source/x-ui/data" "$XUI_HOME/data"
@@ -77,9 +81,10 @@ chmod 0666 "$tmp/sentinel"
 ln -s "$tmp/sentinel" "$tmp/source/x-ui/bin/external-link"
 ln -s data "$tmp/source/x-ui/data-link"
 sentinel_before="$(stat -c '%u:%g:%a' "$tmp/sentinel")"
+cp "$tmp/sentinel" "$tmp/sentinel-before"
 XUI_HOME="$tmp/install-parent/x-ui"
 XUI_RUNTIME_BIN="$XUI_HOME/x-ui"
-(umask 0000; wm_install_xui_release_tree "$tmp/source/x-ui")
+(umask 0000; caller_umask="$(umask)"; wm_install_xui_release_tree "$tmp/source/x-ui"; [[ "$(umask)" == "$caller_umask" ]])
 assert_tree
 [[ "$(stat -c '%a' "$XUI_HOME")" == 755 ]]
 [[ "$(stat -c '%a' "$XUI_RUNTIME_BIN")" == 755 ]]
@@ -132,10 +137,92 @@ wm_install_xui_release_tree "$tmp/zip-extract/x-ui"
 cmp "$tmp/zip-extract/x-ui/x-ui" "$XUI_RUNTIME_BIN"
 echo 'PASS: ordinary ZIP layout/content and executable behavior preserved'
 
-# A failed ownership operation must stop before any success can be reported.
-if (chown() { return 1; }; wm_install_xui_release_tree "$tmp/source/x-ui"; touch "$tmp/continued"); then
+# A foreign 0777 input must already be non-writable before chown, and a
+# chown failure must remove the incomplete path, not merely stop continuation.
+if (
+  chown() {
+    local path mode
+    while IFS= read -r -d '' path; do
+      [[ "$(stat -c '%u' "$path")" == 0 ]] || return 90
+      if [[ ! -L "$path" ]]; then
+        mode="$(stat -c '%a' "$path")"
+        (( (8#$mode & 06022) == 0 )) || return 91
+      fi
+    done < <(find "$XUI_HOME" -print0)
+    touch "$tmp/safe-before-chown"
+    return 1
+  }
+  umask 0000
+  wm_install_xui_release_tree "$tmp/source/x-ui"
+  touch "$tmp/continued"
+); then
   wm_fail 'ownership failure was ignored'
 fi
-[[ ! -e "$tmp/continued" ]]
-echo 'PASS: ownership failure stops installation'
+[[ -e "$tmp/safe-before-chown" && ! -e "$tmp/continued" ]]
+[[ ! -e "$XUI_HOME" && ! -L "$XUI_HOME" ]]
+echo 'PASS: ownership failure leaves no executable tree; actual pre-chown modes were safe'
+
+# Simulate a copy failure after real files have been copied.
+if (
+  cp() { command cp "$@" || return; return 1; }
+  wm_install_xui_release_tree "$tmp/source/x-ui"
+  touch "$tmp/copy-continued"
+); then
+  wm_fail 'copy failure was ignored'
+fi
+[[ ! -e "$tmp/copy-continued" && ! -e "$XUI_HOME" && ! -L "$XUI_HOME" ]]
+echo 'PASS: copy failure removes the incomplete executable tree'
+
+if (
+  chmod() { return 1; }
+  wm_install_xui_release_tree "$tmp/source/x-ui"
+  touch "$tmp/mode-continued"
+); then
+  wm_fail 'permission failure was ignored'
+fi
+[[ ! -e "$tmp/mode-continued" && ! -e "$XUI_HOME" && ! -L "$XUI_HOME" ]]
+echo 'PASS: permission failure removes the incomplete executable tree'
+
+# Configurable runtime paths are not guaranteed to be inside XUI_HOME.
+# Reject both an explicit external path and an installed symlink escaping home.
+XUI_RUNTIME_BIN="$tmp/sentinel"
+if (wm_install_xui_release_tree "$tmp/source/x-ui"; touch "$tmp/runtime-continued"); then
+  wm_fail 'external runtime override was accepted'
+fi
+[[ ! -e "$tmp/runtime-continued" ]]
+assert_custody
+[[ "$(stat -c '%u:%g:%a' "$tmp/sentinel")" == "$sentinel_before" ]]
+cmp "$tmp/sentinel-before" "$tmp/sentinel"
+ln -s "$tmp/sentinel" "$tmp/source/x-ui/runtime-link"
+XUI_RUNTIME_BIN="$XUI_HOME/runtime-link"
+if (wm_install_xui_release_tree "$tmp/source/x-ui"; touch "$tmp/runtime-link-continued"); then
+  wm_fail 'escaping runtime symlink was accepted'
+fi
+[[ ! -e "$tmp/runtime-link-continued" ]]
+assert_custody
+[[ "$(stat -c '%u:%g:%a' "$tmp/sentinel")" == "$sentinel_before" ]]
+cmp "$tmp/sentinel-before" "$tmp/sentinel"
+rm "$tmp/source/x-ui/runtime-link"
+ln -s x-ui "$tmp/source/x-ui/runtime-link"
+wm_install_xui_release_tree "$tmp/source/x-ui"
+[[ -x "$XUI_RUNTIME_BIN" && "$(readlink "$XUI_RUNTIME_BIN")" == x-ui ]]
+for bad_runtime in "$XUI_HOME/missing" "$XUI_HOME/bin"; do
+  if (XUI_RUNTIME_BIN="$bad_runtime"; wm_install_xui_release_tree "$tmp/source/x-ui"; touch "$tmp/invalid-runtime-continued"); then
+    wm_fail 'missing/directory runtime target was accepted'
+  fi
+  [[ ! -e "$tmp/invalid-runtime-continued" ]]
+  assert_custody
+done
+XUI_RUNTIME_BIN="$XUI_HOME/x-ui"
+if (
+  chmod() { if [[ "$1" == +x ]]; then return 1; else command chmod "$@"; fi; }
+  wm_install_xui_release_tree "$tmp/source/x-ui"
+  touch "$tmp/runtime-mode-continued"
+); then
+  wm_fail 'runtime chmod failure was ignored'
+fi
+[[ ! -e "$tmp/runtime-mode-continued" ]]
+assert_custody
+echo 'PASS: late runtime chmod failure leaves a normalized, safe tree'
+echo 'PASS: runtime chmod is contained; internal runtime symlink still works'
 echo 'xui artifact custody native proof: PASS'

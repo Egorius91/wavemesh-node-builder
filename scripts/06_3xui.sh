@@ -108,16 +108,24 @@ wm_download_latest_xui_release() {
 }
 
 wm_install_xui_release_tree() {
-  local src_dir="$1" home_real bin_real binary binary_real
+  local src_dir="$1" home_real runtime_real bin_real binary binary_real
   rm -rf "$XUI_HOME" || wm_fail "Could not replace 3X-UI release directory"
-  mkdir -p "$XUI_HOME" || wm_fail "Could not create 3X-UI release directory"
-  # Archive metadata is not authority over the root-run executable tree.
-  cp -a --no-preserve=ownership -- "$src_dir"/. "$XUI_HOME"/ || wm_fail "Could not copy 3X-UI release files"
-  chown -hR 0:0 -- "$XUI_HOME" || wm_fail "Could not establish 3X-UI release ownership"
-  chmod -R go-w -- "$XUI_HOME" || wm_fail "Could not restrict 3X-UI release permissions"
-  chmod +x "$XUI_RUNTIME_BIN" 2>/dev/null || true
+  # Do not import source modes/ACLs; normalize before checking ownership.
+  # The explicit chmod is still needed when parent default ACLs are inherited.
+  if ! (umask 0022; mkdir -p "$XUI_HOME" && cp -a --no-preserve=ownership,mode -- "$src_dir"/. "$XUI_HOME"/) ||
+      ! chmod -R ug-s,go-w -- "$XUI_HOME" ||
+      ! chown -hR 0:0 -- "$XUI_HOME"; then
+    rm -rf -- "$XUI_HOME" || wm_fail "Could not remove incomplete 3X-UI release directory"
+    wm_fail "Could not establish 3X-UI release custody"
+  fi
   # Keep internal binary symlink layouts, without chmod outside the copied tree.
   home_real="$(readlink -f -- "$XUI_HOME")" || wm_fail "Could not resolve 3X-UI release directory"
+  runtime_real="$(readlink -f -- "$XUI_RUNTIME_BIN")" || wm_fail "Could not resolve 3X-UI runtime binary"
+  case "$runtime_real" in
+    "$home_real"/*) [[ -f "$runtime_real" ]] || wm_fail "3X-UI runtime binary is not a regular file" ;;
+    *) wm_fail "3X-UI runtime binary is outside installed release directory" ;;
+  esac
+  chmod +x -- "$runtime_real" || wm_fail "Could not set 3X-UI runtime binary permissions"
   bin_real="$(readlink -f -- "$XUI_HOME/bin" 2>/dev/null)" || bin_real=""
   case "$bin_real" in
     "$home_real"|"$home_real"/*)
