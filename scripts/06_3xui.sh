@@ -69,6 +69,14 @@ wm_select_xui_asset_url() {
   printf '%s' "$asset_url"
 }
 
+wm_extract_xui_release_archive() {
+  local archive="$1" asset_url="$2" extract_dir="$3"
+  case "$asset_url" in
+    *.zip) unzip -q "$archive" -d "$extract_dir" ;;
+    *) mkdir -p "$extract_dir" && tar --no-same-owner --no-same-permissions -xzf "$archive" -C "$extract_dir" ;;
+  esac
+}
+
 wm_download_latest_xui_release() {
   local arch release_json asset_url tag workdir archive
   arch="$(wm_detect_xui_arch)"
@@ -94,12 +102,34 @@ wm_download_latest_xui_release() {
   mkdir -p "$workdir"
   curl -fL "$asset_url" -o "$archive" || wm_fail "Could not download 3X-UI release asset"
 
-  case "$asset_url" in
-    *.zip) unzip -q "$archive" -d "$workdir/extract" ;;
-    *) mkdir -p "$workdir/extract" && tar -xzf "$archive" -C "$workdir/extract" ;;
-  esac
+  wm_extract_xui_release_archive "$archive" "$asset_url" "$workdir/extract" || wm_fail "Could not extract 3X-UI release asset"
 
   echo "$workdir/extract|$tag"
+}
+
+wm_install_xui_release_tree() {
+  local src_dir="$1" home_real bin_real binary binary_real
+  rm -rf "$XUI_HOME" || wm_fail "Could not replace 3X-UI release directory"
+  mkdir -p "$XUI_HOME" || wm_fail "Could not create 3X-UI release directory"
+  # Archive metadata is not authority over the root-run executable tree.
+  cp -a --no-preserve=ownership -- "$src_dir"/. "$XUI_HOME"/ || wm_fail "Could not copy 3X-UI release files"
+  chown -hR 0:0 -- "$XUI_HOME" || wm_fail "Could not establish 3X-UI release ownership"
+  chmod -R go-w -- "$XUI_HOME" || wm_fail "Could not restrict 3X-UI release permissions"
+  chmod +x "$XUI_RUNTIME_BIN" 2>/dev/null || true
+  # Keep internal binary symlink layouts, without chmod outside the copied tree.
+  home_real="$(readlink -f -- "$XUI_HOME")" || wm_fail "Could not resolve 3X-UI release directory"
+  bin_real="$(readlink -f -- "$XUI_HOME/bin" 2>/dev/null)" || bin_real=""
+  case "$bin_real" in
+    "$home_real"|"$home_real"/*)
+      for binary in "$bin_real"/*; do
+        [[ -f "$binary" ]] || continue
+        binary_real="$(readlink -f -- "$binary")" || wm_fail "Could not resolve 3X-UI binary"
+        case "$binary_real" in
+          "$home_real"/*) chmod +x -- "$binary_real" || wm_fail "Could not set 3X-UI binary permissions" ;;
+        esac
+      done
+      ;;
+  esac
 }
 
 wm_install_xui_files_from_release() {
@@ -116,11 +146,7 @@ wm_install_xui_files_from_release() {
   }
 
   wm_info "Installing 3X-UI files from $src_dir"
-  rm -rf "$XUI_HOME"
-  mkdir -p "$XUI_HOME"
-  cp -a "$src_dir"/. "$XUI_HOME"/
-  chmod +x "$XUI_RUNTIME_BIN" 2>/dev/null || true
-  chmod +x "$XUI_HOME"/bin/* 2>/dev/null || true
+  wm_install_xui_release_tree "$src_dir"
 
   service_file="$(find "$extract_dir" -maxdepth 5 -type f \( -name 'x-ui.service' -o -name 'x-ui.service.debian' \) | head -n1)"
   if [[ -n "$service_file" ]]; then
