@@ -22,8 +22,8 @@ jobs:
       - uses: actions/setup-python@v5
         with:
           python-version: "3.12"
-      - name: Install nginx for request logging regression
-        run: sudo apt-get update -qq && sudo apt-get install -y nginx
+      - name: Install nginx and unzip for native regressions
+        run: sudo apt-get update -qq && sudo apt-get install -y nginx unzip
       - name: Python unit and E2E tests
         env:
           WAVEMESH_REQUIRE_NGINX_TESTS: "1"
@@ -51,5 +51,6 @@ jobs:
         run: |
           sudo python3 tests/unit/test_expired_node_pilot.py
           sudo python3 tests/unit/test_expired_pilot_installer.py
+          sudo bash tests/unit/test_xui_artifact_custody.sh
       - name: Patch hygiene
         run: git diff --check
