@@ -52,5 +52,69 @@ jobs:
           sudo python3 tests/unit/test_expired_node_pilot.py
           sudo python3 tests/unit/test_expired_pilot_installer.py
           sudo bash tests/unit/test_xui_artifact_custody.sh
+          sudo python3 -I -B - <<'PY'
+          # owner-native-wrapper-begin
+          import os, pathlib, stat, subprocess, sys, tempfile
+
+          def owner_outer_identity(path):
+              info = path.lstat()
+              if not stat.S_ISDIR(info.st_mode) or info.st_uid != 0 or info.st_gid != 0 or stat.S_IMODE(info.st_mode) != 0o700:
+                  raise RuntimeError('OWNER_NATIVE_OUTER_UNSAFE')
+              return info.st_dev, info.st_ino, info.st_uid, info.st_gid, stat.S_IMODE(info.st_mode)
+
+          def run_owner_native_fixture():
+              if sys.version_info < (3, 12):
+                  print('OWNER_NATIVE_PYTHON_312_REQUIRED')
+                  return 1
+              previous_umask = os.umask(0o077)
+              outer = path = pin = None
+              primary, observation_failed, cleanup_failed = 1, False, False
+              try:
+                  outer = tempfile.TemporaryDirectory(prefix='wavemesh-owner-native-ci-', delete=False)
+                  path = pathlib.Path(outer.name)
+                  pin = owner_outer_identity(path)
+                  fixture = pathlib.Path('tests/native/test_xui_owner_repair_native.py').absolute()
+                  try:
+                      result = subprocess.run([sys.executable, '-I', '-B', str(fixture), '--require-native'],
+                          cwd=str(fixture.parents[2]), stdin=subprocess.DEVNULL, timeout=120, check=False,
+                          env={'PATH':'/usr/sbin:/usr/bin:/sbin:/bin', 'LC_ALL':'C.UTF-8', 'TMPDIR':str(path)})
+                      primary = result.returncode
+                  except subprocess.TimeoutExpired:
+                      primary = 124
+                  except Exception as exc:
+                      print('OWNER_NATIVE_CHILD_LAUNCH_FAILED', type(exc).__name__)
+                  try:
+                      if owner_outer_identity(path) != pin:
+                          raise RuntimeError('OWNER_NATIVE_OUTER_CHANGED')
+                      with os.scandir(path) as entries:
+                          if next(entries, None) is not None:
+                              raise RuntimeError('OWNER_NATIVE_CHILD_LEFT_RESIDUE')
+                  except Exception as exc:
+                      observation_failed = True
+                      print('OWNER_NATIVE_OUTER_OBSERVATION_FAILED', type(exc).__name__)
+              except Exception as exc:
+                  print('OWNER_NATIVE_WRAPPER_FAILED', type(exc).__name__)
+              finally:
+                  try:
+                      if outer is not None:
+                          if pin is None or owner_outer_identity(path) != pin:
+                              raise RuntimeError('OWNER_NATIVE_CLEANUP_IDENTITY_UNKNOWN')
+                          outer.cleanup()
+                          try:
+                              path.lstat()
+                          except FileNotFoundError:
+                              pass
+                          else:
+                              raise RuntimeError('OWNER_NATIVE_OUTER_STILL_EXISTS')
+                  except Exception as exc:
+                      cleanup_failed = True
+                      print('OWNER_NATIVE_OUTER_CLEANUP_FAILED', type(exc).__name__)
+                  finally:
+                      os.umask(previous_umask)
+              print('OWNER_NATIVE_RESULT', primary, 'OBSERVATION', not observation_failed, 'CLEANUP', not cleanup_failed)
+              return primary if primary else int(observation_failed or cleanup_failed)
+          # owner-native-wrapper-end
+          raise SystemExit(run_owner_native_fixture())
+          PY
       - name: Patch hygiene
         run: git diff --check

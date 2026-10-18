@@ -14,6 +14,7 @@ if '--require-native' not in sys.argv:
 import importlib.util
 import os
 import pathlib
+import stat
 import tempfile
 import unittest
 from unittest import mock
@@ -34,10 +35,14 @@ class MemoryJournal:
 
 class NativeFixtures(unittest.TestCase):
     def setUp(self):
+        previous_umask=os.umask(0o077)
+        self.addCleanup(os.umask,previous_umask)
         self.temp=tempfile.TemporaryDirectory(prefix='wavemesh-owner-fixture-')
+        self.addCleanup(self.temp.cleanup)
         self.root=pathlib.Path(self.temp.name)
+        self.assertEqual(stat.S_IMODE(self.root.stat().st_mode),0o700)
         self.local=self.root/'usr/local';self.home=self.local/'x-ui'
-        (self.home/'bin').mkdir(parents=True)
+        (self.home/'bin').mkdir(parents=True,mode=0o700)
         for path in m.MEMBERS:
             relative=path[len(m.HOME):].lstrip('/')
             actual=self.home/relative
@@ -54,11 +59,11 @@ class NativeFixtures(unittest.TestCase):
                 return os.open(path,os.O_RDONLY|os.O_DIRECTORY|os.O_NOFOLLOW)
             raise AssertionError('fixture must not open a live native prefix')
         self.patch=mock.patch.object(m,'open_absolute_directory',anchor);self.patch.start()
+        self.addCleanup(self.patch.stop)
         identities={path:(os.stat(self.home/path[len(m.HOME):].lstrip('/')).st_dev,
                           os.stat(self.home/path[len(m.HOME):].lstrip('/')).st_ino) for path in m.MEMBERS}
         self.identities=identities
         self.doc=m.NativeObjects.capture(m.TARGETS[0],'a'*32,identities,lambda:None)
-    def tearDown(self):self.patch.stop();self.temp.cleanup()
     def test_real_fchown_preserves_same_bytes_mode_inode_and_exclusion(self):
         ledger=MemoryJournal();objects=m.NativeObjects(self.doc)
         try:m.apply_owner_only(self.doc,objects,ledger,lambda:None)
@@ -70,7 +75,7 @@ class NativeFixtures(unittest.TestCase):
     def test_renamed_home_or_bin_cannot_validate_leaf_in_old_directory(self):
         objects=m.NativeObjects(self.doc)
         old=self.local/'old-tree'
-        os.rename(self.home,old);self.home.mkdir()
+        os.rename(self.home,old);self.home.mkdir(mode=0o700)
         try:
             with self.assertRaises(m.Stop):objects.check(self.doc['objects'][2])
         finally:objects.close()

@@ -195,12 +195,26 @@ Focused virtual-only cgroup regression proof (no host /sys/proc/fstatfs reads):
 Prepared native fixture command, **NOT_RUN** in this stage, requires a separately
 admitted Linux UID0 fixture window:
 
-`python3 -I tests/native/test_xui_owner_repair_native.py --require-native`
+`python3 -I -B tests/native/test_xui_owner_repair_native.py --require-native`
 
 The fixture defaults77, uses only a fresh synthetic temp tree, and never calls
 systemctl/busctl/flock/Node/network or live repair. It prepares real fchown,
 same-byte/mode/inode/exclusion preservation, HOME rename rejection,
 symlink/hardlink refusal and protected-ledger torn-record/reopen checks. Passing
 it would prove only POSIX fixture behavior, not a Node's admission/runtime state.
-Full CI, native fixtures, staging quiescence/repair, deployment and command
-resume remain NOT_RUN. No new workflow or dependency is added.
+
+The existing Ubuntu test job prepares this command in its existing native step.
+Its isolated Python 3.12 wrapper and child use -I -B (no root repository pyc), a
+minimal explicit environment and one child attempt with a 120 second timeout.
+The wrapper owns one unique 0700 outer temp directory; the fixture creates private inner trees
+under TMPDIR using umask 077, 0700 synthetic executables/directories and 0600
+ledger/excluded files. Fixture addCleanup handles setup failures. After child
+exit the independent wrapper checks that the exact outer has no children, then
+finally cleans only its pinned directory and verifies ENOENT. Changed identity
+refuses deletion. Child failure/77/timeout and residue are failures; cleanup
+failure is reported separately and never masks a nonzero primary child code.
+
+`python -I -B tests/unit/test_xui_owner_native_ci_lifecycle.py` checks these
+failure paths with AST-extracted functions and mocks only. Full CI and actual
+native execution await main's publication/admission; staging quiescence/repair,
+deployment and command resume remain NOT_RUN. No workflow or dependency is added.
