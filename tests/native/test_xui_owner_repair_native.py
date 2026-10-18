@@ -42,7 +42,7 @@ class NativeFixtures(unittest.TestCase):
             relative=path[len(m.HOME):].lstrip('/')
             actual=self.home/relative
             if path not in m.DIRECTORIES:actual.write_bytes(('synthetic public '+relative+'\n').encode())
-            os.chmod(actual,0o755)
+            os.chmod(actual,0o700)
             os.chown(actual,1001,1001)
         self.excluded=self.home/'not-a-candidate.private'
         self.excluded.write_bytes(b'synthetic excluded content, never opened by operator\n')
