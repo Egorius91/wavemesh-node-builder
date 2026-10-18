@@ -547,6 +547,42 @@ def check_operator_source(expected):
         os.close(parent)
 
 
+def require_cgroup2_filesystem(fd):
+    """Only the reviewed Linux x86_64 LP64 statfs ABI; unsupported means STOP."""
+    import ctypes
+    require(sys.platform == 'linux' and ctypes.sizeof(ctypes.c_long) == 8 and
+            ctypes.sizeof(ctypes.c_void_p) == 8 and os.uname().machine == 'x86_64',
+            'CGROUP2_ABI_UNSUPPORTED')
+    class StatFS(ctypes.Structure):
+        _fields_ = [('f_type',ctypes.c_long), ('f_bsize',ctypes.c_long),
+                    ('f_blocks',ctypes.c_ulong), ('f_bfree',ctypes.c_ulong),
+                    ('f_bavail',ctypes.c_ulong), ('f_files',ctypes.c_ulong),
+                    ('f_ffree',ctypes.c_ulong), ('f_fsid',ctypes.c_int*2),
+                    ('f_namelen',ctypes.c_long), ('f_frsize',ctypes.c_long),
+                    ('f_flags',ctypes.c_long), ('f_spare',ctypes.c_long*4)]
+    require(ctypes.sizeof(StatFS) == 120, 'CGROUP2_ABI_UNSUPPORTED')
+    libc = ctypes.CDLL(None, use_errno=True)
+    call = libc.fstatfs
+    call.argtypes, call.restype = [ctypes.c_int,ctypes.POINTER(StatFS)], ctypes.c_int
+    value = StatFS()
+    require(call(fd,ctypes.byref(value)) == 0, 'CGROUP2_FSTATFS_FAILED')
+    require(value.f_type == 0x63677270, 'CGROUP2_FILESYSTEM_REQUIRED')
+
+
+def parse_cgroup_fields(raw, required, optional=()):
+    require(raw and len(raw) <= 32768 and raw.endswith(b'\n'), 'CGROUP_CONTROL_FORMAT')
+    values = {}
+    for line in raw.splitlines():
+        parts = line.split(b' ')
+        require(len(parts) == 2 and re.fullmatch(rb'[a-z_]+',parts[0]) and
+                re.fullmatch(rb'(0|[1-9][0-9]{0,18})',parts[1]), 'CGROUP_CONTROL_FORMAT')
+        key = parts[0].decode('ascii')
+        require(key not in values and key in (*required,*optional), 'CGROUP_CONTROL_FIELDS')
+        values[key] = int(parts[1])
+    require(set(required) <= set(values), 'CGROUP_CONTROL_FIELDS')
+    return values
+
+
 class NativeRuntime:
     def __init__(self, admission, command_pins, activation_pins, operator_sha256):
         admission.assert_closed()
@@ -593,28 +629,113 @@ class NativeRuntime:
         return values
 
     def members(self, group):
-        require(group.startswith('/system.slice/') and not any(p in {'.', '..'} for p in group.split('/')),
-                'CGROUP_PATH')
-        path = Path('/sys/fs/cgroup' + group)
-        if not path.exists():
-            return set()
-        pending, found, count = [path], set(), 0
-        while pending:
-            current = pending.pop()
-            require(not current.is_symlink() and current.is_dir(), 'CGROUP_CHANGED')
-            count += 1
-            require(count <= 128, 'CGROUP_BOUND')
-            fd = os.open(str(current/'cgroup.procs'), os.O_RDONLY | os.O_NOFOLLOW | os.O_CLOEXEC)
-            try:
-                raw = os.read(fd, 32769)
-            finally:
-                os.close(fd)
-            require(len(raw) <= 32768, 'CGROUP_BOUND')
-            require(all(line.isdigit() for line in raw.splitlines()), 'CGROUP_PARSE')
-            found.update(int(line) for line in raw.splitlines())
-            require(len(found) <= 256, 'CGROUP_BOUND')
-            pending.extend(p for p in current.iterdir() if p.is_dir() and not p.is_symlink())
-        return found
+        """Finite bracket under held admission, not an atomic/forever-empty claim.
+
+        Only exact known leaf absence can mean empty. Mandatory ancestors must
+        exist; descendants/dying descendants are unsupported, never skipped.
+        Kernel populated covers recursive live processes; procs supplies direct
+        baseline PIDs and cannot independently establish emptiness.
+        """
+        require(group in {'/system.slice/'+name for name in UNITS}, 'CGROUP_PATH')
+        try:
+            with contextlib.ExitStack() as stack:
+                root = open_absolute_directory('/sys/fs/cgroup')
+                stack.callback(os.close,root)
+                root_info = os.fstat(root)
+
+                def checked(fd, directory):
+                    value = os.fstat(fd)
+                    require_cgroup2_filesystem(fd)
+                    require(value.st_dev == root_info.st_dev, 'CGROUP_FILESYSTEM_CHANGED')
+                    if directory:
+                        safe_root_directory(value)
+                    else:
+                        require(stat.S_ISREG(value.st_mode) and value.st_uid == value.st_gid == 0 and
+                                not value.st_mode & 0o022 and value.st_nlink == 1, 'CGROUP_CONTROL_UNSAFE')
+                    return value
+
+                checked(root,True)
+                def opened(name, parent, directory, *, absent_ok=False):
+                    flags = os.O_RDONLY | os.O_NOFOLLOW | os.O_CLOEXEC
+                    if directory:
+                        flags |= os.O_DIRECTORY
+                    try:
+                        fd = os.open(name,flags,dir_fd=parent)
+                    except FileNotFoundError:
+                        if absent_ok:
+                            return None,None
+                        raise
+                    stack.callback(os.close,fd)
+                    before = checked(fd,directory)
+                    require(metadata(before) == metadata(os.stat(name,dir_fd=parent,follow_symlinks=False)),
+                            'CGROUP_NAMED_BINDING_CHANGED')
+                    return fd,before
+
+                parent,parent_info = opened('system.slice',root,True)
+                leaf_name = group.rsplit('/',1)[1]
+                leaf = None
+                files = {}
+
+                def bindings():
+                    fresh = open_absolute_directory('/sys/fs/cgroup')
+                    stack.callback(os.close,fresh)
+                    require(metadata(checked(fresh,True)) == metadata(root_info) == metadata(checked(root,True)),
+                            'CGROUP_ROOT_CHANGED')
+                    require(metadata(checked(parent,True)) == metadata(parent_info) ==
+                            metadata(os.stat('system.slice',dir_fd=root,follow_symlinks=False)), 'CGROUP_PARENT_CHANGED')
+                    if leaf is not None:
+                        require(metadata(checked(leaf,True)) == metadata(leaf_info) ==
+                                metadata(os.stat(leaf_name,dir_fd=parent,follow_symlinks=False)), 'CGROUP_LEAF_CHANGED')
+                    for name,(fd,pin) in files.items():
+                        require(metadata(checked(fd,False)) == metadata(pin) ==
+                                metadata(os.stat(name,dir_fd=leaf,follow_symlinks=False)), 'CGROUP_CONTROL_CHANGED')
+
+                leaf,leaf_info = opened(leaf_name,parent,True,absent_ok=True)
+                if leaf is None:
+                    # Parent/root disappearance is never absence authority.
+                    bindings()
+                    try:
+                        os.stat(leaf_name,dir_fd=parent,follow_symlinks=False)
+                    except FileNotFoundError:
+                        bindings()
+                        return set()
+                    raise Stop('CGROUP_LEAF_APPEARED')
+
+                for name in ('cgroup.stat','cgroup.events','cgroup.procs'):
+                    files[name] = opened(name,leaf,False)
+
+                def read(name):
+                    fd,_ = files[name]
+                    os.lseek(fd,0,os.SEEK_SET)
+                    raw = os.read(fd,32769)
+                    require(len(raw) <= 32768 and os.read(fd,1) == b'', 'CGROUP_CONTROL_READ_BOUND')
+                    return raw
+
+                def snapshot():
+                    counters = parse_cgroup_fields(read('cgroup.stat'),('nr_descendants','nr_dying_descendants'))
+                    require(not any(counters.values()), 'CGROUP_SUBTREE_UNSUPPORTED')
+                    events = parse_cgroup_fields(read('cgroup.events'),('populated',),('frozen',))
+                    require(all(value in {0,1} for value in events.values()), 'CGROUP_EVENT_VALUE')
+                    raw = read('cgroup.procs')
+                    require(not raw or raw.endswith(b'\n'), 'CGROUP_PROCS_FORMAT')
+                    lines = raw.splitlines()
+                    require(len(lines) <= 256 and all(re.fullmatch(rb'[1-9][0-9]{0,9}',line) for line in lines),
+                            'CGROUP_PROCS_FORMAT')
+                    members = {int(line) for line in lines}
+                    require(len(members) == len(lines) and all(pid <= 2147483647 for pid in members), 'CGROUP_PROCS_FORMAT')
+                    require(bool(events['populated']) == bool(members), 'CGROUP_POPULATION_UNCERTAIN')
+                    return counters,events,members
+
+                before = snapshot()
+                bindings()
+                after = snapshot()
+                bindings()
+                require(before == after, 'CGROUP_OBSERVATION_CHANGED')
+                return after[2]
+        except Stop:
+            raise
+        except (OSError,ValueError,AttributeError):
+            raise Stop('CGROUP_OBSERVATION_UNKNOWN') from None
 
     def capture_baseline(self):
         self.assert_admission()

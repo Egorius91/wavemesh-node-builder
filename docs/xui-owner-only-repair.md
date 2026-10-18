@@ -105,7 +105,7 @@ adapter/launcher is needed; the current CLI cannot execute these library APIs.
    most one Agent stop then x-ui stop when each was active, records the returned
    manager job and observes that same job. No second stop is automatic.
 3. Fresh live checks require known inactive/dead units with Job/MainPID/ControlPID
-   zero, bounded empty exact cgroup trees and old process identities gone;
+   zero, supported empty exact cgroup-v2 leaves and old process identities gone;
    fdstore Max/count zero; supported stop/activation policy; no reactivation.
    Known out-of-cgroup delegation/local transactions remain part of the live
    adapter/operational boundary, not inferred from cgroup emptiness.
@@ -146,6 +146,27 @@ reconciliation newer than the last request and currently terminal inactive/dead
 state with zero control/main/job and empty cgroup. Each unit has at most one
 reserve; no corrective stop. Unknown outcome cannot be renamed transport repair.
 
+The cgroup reader supports only the two exact unit leaves on actual cgroup-v2
+filesystems, verified with fstatfs using the reviewed Linux x86_64 LP64 ABI.
+Unsupported ABI/filesystem, missing mandatory root/system.slice, permissions,
+read errors, symlinks, changed named/FD/ancestor bindings or malformed controls
+STOP. Only an exact leaf's initial open-ENOENT plus a second anchored negative
+lookup under unchanged verified ancestors can mean absent; disappearance after
+a successful open cannot. No Path.exists result or skipped subtree is authority.
+
+Existing leaves require zero nr_descendants/nr_dying_descendants in both bounded
+cgroup.stat snapshots; all subtrees, including dying descendants, are explicitly
+unsupported. Kernel-recursive cgroup.events populated and direct cgroup.procs
+must agree and remain stable across the bracket. A stable populated1 with direct
+PIDs is usable for baseline capture; populated1 with an empty direct list STOPs.
+Empty requires populated0 plus empty procs and stable bindings/controls. These
+are finite observations within continuously held admission/external-writer
+exclusion. They are not atomic or forever-empty guarantees; timestamps are not
+general generation counters and cannot exclude every unobserved transient
+create-delete between reads. Native mechanics remain NOT_PROVEN until admitted
+native verification. Primary semantics: Linux admin-guide/cgroup-v2.html and
+include/uapi/linux/magic.h (CGROUP2_SUPER_MAGIC).
+
 No ownership reversal, mode compensation, reinstallation or speculative command
 replay occurs. A changed object or partial ledger needs reconciliation; preserve
 proven0:0 objects. Full filesystem acceptance and restoration are separate.
@@ -166,6 +187,10 @@ execution/recovery reserve; no financial15s/240s or old15-minute proposal is use
 Portable focused proof (no native calls):
 
 `python tests/unit/test_xui_owner_repair.py`
+
+Focused virtual-only cgroup regression proof (no host /sys/proc/fstatfs reads):
+
+`python tests/unit/test_xui_owner_cgroup_reader.py`
 
 Prepared native fixture command, **NOT_RUN** in this stage, requires a separately
 admitted Linux UID0 fixture window:
