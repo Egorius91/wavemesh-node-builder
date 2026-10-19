@@ -16,7 +16,8 @@ permissions:
 jobs:
   test:
     runs-on: ubuntu-latest
-    timeout-minutes: 10
+    # Existing10-minute suite + bounded4-minute synthetic SQL proof/finalizer.
+    timeout-minutes: 15
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-python@v5
@@ -116,5 +117,16 @@ jobs:
           # owner-native-wrapper-end
           raise SystemExit(run_owner_native_fixture())
           PY
+      - name: Native synthetic central PostgreSQL SQL and catalog proof
+        timeout-minutes: 4
+        run: |
+          sudo python3 -I -B tests/native/test_xui_owner_central_postgres.py --require-native \
+            --state "$RUNNER_TEMP/wm-central-sql-${GITHUB_RUN_ID}-${GITHUB_RUN_ATTEMPT}.json"
+      - name: Independently reconcile central SQL fixture cleanup
+        if: always()
+        timeout-minutes: 1
+        run: |
+          sudo python3 -I -B tests/native/test_xui_owner_central_postgres.py --finalize \
+            --state "$RUNNER_TEMP/wm-central-sql-${GITHUB_RUN_ID}-${GITHUB_RUN_ATTEMPT}.json"
       - name: Patch hygiene
         run: git diff --check
