@@ -1,6 +1,8 @@
 """Synthetic portable proof; actual Linux descriptor/namespace calls are NOT_RUN here."""
 import contextlib
 import copy
+import genericpath
+import gettext
 import importlib.util
 import io
 import json
@@ -96,6 +98,8 @@ class Posix:
     def patched(self):
         # Flags are Linux values even on the portable host; all syscalls are stubbed.
         with contextlib.ExitStack() as stack:
+            # Keep argparse/gettext and other stdlib users on the real process os.
+            stack.enter_context(mock.patch.object(m, 'os', SimpleNamespace(**vars(m.os))))
             for key, value in {'O_DIRECTORY':0x10000, 'O_NOFOLLOW':0x20000, 'O_CLOEXEC':0x80000,
                                'O_NONBLOCK':0x800, 'O_NOATIME':0x40000}.items():
                 stack.enter_context(mock.patch.object(m.os, key, value, create=True))
@@ -375,6 +379,17 @@ class ObserverTests(unittest.TestCase):
         for value in ('PRIVATE_MARKER','a'*32,m.owner.TARGETS[0],'/state','synthetic-0'):
             self.assertNotIn(value,out.getvalue()+err.getvalue())
         self.assertEqual(err.getvalue(),''); self.assertLess(len(out.getvalue()),1024)
+
+    def test_posix_mock_is_scoped_and_main_survives_gettext_catalog_lookup(self):
+        process_os=m.os; process_stat=process_os.stat
+        with Posix().patched():
+            self.assertIsNot(m.os,process_os)
+            self.assertIs(process_os.stat,process_stat)
+        # POSIX exists calls os.stat; Windows' builtin exists otherwise hides this.
+        with mock.patch.dict(process_os.environ,{'LANGUAGE':'en_US.UTF-8'}), \
+             mock.patch.object(gettext.os.path,'exists',wraps=genericpath.exists) as exists:
+            self.test_main_success_is_sanitized_counts_not_binding_ids()
+        self.assertGreater(exists.call_count,0)
 
     def test_native_guard_refuses_before_binding_on_unsupported_host(self):
         with mock.patch.object(m.sys,'platform','not-linux'), mock.patch.object(m,'read_binding',side_effect=AssertionError), \
