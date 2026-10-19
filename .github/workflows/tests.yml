@@ -16,7 +16,7 @@ permissions:
 jobs:
   test:
     runs-on: ubuntu-latest
-    # Existing10-minute suite + bounded4-minute synthetic SQL proof/finalizer.
+    # Existing suite and finite native proofs share the unchanged15-minute budget.
     timeout-minutes: 15
     steps:
       - uses: actions/checkout@v4
@@ -117,6 +117,9 @@ jobs:
           # owner-native-wrapper-end
           raise SystemExit(run_owner_native_fixture())
           PY
+      - name: Native synthetic local Node transaction status proof
+        timeout-minutes: 1
+        run: sudo python3 -I -B tests/native/test_node_transaction_readonly.py --require-native
       - name: Native synthetic central PostgreSQL SQL and catalog proof
         timeout-minutes: 4
         run: |
