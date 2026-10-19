@@ -6,8 +6,10 @@ effects0. Native execution is future CI work, not part of local preparation.
 
 The existing Builder `tests.yml` job gains one4-minute native proof step and one
 independent `always()` one-minute finalizer. The job budget becomes15 minutes,
-retaining the previous10-minute suite plus these5 minutes. It does not repeat the
-accepted four owner/filesystem POSIX cases or add a new broad workflow.
+retaining the previous10-minute suite plus these5 minutes. The new SQL proof does
+not duplicate the accepted four owner/filesystem POSIX cases; the existing
+mandatory owner/POSIX step remains unchanged and runs normally for the new head.
+No new broad workflow is added.
 
 The native proof owns one uniquely named/labeled disposable PostgreSQL container.
 It reuses `postgres:16`, already used by SaaS CI, resolves its immutable image ID

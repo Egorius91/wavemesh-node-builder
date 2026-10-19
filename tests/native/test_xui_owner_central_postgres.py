@@ -29,10 +29,79 @@ EXPECTED_CASES = 46
 DOCKER = '/usr/bin/docker'
 ENV = {'PATH': '/usr/sbin:/usr/bin:/sbin:/bin', 'LC_ALL': 'C.UTF-8',
        'DOCKER_HOST': 'unix:///var/run/docker.sock', 'DOCKER_CONFIG': '/nonexistent'}
+COLLECTOR_STOP_CODES = frozenset('''STOP_BINDING_BINARY STOP_BINDING_CONTAINER
+STOP_BINDING_CONTRACT STOP_BINDING_HASH STOP_BINDING_ID STOP_BINDING_PRIVATE_INPUT
+STOP_BINDING_SCHEMA STOP_BINDING_TARGET_COLLISION STOP_BINDING_TARGETS STOP_COLLECTOR_SCHEMA_PIN
+STOP_CONTAINER_IDENTITY STOP_DOCKER_BINARY STOP_DUPLICATE_JSON_FIELD STOP_ENCODING
+STOP_IDENTITY_CHANGED_DURING_READ STOP_NATIVE_LINUX_ROOT_REQUIRED STOP_OBSERVATION_JSON
+STOP_OBSERVATION_READ_FAILED STOP_OBSERVATION_SIZE STOP_OBSERVATION_TIMEOUT
+STOP_OBSERVATION_UNKNOWN STOP_SCHEMA_NOT_APPLICABLE STOP_SNAPSHOT_COUNT STOP_SNAPSHOT_SCHEMA
+STOP_TARGET_OR_OPERATION STOP_TRANSACTION_NOT_READONLY_REPEATABLE_READ STOP_TRANSPORT_ARGS'''.split())
+FIXTURE_FAILURE_CODES = frozenset('''FIXTURE_ADMISSION_OVERCLAIM FIXTURE_BACKEND_RESIDUE
+FIXTURE_CASE_BUDGET_MISMATCH FIXTURE_CLEANUP_NOT_PROVEN FIXTURE_COLLECTOR_DML_OR_RETRY
+FIXTURE_COMMAND_FAILED FIXTURE_CONTAINER_OWNERSHIP_UNKNOWN FIXTURE_CONTAINER_REBOUND
+FIXTURE_COUNT_MISMATCH FIXTURE_CREATE_BINDING FIXTURE_CREATE_OUTCOME_UNKNOWN FIXTURE_DEADLINE
+FIXTURE_ENUM FIXTURE_FINGERPRINT FIXTURE_IDENTIFIER FIXTURE_IMAGE_ID FIXTURE_IMAGE_VOLUME_CONTRACT
+FIXTURE_INSPECT_STUB_SCOPE FIXTURE_LINUX_ROOT_PY312_REQUIRED FIXTURE_LOCK_HOLDER_FAILED
+FIXTURE_LOCK_NOT_OBSERVED FIXTURE_LOCK_TIMEOUT_NOT_ENFORCED FIXTURE_NAME_COLLISION
+FIXTURE_OUTPUT_LIMIT FIXTURE_POSTGRES_NOT_READY FIXTURE_REFUSAL_DML_OR_RETRY FIXTURE_RESIDUE
+FIXTURE_SCHEMA_WAS_ACCEPTED FIXTURE_STATE_BINDING FIXTURE_STATE_COLLISION FIXTURE_STATE_PATH
+FIXTURE_STATE_SCHEMA FIXTURE_STATE_SIZE FIXTURE_STATE_UNSAFE FIXTURE_STATE_WRITE
+FIXTURE_STATUS_MISMATCH FIXTURE_TABLE_SCOPE FIXTURE_TIMEOUT_DML FIXTURE_TIMEOUT_RETRY_OR_BOUND
+FIXTURE_TIMESTAMP_PRECISION FIXTURE_TYPE FIXTURE_VALUE FIXTURE_WRONG_SCHEMA_REFUSAL
+FIXTURE_WRONG_TIMEOUT_RESULT FIXTURE_DIAGNOSTIC_CASE'''.split())
+STAGE_ALIASES = frozenset('''admission source_load state_prepare container_prepare
+independent_finalize fixture_setup data_setup schema_setup fingerprint_before
+collector_snapshot fingerprint_after backend_cleanup aggregate_validation lock_holder
+lock_snapshot complete'''.split())
+CASE_ALIASES = frozenset('''not_started positive wrong_tenant wrong_external final_positive lock_timeout
+command_PENDING command_LEASED command_RUNNING command_RETRYABLE_FAILED
+attempted_PERMANENT_FAILED attempted_ROLLED_BACK attempted_ROLLBACK_FAILED attempted_CANCELLED
+succeeded_attempted cross_tenant attempt_LEASED_complete attempt_RUNNING_complete
+attempt_SUCCEEDED_null attempt_SUCCEEDED_complete materializing applying version_mismatch
+issuance_active issuance_inactive delivery_pending delivery_expired delivery_acknowledged
+delivery_absent request_processing request_other_tenant outbox_ACTIVATE_PAID_SUBSCRIPTION_PENDING
+outbox_ACTIVATE_PAID_SUBSCRIPTION_PROCESSING outbox_DISABLE_EXPIRED_VPN_ACCOUNT_PENDING
+outbox_DISABLE_EXPIRED_VPN_ACCOUNT_PROCESSING outbox_SYNC_VPN_ACCOUNT_PENDING
+outbox_SYNC_VPN_ACCOUNT_PROCESSING outbox_done outbox_other_type held_fence released_fence
+schema_missing_column schema_missing_table schema_enum schema_checksum schema_missing_migration
+schema_unfinished_migration'''.split())
 
 
 class Failure(RuntimeError):
     pass
+
+
+def safe_failure_code(error, collector):
+    stop_type = getattr(collector,'Stop',None)
+    if isinstance(stop_type,type) and isinstance(error,stop_type):
+        return error.code if type(error.code) is str and error.code in COLLECTOR_STOP_CODES else 'STOP_UNCLASSIFIED'
+    if isinstance(error,Failure):
+        return str(error) if str(error) in FIXTURE_FAILURE_CODES else 'FIXTURE_UNCLASSIFIED_FAILURE'
+    if isinstance(error,subprocess.TimeoutExpired):
+        return 'FIXTURE_COMMAND_TIMEOUT'
+    return 'FIXTURE_UNKNOWN_ERROR'
+
+
+def sqlstate(raw):
+    if type(raw) is not bytes or len(raw) > MAX_OUTPUT:
+        return None
+    matches = re.findall(rb'(?m)^(?:psql:(?:<stdin>|-):[0-9]+: )?(?:ERROR|FATAL):[ \t]+([0-9A-Z]{5})[ \t]*\r?$',raw)
+    return matches[0].decode('ascii') if len(matches) == 1 else None
+
+
+def safe_diagnostics(fixture, fallback_stage):
+    stage = getattr(fixture,'stage',fallback_stage)
+    case = getattr(fixture,'case','not_started')
+    stop = getattr(fixture,'last_collector_stop',None)
+    def count(name):
+        value = getattr(fixture,name,0)
+        return value if type(value) is int and 0 <= value <= 1000000 else 0
+    return {'stage':stage if type(stage) is str and stage in STAGE_ALIASES else 'unknown',
+            'case':case if type(case) is str and case in CASE_ALIASES else 'unknown',
+            'snapshotsCompleted':count('cases'),'snapshotsAttempted':count('calls'),
+            'collectorStopCode':stop if type(stop) is str and stop in COLLECTOR_STOP_CODES else None,
+            'sqlstate':sqlstate(getattr(fixture,'last_sql_error',None))}
 
 
 def need(condition, code):
@@ -240,6 +309,13 @@ class PostgresFixture:
         self.calls = 0
         self.cases = 0
         self.last_sql_error = None
+        self.last_collector_stop = None
+        self.stage, self.case = 'fixture_setup','positive'
+
+    def set_case(self, alias):
+        need(alias in CASE_ALIASES,'FIXTURE_DIAGNOSTIC_CASE')
+        self.case = alias
+        self.last_sql_error = self.last_collector_stop = None
 
     def args(self):
         return ['exec','-i',self.cid,'psql','-X','-q','-t','-A','-v','ON_ERROR_STOP=1',
@@ -247,10 +323,16 @@ class PostgresFixture:
                 '--host=/var/run/postgresql','--port=5432','--username=fixture','--dbname=fixture']
 
     def sql(self, data, *, allow_error=False, timeout=20):
-        return run_command(self.args(), data if type(data) is bytes else data.encode(),
-                           timeout=timeout, deadline=self.deadline, allow_error=allow_error)
+        result = run_command(self.args(), data if type(data) is bytes else data.encode(),
+                             timeout=timeout, deadline=self.deadline, allow_error=True)
+        if result.returncode:
+            self.last_sql_error = result.stderr
+        if not allow_error:
+            need(result.returncode == 0,'FIXTURE_COMMAND_FAILED')
+        return result
 
     def reset(self, rebuild=False):
+        self.stage = 'fixture_setup'
         if rebuild:
             self.sql(fixture_sql(self.schema))
         else:
@@ -272,6 +354,7 @@ class PostgresFixture:
         return result
 
     def no_sessions(self):
+        self.stage = 'backend_cleanup'
         raw = self.sql("SELECT count(*) FROM pg_catalog.pg_stat_activity WHERE datname=current_database() "
             "AND backend_type='client backend' AND pid<>pg_backend_pid();").stdout.strip()
         need(raw == b'0', 'FIXTURE_BACKEND_RESIDUE')
@@ -282,6 +365,7 @@ class PostgresFixture:
             result = self.sql(data, allow_error=True)
             if result.returncode or result.stderr:
                 self.last_sql_error = result.stderr
+                self.last_collector_stop = 'STOP_OBSERVATION_READ_FAILED'
                 raise self.m.Stop('STOP_OBSERVATION_READ_FAILED')
             return result.stdout
         # Explicit stub: SQL acceptance only, no production Docker proof.
@@ -290,9 +374,16 @@ class PostgresFixture:
         return (pin['containerId']+' '+pin['imageId']+' 123 2026-10-19T00:00:00Z true 0\n').encode()
 
     def snapshot(self):
+        self.stage = 'fingerprint_before'
         before, calls = self.fingerprint(), self.calls
-        result = self.m.collect(self.binding,self.target,'a'*32,self.schema,self.reader,
-                                min(self.deadline,time.monotonic()+self.m.OUTER_SECONDS))
+        self.stage = 'collector_snapshot'
+        try:
+            result = self.m.collect(self.binding,self.target,'a'*32,self.schema,self.reader,
+                                    min(self.deadline,time.monotonic()+self.m.OUTER_SECONDS))
+        except self.m.Stop as error:
+            self.last_collector_stop = error.code
+            raise
+        self.stage = 'fingerprint_after'
         need(self.calls == calls+1 and self.fingerprint() == before, 'FIXTURE_COLLECTOR_DML_OR_RETRY')
         need(result['liveAdmission'] is False and result['nodeTransactions'] == 'NOT_OBSERVED' and
              result['configPolicyAuthority'] == 'NOT_OBSERVED', 'FIXTURE_ADMISSION_OVERCLAIM')
@@ -304,12 +395,14 @@ class PostgresFixture:
         expected = {name:1 if name == 'exact_target_count' else 0 for name in self.m.COUNTS}
         expected.update(overrides)
         result = self.snapshot()
+        self.stage = 'aggregate_validation'
         need({key:result['snapshot'][key] for key in self.m.COUNTS} == expected, 'FIXTURE_COUNT_MISMATCH')
         blocked = any(expected[key] != (1 if key == 'exact_target_count' else 0)
                       for key in self.m.COUNTS if key != 'held_binding_fences')
         need(result['status'] == ('SNAPSHOT_BLOCKED' if blocked else 'SNAPSHOT_CLEAR_NOT_ADMISSION'), 'FIXTURE_STATUS_MISMATCH')
 
     def refusal(self):
+        self.stage = 'fingerprint_before'
         before, calls = self.fingerprint(), self.calls
         try:
             self.snapshot()
@@ -317,11 +410,14 @@ class PostgresFixture:
             need(error.code == 'STOP_SCHEMA_NOT_APPLICABLE', 'FIXTURE_WRONG_SCHEMA_REFUSAL')
         else:
             raise Failure('FIXTURE_SCHEMA_WAS_ACCEPTED')
+        self.stage = 'fingerprint_after'
         need(self.calls == calls+1 and self.fingerprint() == before, 'FIXTURE_REFUSAL_DML_OR_RETRY')
         self.no_sessions(); self.cases += 1
 
     def lock_timeout(self):
+        self.stage = 'fingerprint_before'
         before = self.fingerprint()
+        self.stage = 'lock_holder'
         args = [DOCKER,*self.args()]
         holder = subprocess.Popen(args, stdin=subprocess.PIPE,stdout=subprocess.PIPE,stderr=subprocess.PIPE,env=ENV,cwd='/')
         try:
@@ -331,17 +427,21 @@ class PostgresFixture:
             need(ready and holder.stdout.readline().strip() == b'1', 'FIXTURE_LOCK_NOT_OBSERVED')
             calls = self.calls
             started = time.monotonic()
+            self.stage = 'lock_snapshot'
             try:
                 self.m.collect(self.binding,self.target,'a'*32,self.schema,self.reader,
                                min(self.deadline,time.monotonic()+self.m.OUTER_SECONDS))
             except self.m.Stop as error:
+                self.last_collector_stop = error.code
                 need(error.code == 'STOP_OBSERVATION_READ_FAILED', 'FIXTURE_WRONG_TIMEOUT_RESULT')
             else:
                 raise Failure('FIXTURE_LOCK_TIMEOUT_NOT_ENFORCED')
             need(self.calls == calls+1 and 1.5 <= time.monotonic()-started < 7 and
                  self.last_sql_error is not None and b'55P03' in self.last_sql_error, 'FIXTURE_TIMEOUT_RETRY_OR_BOUND')
+            self.stage = 'lock_holder'
             need(holder.wait(timeout=10) == 0, 'FIXTURE_LOCK_HOLDER_FAILED')
             need(not holder.stderr.read(1024), 'FIXTURE_LOCK_HOLDER_FAILED')
+            self.stage = 'fingerprint_after'
             need(self.fingerprint() == before, 'FIXTURE_TIMEOUT_DML')
             self.no_sessions(); self.cases += 1
         finally:
@@ -351,15 +451,18 @@ class PostgresFixture:
             holder.stdout.close(); holder.stderr.close()
 
     def exercise(self):
+        self.set_case('positive')
         self.reset(rebuild=True)
         self.expect({})  # real read_only/isolation + quoted/backslash/UTF-8 target
         row = self.binding['targets'][self.target]
         for field in ('tenantId','externalId'):
+            self.set_case('wrong_tenant' if field == 'tenantId' else 'wrong_external')
             saved = row[field]; row[field] = saved+'-wrong'
             try: self.expect({'exact_target_count':0})
             finally: row[field] = saved
-        for _, sql, expected in debt_cases(self.binding,self.target):
-            self.reset(); self.sql(sql); self.expect(expected)
+        for name, sql, expected in debt_cases(self.binding,self.target):
+            self.set_case(name)
+            self.reset(); self.stage = 'data_setup'; self.sql(sql); self.expect(expected)
         schema_cases = [
             'ALTER TABLE public."Node" DROP COLUMN "externalId";',
             'DROP TABLE public."NodeCredential";',
@@ -368,11 +471,16 @@ class PostgresFixture:
             'DELETE FROM public._prisma_migrations WHERE migration_name=(SELECT min(migration_name) FROM public._prisma_migrations);',
             'UPDATE public._prisma_migrations SET finished_at=NULL;',
         ]
-        for sql in schema_cases:
-            self.reset(rebuild=True); self.sql(sql); self.refusal()
-        self.reset(rebuild=True); self.lock_timeout()
+        aliases = ('schema_missing_column','schema_missing_table','schema_enum','schema_checksum',
+                   'schema_missing_migration','schema_unfinished_migration')
+        for alias, sql in zip(aliases,schema_cases):
+            self.set_case(alias)
+            self.reset(rebuild=True); self.stage = 'schema_setup'; self.sql(sql); self.refusal()
+        self.set_case('lock_timeout'); self.reset(rebuild=True); self.lock_timeout()
+        self.set_case('final_positive')
         self.expect({}); self.no_sessions()
         need(self.cases == self.calls == EXPECTED_CASES, 'FIXTURE_CASE_BUDGET_MISMATCH')
+        self.stage = 'complete'
         return {'nativeCases':self.cases,'debtCases':len(debt_cases(self.binding,self.target)),
                 'schemaRefusals':len(schema_cases),'readOnlyRepeatableRead':True,
                 'noCollectorDml':True,'noCollectorRetry':True,'zeroClientBackendResidue':True,
@@ -432,19 +540,22 @@ def main(argv=None):
     if not args.require_native and not args.finalize:
         print('{"status":"NATIVE_SQL_NOT_RUN","effects":0}'); return 77
     result, failure, cleaned, state_owned = {}, None, False, False
+    m, fixture, stage = None, None, 'admission'
     try:
         need(sys.platform == 'linux' and os.geteuid() == 0 and sys.version_info >= (3,12), 'FIXTURE_LINUX_ROOT_PY312_REQUIRED')
         need(args.state is not None and args.state.is_absolute(), 'FIXTURE_STATE_PATH')
         if args.finalize:
+            stage = 'independent_finalize'
             print(json.dumps(finalize(args.state),sort_keys=True)); return 0
-        m = load_collector()
+        stage = 'source_load'; m = load_collector()
         deadline = time.monotonic()+PROOF_SECONDS
-        state = new_state(args.state); state_owned = True
-        cid,image = prepare(args.state,state,deadline)
-        result = PostgresFixture(cid,m,deadline).exercise()
+        stage = 'state_prepare'; state = new_state(args.state); state_owned = True
+        stage = 'container_prepare'; cid,image = prepare(args.state,state,deadline)
+        fixture = PostgresFixture(cid,m,deadline)
+        result = fixture.exercise()
         result.update(status='NATIVE_SQL_SYNTHETIC_PASSED',imageId=image)
     except Exception as error:
-        failure = str(error) if isinstance(error,Failure) else 'FIXTURE_UNKNOWN_'+type(error).__name__.upper()
+        failure = safe_failure_code(error,m)
     finally:
         if state_owned:
             try:
@@ -456,6 +567,7 @@ def main(argv=None):
     if failure is not None:
         result = {'status':'NATIVE_SQL_FAILED','reason':failure}
     result['zeroOwnedContainers'] = cleaned
+    result['diagnostics'] = safe_diagnostics(fixture,stage)
     print(json.dumps(result,sort_keys=True))
     return int(failure is not None or not cleaned)
 

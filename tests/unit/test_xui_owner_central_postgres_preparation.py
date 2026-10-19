@@ -58,6 +58,7 @@ class NativePreparation(unittest.TestCase):
         m = n.load_collector(); cases = n.debt_cases(n.fixture_binding(m),m.TARGETS[0])
         self.assertEqual(len(cases),35)
         self.assertEqual(len({name for name,_,_ in cases}),35)
+        self.assertTrue({name for name,_,_ in cases} <= n.CASE_ALIASES)
         covered = set().union(*(expected for _,_,expected in cases))
         self.assertEqual(covered,set(m.COUNTS)-{'exact_target_count'})
         table = {name:expected for name,_,expected in cases}
@@ -210,6 +211,66 @@ class NativePreparation(unittest.TestCase):
              contextlib.redirect_stdout(io.StringIO()) as output:
             self.assertEqual(n.main(['--require-native','--state',str(path)]),1)
         self.assertEqual(json.loads(output.getvalue())['reason'],'FIXTURE_CREATE_OUTCOME_UNKNOWN')
+
+    def test_actual_reader_error_reports_only_fixed_case_counts_stop_and_sqlstate(self):
+        m=n.load_collector(); marker='PRIVATE_MARKER_NEVER_EXPORT'
+        fixture=n.PostgresFixture('c'*64,m,n.time.monotonic()+180)
+        fixture.set_case('materializing')
+        fixture.binding['targets'][fixture.target]['nodeId']=marker
+        fixture.fingerprint=mock.Mock(return_value=b'unchanged')
+        fixture.exercise=mock.Mock(side_effect=fixture.snapshot)
+        error=(b'psql:<stdin>:17: ERROR:  42601\n'+marker.encode()+b' SQL INPUT ENV\n')
+        path=ROOT/'synthetic-state-not-created.json'
+        with mock.patch.object(n.sys,'platform','linux'),mock.patch.object(n.os,'geteuid',create=True,return_value=0), \
+             mock.patch.object(n,'load_collector',return_value=m),mock.patch.object(n,'new_state',return_value=state()), \
+             mock.patch.object(n,'prepare',return_value=(state()['containerId'],state()['imageId'])), \
+             mock.patch.object(n,'PostgresFixture',return_value=fixture), \
+             mock.patch.object(n,'run_command',return_value=result(rc=1,stderr=error)) as native, \
+             mock.patch.object(n,'finalize',side_effect=n.Failure('FIXTURE_RESIDUE')), \
+             contextlib.redirect_stdout(io.StringIO()) as output:
+            self.assertEqual(n.main(['--require-native','--state',str(path)]),1)
+        value=json.loads(output.getvalue())
+        self.assertEqual(value['reason'],'STOP_OBSERVATION_READ_FAILED')
+        self.assertEqual(value['diagnostics'],{'stage':'collector_snapshot','case':'materializing',
+            'snapshotsCompleted':0,'snapshotsAttempted':1,'collectorStopCode':'STOP_OBSERVATION_READ_FAILED','sqlstate':'42601'})
+        self.assertFalse(value['zeroOwnedContainers'])
+        self.assertNotIn(marker,output.getvalue())
+        self.assertNotIn('SQL INPUT ENV',output.getvalue())
+        self.assertEqual(native.call_count,1)
+
+    def test_arbitrary_exception_and_diagnostic_fields_cannot_escape(self):
+        m=n.load_collector(); marker='PRIVATE_MARKER_NEVER_EXPORT'
+        self.assertEqual(n.safe_failure_code(n.Failure(marker),m),'FIXTURE_UNCLASSIFIED_FAILURE')
+        self.assertEqual(n.safe_failure_code(m.Stop(marker),m),'STOP_UNCLASSIFIED')
+        self.assertEqual(n.safe_failure_code(m.Stop([marker]),m),'STOP_UNCLASSIFIED')
+        self.assertEqual(n.safe_failure_code(type(marker,(Exception,),{})(marker),m),'FIXTURE_UNKNOWN_ERROR')
+        fake=types.SimpleNamespace(stage=marker,case=marker,last_collector_stop=marker,
+                                  last_sql_error=marker.encode(),cases=True,calls=marker)
+        value=n.safe_diagnostics(fake,marker)
+        self.assertEqual(value,{'stage':'unknown','case':'unknown','snapshotsCompleted':0,
+                                'snapshotsAttempted':0,'collectorStopCode':None,'sqlstate':None})
+        self.assertNotIn(marker,json.dumps(value))
+
+    def test_sqlstate_requires_one_complete_strict_error_code_line(self):
+        for raw,expected in ((b'ERROR:  55P03\n', '55P03'),
+                             (b'psql:<stdin>:2: ERROR:  42703\r\n','42703'),
+                             (b'FATAL:  28P01\n','28P01'),
+                             (b'ERROR: PRIVATE_MARKER\n',None),
+                             (b'ERROR: 426010\n',None),(b'ERROR: 42p01\n',None),
+                             (b'PRIVATE ERROR: 42601\n',None),
+                             (b'ERROR: 42601\nERROR: 42703\n',None)):
+            with self.subTest(raw=raw): self.assertEqual(n.sqlstate(raw),expected)
+
+    def test_setup_sql_failure_retains_safe_sqlstate_and_success_resets_previous_case_error(self):
+        m=n.load_collector();fixture=n.PostgresFixture('c'*64,m,n.time.monotonic()+180)
+        with mock.patch.object(n,'run_command',return_value=result(rc=1,stderr=b'ERROR:  42P01\nPRIVATE_MARKER\n')), \
+             self.assertRaisesRegex(n.Failure,'FIXTURE_COMMAND_FAILED'):
+            fixture.sql('synthetic setup SQL')
+        self.assertEqual(n.safe_diagnostics(fixture,'admission')['sqlstate'],'42P01')
+        fixture.last_collector_stop='STOP_OBSERVATION_READ_FAILED'
+        fixture.set_case('final_positive')
+        diagnostics=n.safe_diagnostics(fixture,'admission')
+        self.assertIsNone(diagnostics['sqlstate']);self.assertIsNone(diagnostics['collectorStopCode'])
 
 
 if __name__ == '__main__':
