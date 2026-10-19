@@ -1,0 +1,271 @@
+{
+  "database": {
+    "columns": {
+      "CommandAttempt.commandId": [
+        "text",
+        true,
+        -1
+      ],
+      "CommandAttempt.completedAt": [
+        "timestamp",
+        false,
+        3
+      ],
+      "CommandAttempt.status": [
+        "NodeCommandStatus",
+        true,
+        -1
+      ],
+      "InternalRequest.operation": [
+        "text",
+        true,
+        -1
+      ],
+      "InternalRequest.status": [
+        "InternalRequestStatus",
+        true,
+        -1
+      ],
+      "InternalRequest.tenantId": [
+        "text",
+        true,
+        -1
+      ],
+      "Node.externalId": [
+        "text",
+        true,
+        -1
+      ],
+      "Node.id": [
+        "text",
+        true,
+        -1
+      ],
+      "Node.tenantId": [
+        "text",
+        true,
+        -1
+      ],
+      "NodeCertificateIssuanceAttempt.activeNodeKey": [
+        "text",
+        false,
+        -1
+      ],
+      "NodeCertificateIssuanceAttempt.nodeId": [
+        "text",
+        true,
+        -1
+      ],
+      "NodeCommand.attempts": [
+        "int4",
+        true,
+        -1
+      ],
+      "NodeCommand.id": [
+        "text",
+        true,
+        -1
+      ],
+      "NodeCommand.status": [
+        "NodeCommandStatus",
+        true,
+        -1
+      ],
+      "NodeCommand.targetNodeId": [
+        "text",
+        true,
+        -1
+      ],
+      "NodeCommand.tenantId": [
+        "text",
+        true,
+        -1
+      ],
+      "NodeCredential.certificateAcknowledgedAt": [
+        "timestamp",
+        false,
+        3
+      ],
+      "NodeCredential.certificateDeliveryExpiresAt": [
+        "timestamp",
+        false,
+        3
+      ],
+      "NodeCredential.certificateDeliveryPayload": [
+        "text",
+        false,
+        -1
+      ],
+      "NodeCredential.nodeId": [
+        "text",
+        true,
+        -1
+      ],
+      "NodeRuntimeBindingFence.nodeId": [
+        "text",
+        true,
+        -1
+      ],
+      "NodeRuntimeBindingFence.releasedAt": [
+        "timestamp",
+        false,
+        3
+      ],
+      "NodeRuntimeBindingFence.tenantId": [
+        "text",
+        true,
+        -1
+      ],
+      "OutboxJob.status": [
+        "OutboxJobStatus",
+        true,
+        -1
+      ],
+      "OutboxJob.type": [
+        "OutboxJobType",
+        true,
+        -1
+      ],
+      "VpnAccess.assignedEntryNodeId": [
+        "text",
+        false,
+        -1
+      ],
+      "VpnAccess.desiredVersion": [
+        "int4",
+        true,
+        -1
+      ],
+      "VpnAccess.observedVersion": [
+        "int4",
+        true,
+        -1
+      ],
+      "VpnAccess.reconciliationStatus": [
+        "ReconciliationStatus",
+        true,
+        -1
+      ],
+      "VpnAccess.status": [
+        "AccessLifecycleStatus",
+        true,
+        -1
+      ],
+      "VpnAccess.tenantId": [
+        "text",
+        true,
+        -1
+      ]
+    },
+    "enums": {
+      "AccessLifecycleStatus": [
+        "PENDING",
+        "MATERIALIZING",
+        "READY",
+        "DISABLED",
+        "EXPIRED",
+        "FAILED"
+      ],
+      "InternalRequestStatus": [
+        "PROCESSING",
+        "SUCCEEDED",
+        "FAILED"
+      ],
+      "NodeCommandStatus": [
+        "PENDING",
+        "LEASED",
+        "RUNNING",
+        "SUCCEEDED",
+        "RETRYABLE_FAILED",
+        "PERMANENT_FAILED",
+        "ROLLED_BACK",
+        "ROLLBACK_FAILED",
+        "CANCELLED"
+      ],
+      "OutboxJobStatus": [
+        "PENDING",
+        "PROCESSING",
+        "DONE",
+        "FAILED"
+      ],
+      "OutboxJobType": [
+        "ACTIVATE_PAID_SUBSCRIPTION",
+        "DISABLE_EXPIRED_VPN_ACCOUNT",
+        "SYNC_VPN_ACCOUNT",
+        "SEND_PAID_EXPIRY_REMINDER"
+      ],
+      "ReconciliationStatus": [
+        "PENDING",
+        "IN_SYNC",
+        "DRIFTED",
+        "APPLYING",
+        "FAILED",
+        "BLOCKED"
+      ]
+    },
+    "migration_rows": 57,
+    "migrations": {
+      "20260604155740_init": "36f44ddbeb4100ef13403b79ed0a165e64aec0a1474ceda0c04663ebcc937517",
+      "20260604185238_init": "11c466c3c14f89fdd8c1eac420a4dff34adbf374997373ccb8badb5b9a4274f6",
+      "20260617000100_xui_vpn_models": "516c25e6d7ad9dfaaa373e07728f54a98adaaa98162c10890a5076354c43b68a",
+      "20260626000100_outbox_jobs": "06bf60e61ad6d3a338e3fa80581ed280b9c1980e28aa034d5360a9aad15f195c",
+      "20260626000200_expired_access_jobs": "e9a15cbccd9950e39c31fc463126be0c46d1d552f3131c308ab9e3594b78a218",
+      "20260626000300_operational_indexes": "04b1b2be5de355e0027ba7ef058f780ae0d6073fe777be1ef243f81a47a76761",
+      "20260627000100_sync_vpn_account_jobs": "9788a8dc7e9bdbc7bc61cd14aea4dcda3b66914060c209f722b9efda13582119",
+      "20260627000200_operational_query_indexes": "1d5c90ede2e807703cbdf823adcd9e590fd2de0c9021d000896f72d4db7adc21",
+      "20260721113224_integration_foundation": "679eea53f415c9d2c14272a35312f20cd4f4fa2cfe6043f077bf84faf96cdca4",
+      "20260721150000_internal_api_credentials": "3773abbd27b5d6412576eaab3d4a0d9c9c1321765466a00dcbe2d79311f4bb12",
+      "20260721151000_fix_internal_request_index_name": "58529235ca5f3696bc66b8eb389b275dae7d9acbdacafdc0cc86fd0dbb224bc1",
+      "20260727070000_node_mtls_credentials": "c1f914feb16c3fe75ea4aec40527a90e6b989145b0af43e98c26db80c357bc74",
+      "20260727123000_node_mtls_issuer_revocation_reference": "950e7c5db31618969edc62631aa471abfc63425124fdf106f88478d547d702dc",
+      "20260727150000_node_mtls_delivery_lifecycle": "1b629aae9334a3cc0b133ee1eb95b3940c33b1c808ca95d40b8b7d386cd0aacb",
+      "20260728090000_preserve_bearer_rotation_compatibility": "277c40f891abff11df544f6c22f0424e9d46ea585cf56006e2d2b118d5dc4b08",
+      "20260731075000_finalize_exhausted_access_commands": "07092c7b610c360b9342efddcd59eae76d461ff3248863eea4d72d2f5f373e1d",
+      "20260801000100_allow_multiple_active_vpn_accounts": "bbca6ebd59ff2e79d7634ed033d34259ed0b872bd3771ffca4f839b38e66a171",
+      "20260801000200_add_vpn_account_user_active_index": "f6e2ee4ae8efe916b598d1e00a14c958d25e9998cbc61cb2632fcf1a73f8a9e9",
+      "20260802000100_payment_provider_foundation": "075b714ca77e1e41eb1dbbaf1251b53c9c9f177cbe6f528620b50ebc1bb5586a",
+      "20260803080000_payment_return_token": "59654482341e6417ee83e9e9290956e5f933cf658ca3322f38c2f8c65d4f754f",
+      "20260805190000_public_checkout_idempotency": "66d3fbe80f76b80d7428d4ca79ea22e9655ca6b97724ea3874cb0e743544b9d4",
+      "20260805201500_preserve_replacement_runtime_on_failure": "f7e97b32fc6641d3253c7a235e90f47aec00692475aa780d713bd3dbe45c1c84",
+      "20260811160000_recurring_billing_core": "ff07539742e20b9127eb645f50f2c9ac7178e691eddd9c08bc4d12283e6141b9",
+      "20260814133000_payment_reconciliation_audit_dedupe": "d5867f8e272f8a5839bdbb1177d58f840fe36b54818520ccecd06bc452b43d1c",
+      "20260814193000_provider_billing_agreement": "169cd889273b07b8619146ef6fbda1b877e4b25fd2f65cda234036f0eac9bb30",
+      "20260814213000_provider_billing_agreement_payments": "359bc37bb26e26a1ed69c803a035eeed823773f38fcf3acfbb11f9a7f90446f3",
+      "20260816061000_provider_billing_agreement_cancellation_request": "84843efa0135b705b2bd5a01ba8413602e9a11f8d58158057fae5929110cdf25",
+      "20260816094000_provider_billing_cancellation_dispatch_state": "4704faf5f6a01a79794d5bb77e72a042ac1b954397e68d03668a5d80d55eb738",
+      "20260816112500_provider_billing_cancellation_dispatch_resolved_state": "eac4da1e20e76314361e450aa52eeb8364d434987ff4f60d49d714575ed20302",
+      "20260816112600_provider_billing_cancellation_dispatch_resolution_backfill": "ec48261d02217aef6954ed7015347c4a52c69583eeed3fa6abde917cdda3340d",
+      "20260824150000_email_identity_lifecycle_core": "bcd31cb6474dedab4bd34ea8f2c4f44a369f4311a0815a0ccc1b2281f8e3c9a3",
+      "20260824163000_user_identity_provider_unique": "f45c6a8cb781ef95d9eb8a206ee435075a7fac1ce2600624295c99ff9cec9038",
+      "20260824170000_auth_email_delivery_attempt": "2afa864bff19fcd9300880fdfc402d64364e042053efe3da051ad25eea0096cf",
+      "20260824172000_authenticated_support_workflow": "6902d365c0979e1e5746fe5b7eb6b00410eac511c127074956f85649b67368d7",
+      "20260825123000_admin_session_revocation": "17177039159f7fb55541bcc955b073f6e8ba127ff321b29c86306187c5bd8f1a",
+      "20260825143000_node_break_glass_recovery_authorization": "83dd5a27f1cf64e063daf5fcdcbe53f5ac1fb6159546ebf31824e2016a387e73",
+      "20260910080000_node_recovery_certificate_expired_reason": "4f8ba529842797901d6074ebdc3124d67066dcfaa56da2e6a5440e18e8b1e556",
+      "20260914090000_node_runtime_findings": "ba36e5b2bad1cd11bf4f61b6c7a722816dc5b4ef15d5e6ae601fa661a3315a20",
+      "20260914103000_node_runtime_binding_fence": "af37f7b61237461b5fe838939583ef0fb349eecea7bcb6a2f015996861f92f10",
+      "20260915090000_managed_trial_activation": "e7a72dee48d7ca26c1d6e90d04af11bd802fff5d1b4ff2e8e3128bd9f0f64872",
+      "20260915130000_recurring_claim_token": "4e8b5d4461f86a6478463f8fe979cc3e90b64e2c58edd91ea7024c62d1b265e5",
+      "20260915143000_refund_compensation_obligation": "5607b2533a545fde09440d394a7a5646677bf8210b5c9a59c54c0260411d332f",
+      "20260915153000_refund_access_projection": "9f20719c246036ba285f89e3b0b18f18facbbe5af0f6d3d1ae38727e8f5a6b48",
+      "20260915173000_access_entitlement_projection": "f4da62cd652bd17bc045df7489435c366714fd2ccf89c11d370f8f7e60f524ab",
+      "20260916090000_checkout_commercial_terms": "e369afe4966a2b17ba1ac8734af460b283502d521c4c7b6b78302755cd3bd036",
+      "20260916090000_customer_checkout_admission": "ae8b8d2129a236ea7bf209ccaf63e464cf425f423c303c8492f14d3a48846f6f",
+      "20260916100000_recurring_mandate_source": "59d596ad4201a474bf948bd71851c9425acbfcf5b66abaea97e723ff52247b51",
+      "20260916103000_checkout_admission_rejection": "5378546862463573938d4712142a695688127e38548bf32406586280e79024fb",
+      "20260916120000_one_time_dispatch_fence": "d6a92cbe9b96282efa1c7d767009d58db042137a3e79a1e2b56e60cbfe4d7b1f",
+      "20260916130000_shared_checkout_rejection_kind": "daa7a7839fe4ad2766a7624a2e677d8dd1232290369c087db206a98dcb0fa693",
+      "20260916170000_public_unadmitted_checkout_rejection": "4bf2a0388bbe2d5662f4d0e3fe380aae3e2c790c88a755be4089ad390328c293",
+      "20260920090000_checkout_history_reconciliation": "dc906729e1b46b062d238fdba6b05d0d4e871a194aba416e56cf49a534776329",
+      "20260920093000_checkout_history_legacy_writer_fence": "e0b99bb955fced3941ade848639061cf85c424d6bdcea63700954c737562cb65",
+      "20260921153000_node_quarantine_preparation": "8bfc3c51b8863c1afbc0e37461d9a0e97977513ced9e254ebd062c6e16c55c2f",
+      "20261003120000_paid_expiry_reminder_outbox": "40467660263619beb05cb2063317326c11824def1ec2d9760df4ae53d20c4feb",
+      "20261012123000_node_expiry_pilot": "9c5653a88b6ef889f03c2c760ee14d0bca5bc23dde8eed4d21c00ecf1b80a5a1",
+      "20261016023000_platega_dispatch_account_scope": "416320e22f9d3f2e8f8da8e376cab75f428f292ee62f7ac01d9e74ca8738c323"
+    }
+  },
+  "historicalSourceOnly": "8464d0b3704bee3934be8a7b59a39e76963f784c",
+  "prismaSchemaSha256": "b9dc11d5a9a988d8160e89b3a64c8c53a178da8b657d9f1ab4de5e8a633eed86",
+  "schemaAndMigrationFiles": 59,
+  "sourceRevision": "c64f32b13df1126aeae8bf25c6f413e84182d8ce"
+}
