@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 
-XUI_COOKIE_JAR="${XUI_COOKIE_JAR:-/tmp/wavemesh-xui-cookies.txt}"
+XUI_COOKIE_JAR="${XUI_COOKIE_JAR:-${WM_STATE_DIR:-/root/.wavemesh}/xui-cookies.txt}"
 XUI_CSRF_TOKEN="${XUI_CSRF_TOKEN:-}"
 XUI_API_TIMEOUT="${XUI_API_TIMEOUT:-15}"
 
@@ -30,6 +30,7 @@ wm_xui_get_csrf() {
 wm_xui_login() {
   local payload response
   rm -f "$XUI_COOKIE_JAR"
+  (umask 077; : > "$XUI_COOKIE_JAR") || return 1
   wm_xui_get_csrf || return 1
   payload="$(PANEL_USERNAME="$PANEL_USERNAME" PANEL_PASSWORD="$PANEL_PASSWORD" python3 - <<'PY'
 import json, os
@@ -152,19 +153,8 @@ PY
   chmod 600 "$WM_CONFIG_JSON"
 }
 
-wm_xui_read_existing_api_token() {
-  local output token
-  [[ -n "${XUI_RUNTIME_BIN:-}" && -x "$XUI_RUNTIME_BIN" ]] || return 1
-
-  output="$("$XUI_RUNTIME_BIN" setting -getApiToken true 2>/dev/null || \
-    "$XUI_RUNTIME_BIN" setting -getApiToken 2>/dev/null || true)"
-  token="$(printf '%s\n' "$output" | sed -n 's/^[[:space:]]*apiToken:[[:space:]]*//p' | head -n 1)"
-  [[ -n "$token" ]] || return 1
-  printf '%s' "$token"
-}
-
 wm_xui_bootstrap_api_token() {
-  local capabilities token_name payload response token existing_token
+  local capabilities token_name payload response token tokens
   if [[ -n "${PANEL_TOKEN:-}" ]]; then
     wm_xui_request_success GET /panel/api/inbounds/list none >/dev/null || return 1
     return 0
@@ -175,17 +165,21 @@ wm_xui_bootstrap_api_token() {
   token_name="wavemesh-${NODE_ID:-node-builder}"
   token_name="${token_name:0:64}"
 
-  existing_token="$(wm_xui_read_existing_api_token || true)"
-  if [[ -n "$existing_token" ]]; then
-    PANEL_TOKEN="$existing_token"
-    if wm_xui_request_success GET /panel/api/inbounds/list none >/dev/null; then
-      wm_xui_store_api_state "$existing_token" "$token_name" "$capabilities"
-      wm_export_config_env_from_json
-      wm_success "Existing 3X-UI bearer API token recovered and verified"
-      return 0
-    fi
-    PANEL_TOKEN=""
-    wm_warn "Existing 3X-UI bearer token failed verification; creating a replacement"
+  # getApiToken creates or rotates a token on supported 3X-UI releases.
+  # A saved token is the only recoverable bearer. Check for a previous create
+  # before making the one-time API request, including after an unknown result.
+  tokens="$(wm_xui_request_success GET /panel/api/setting/apiTokens none)" || return 1
+  if ! printf '%s' "$tokens" | python3 -c '
+import json, sys
+rows = json.load(sys.stdin)["obj"]
+if rows is None:
+    rows = []
+if not isinstance(rows, list) or not all(isinstance(row.get("name"), str) for row in rows):
+    sys.exit(1)
+sys.exit(any(row["name"] == sys.argv[1] for row in rows))
+' "$token_name"; then
+    wm_warn "A 3X-UI bearer may already exist without a saved value; manual reconciliation required"
+    return 1
   fi
 
   payload="$(TOKEN_NAME="$token_name" python3 -c 'import json,os; print(json.dumps({"name":os.environ["TOKEN_NAME"]}))')"

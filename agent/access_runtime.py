@@ -363,6 +363,22 @@ def reconcile_entitlements(panel: PanelClient, existing: dict[str, Any] | None,
         client = dict(raw_client if isinstance(raw_client, dict) else existing or {})
         client.pop("uuid", None)
         client.pop("inboundIds", None)
+        if "allowedIPs" in client:
+            # ClientRecord stores CSV text; the update API binds Client.allowedIPs
+            # as an array. Preserve already-decoded and JSON-encoded arrays too.
+            allowed_ips = client["allowedIPs"]
+            if isinstance(allowed_ips, str):
+                if allowed_ips.lstrip().startswith(("[", "{")):
+                    try:
+                        allowed_ips = json.loads(allowed_ips)
+                    except json.JSONDecodeError as exc:
+                        raise ProvisionError("3X-UI client allowedIPs is invalid") from exc
+                else:
+                    allowed_ips = [value.strip() for value in allowed_ips.split(",") if value.strip()]
+            if (not isinstance(allowed_ips, list)
+                    or any(not isinstance(value, str) or not value.strip() for value in allowed_ips)):
+                raise ProvisionError("3X-UI client allowedIPs is invalid")
+            client["allowedIPs"] = allowed_ips
         client.update(
             {
                 "email": email,

@@ -35,6 +35,7 @@ AGENT_SPEC.loader.exec_module(node_agent)
 class FakePanel:
     clients: dict[str, dict] = {}
     updates: list[tuple[str, dict]] = []
+    update_attempts = 0
     adjustments: list[dict] = []
     sticky_update_fields: set[str] = set()
 
@@ -59,7 +60,14 @@ class FakePanel:
             return {"success": True, "obj": {"client": dict(client), "inboundIds": [3]}}
         if method == "POST" and path.startswith("/panel/api/clients/update/"):
             email = path.rsplit("/", 1)[-1]
+            self.__class__.update_attempts += 1
             incoming = dict(payload or {})
+            allowed_ips = incoming.get("allowedIPs")
+            if "allowedIPs" in incoming and (
+                not isinstance(allowed_ips, list)
+                or any(not isinstance(value, str) for value in allowed_ips)
+            ):
+                raise runtime.ProvisionError("3X-UI client update requires an allowedIPs array")
             self.updates.append((email, dict(incoming)))
             previous = dict(self.clients.get(email) or {})
             for key in self.sticky_update_fields:
@@ -92,6 +100,7 @@ class AccessEntitlementTests(unittest.TestCase):
     def setUp(self) -> None:
         FakePanel.clients = {}
         FakePanel.updates = []
+        FakePanel.update_attempts = 0
         FakePanel.adjustments = []
         FakePanel.sticky_update_fields = set()
 
@@ -138,6 +147,7 @@ class AccessEntitlementTests(unittest.TestCase):
             "expiryTime": expiry_ms,
             "enable": True,
             "flow": "",
+            "allowedIPs": "",
         }
         return previous
 
@@ -169,6 +179,41 @@ class AccessEntitlementTests(unittest.TestCase):
                 update["expiryTime"],
                 int(datetime.fromisoformat("2026-10-05T09:19:08.033+00:00").timestamp() * 1000),
             )
+
+    def test_runtime_normalizes_record_allowed_ips_for_the_update_api(self) -> None:
+        cases = [
+            ("", []),
+            ([], []),
+            ("[]", []),
+            (["192.0.2.10/32", "2001:db8::10/128"], ["192.0.2.10/32", "2001:db8::10/128"]),
+            ('["192.0.2.10/32", "2001:db8::10/128"]', ["192.0.2.10/32", "2001:db8::10/128"]),
+            (" 192.0.2.10/32, , 2001:db8::10/128 ", ["192.0.2.10/32", "2001:db8::10/128"]),
+        ]
+        for stored, expected in cases:
+            with self.subTest(stored=stored), tempfile.TemporaryDirectory() as directory:
+                self.setUp()
+                state_root = Path(directory)
+                previous = self.seed(state_root, expiry_ms=1000, limit_ip=1, total_gb=0)
+                FakePanel.clients[previous["panel_email"]]["allowedIPs"] = stored
+                with mock.patch.object(runtime, "PanelClient", FakePanel):
+                    material = runtime.update_entitlements(self.request(), self.config(), state_root)
+                self.assertEqual(material["client_uuid"], previous["client_uuid"])
+                self.assertEqual(len(FakePanel.updates), 1)
+                self.assertEqual(FakePanel.updates[0][1]["allowedIPs"], expected)
+
+    def test_runtime_rejects_malformed_allowed_ips_before_post(self) -> None:
+        for stored in (None, True, 1, {}, [""], ["192.0.2.10/32", 1], "[broken", '{"ip":"192.0.2.10"}', '[{"ip":"192.0.2.10"}]'):
+            with self.subTest(stored=stored), tempfile.TemporaryDirectory() as directory:
+                self.setUp()
+                state_root = Path(directory)
+                previous = self.seed(state_root, expiry_ms=1000, limit_ip=1, total_gb=0)
+                FakePanel.clients[previous["panel_email"]]["allowedIPs"] = stored
+                with mock.patch.object(runtime, "PanelClient", FakePanel):
+                    with self.assertRaises(runtime.ProvisionError):
+                        runtime.update_entitlements(self.request(), self.config(), state_root)
+                self.assertEqual(FakePanel.update_attempts, 0)
+                self.assertEqual(FakePanel.updates, [])
+                self.assertEqual(FakePanel.adjustments, [])
 
     def test_runtime_retry_is_read_only_when_entitlements_already_match(self) -> None:
         with tempfile.TemporaryDirectory() as directory:

@@ -7,6 +7,7 @@ if ! command -v python3 >/dev/null 2>&1; then
 fi
 
 ROOT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
+wm_success() { :; }
 wm_warn() { printf '%s\n' "$*" >&2; }
 PANEL_PORT=50000
 PANEL_PATH=/panel-test/
@@ -33,14 +34,34 @@ PY
 
 tmp_dir="$(mktemp -d)"
 trap 'rm -rf "$tmp_dir"' EXIT
-XUI_RUNTIME_BIN="$tmp_dir/x-ui"
-cat > "$XUI_RUNTIME_BIN" <<'SH'
-#!/usr/bin/env bash
-printf 'apiToken: recovered-test-token\n'
-SH
-chmod +x "$XUI_RUNTIME_BIN"
+token_rows='[]'
+wm_xui_login() { return 0; }
+wm_xui_discover_capabilities() { printf '{}'; }
+wm_export_config_env_from_json() { return 0; }
+wm_xui_store_api_state() { printf '%s' "$1" > "$tmp_dir/saved"; }
+wm_xui_request_success() {
+  case "$1 $2" in
+    'GET /panel/api/setting/apiTokens') printf '{"obj":%s}' "$token_rows" ;;
+    'GET /panel/api/inbounds/list') [[ "$PANEL_TOKEN" == test-token ]] ;;
+    'POST /panel/api/setting/apiTokens/create')
+      printf 'create\n' >> "$tmp_dir/creates"
+      printf '{"obj":{"token":"test-token"}}'
+      ;;
+    *) return 1 ;;
+  esac
+}
 
-recovered_token="$(wm_xui_read_existing_api_token)"
-[[ "$recovered_token" == "recovered-test-token" ]]
+wm_xui_bootstrap_api_token
+[[ "$PANEL_TOKEN" == test-token && "$(cat "$tmp_dir/saved")" == test-token ]]
+wm_xui_bootstrap_api_token
+[[ "$(wc -l < "$tmp_dir/creates")" -eq 1 ]]
+
+PANEL_TOKEN=""
+token_rows='[{"name":"wavemesh-node-builder"}]'
+if wm_xui_bootstrap_api_token; then
+  echo "a previous create with no saved bearer was accepted" >&2
+  exit 1
+fi
+[[ "$(wc -l < "$tmp_dir/creates")" -eq 1 ]]
 
 echo "xui api adapter tests: OK"
