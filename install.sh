@@ -36,9 +36,8 @@ main() {
   wm_generate_web_identity
   wm_configure_nginx_http
   wm_obtain_ssl
-  wm_configure_nginx_https
-
   wm_install_3xui
+  wm_configure_nginx_https
   wm_configure_3xui_panel
   wm_xui_bootstrap_api_token || wm_fail "Could not establish verified 3X-UI bearer API access"
   wm_native_apply_settings "$WM_CONFIG_JSON" || wm_fail "Could not configure 3X-UI native subscription backend through the API"

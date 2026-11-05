@@ -17,7 +17,7 @@ wm_auto_create() {
   printf '[]\n' > "$clients"
   route_id="route-auto-${auto_id}"; inbound_tag="wm-route-auto-${auto_id}"; balancer_tag="wm-balancer-${auto_id}"; rule_tag="wm-rule-auto-${auto_id}"
   selectors="$(python3 -c 'import json,sys; c=json.load(open(sys.argv[1],encoding="utf-8")); print(",".join(next(x["selector"] for x in c["balancers"] if x["id"]==sys.argv[2])))' "$candidate" "$auto_id")"
-  python3 "$WM_INBOUND_TOOL" build --tag "$inbound_tag" --remark "--!${inbound_tag}" --port "$port" --path "$path" --host "$DOMAIN" --clients "$clients" --public-domain "$DOMAIN" --fingerprint "$FINGERPRINT" --output "$desired"
+  python3 "$WM_INBOUND_TOOL" build --tag "$inbound_tag" --remark="--!${inbound_tag}" --port "$port" --path "$path" --host "$DOMAIN" --clients "$clients" --public-domain "$DOMAIN" --fingerprint "$FINGERPRINT" --output "$desired"
   inbound_id="$(wm_inbound_reconcile "$desired")" || wm_fail "Could not create and verify Auto Route inbound"
   python3 "$WM_AUTO_TOOL" finalize --candidate "$candidate" --route-id "$route_id" --inbound-id "$inbound_id" || wm_fail "Could not finalize Auto Route desired state"
   wm_xray_apply_managed_balancer "$selectors" "$inbound_tag" "$balancer_tag" "$rule_tag" leastPing || wm_fail "Could not apply and verify Auto Route balancer"

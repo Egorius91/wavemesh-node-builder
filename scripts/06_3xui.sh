@@ -200,29 +200,42 @@ EOF
 wm_seed_xui_initial_config() {
   wm_info "Preparing 3X-UI initial configuration"
   mkdir -p /etc/x-ui "$XUI_HOME/bin"
+  systemctl daemon-reload || wm_fail "Could not reload 3X-UI service configuration"
 
-  systemctl daemon-reload
-  systemctl enable --now "$XUI_SERVICE" >/dev/null 2>&1 || true
-  sleep 3
-
-  if [[ -x "$XUI_RUNTIME_BIN" ]]; then
-    "$XUI_RUNTIME_BIN" setting \
-      -username "$PANEL_USERNAME" \
-      -password "$PANEL_PASSWORD" \
-      -port "$PANEL_PORT" \
-      -webBasePath "$PANEL_PATH" \
-      -listenIP "127.0.0.1" >/dev/null 2>&1 || wm_fail "Could not apply 3X-UI panel settings"
-    wm_harden_xui_sqlite_settings || true
-    wm_assert_xui_settings_applied
+  if systemctl is-active --quiet "$XUI_SERVICE" &&
+      wm_assert_xui_settings_applied && wm_xui_local_ready && wm_xui_login; then
+    systemctl enable "$XUI_SERVICE" >/dev/null || wm_fail "Could not enable 3X-UI service"
+    return 0
   fi
 
-  systemctl restart "$XUI_SERVICE" >/dev/null 2>&1 || true
+  # The CLI also runs InitDB. Serialize it with the service, and seed both
+  # loopback listeners before the first start can expose the default panel.
+  systemctl stop "$XUI_SERVICE" || wm_fail "Could not stop 3X-UI for configuration"
+  (umask 077; "$XUI_RUNTIME_BIN" setting -port "$PANEL_PORT" \
+    -webBasePath "$PANEL_PATH" -listenIP 127.0.0.1) >/dev/null 2>&1 ||
+    wm_fail "Could not seed 3X-UI panel settings"
+  wm_harden_xui_sqlite_settings || wm_fail "Could not seed 3X-UI subscription settings"
+  wm_assert_xui_settings_applied || wm_fail "3X-UI loopback settings did not persist"
+
+  wm_start_xui_locally || wm_fail "3X-UI did not become ready on both loopback listeners"
+  if ! wm_xui_login; then
+    systemctl stop "$XUI_SERVICE" || wm_fail "Could not stop 3X-UI for credential setup"
+    "$XUI_RUNTIME_BIN" setting -username "$PANEL_USERNAME" -password "$PANEL_PASSWORD" \
+      >/dev/null 2>&1 || wm_fail "Could not configure 3X-UI credentials"
+    wm_assert_xui_settings_applied || wm_fail "3X-UI loopback settings did not persist"
+    wm_start_xui_locally || wm_fail "3X-UI did not become ready after credential setup"
+    if ! wm_xui_login; then
+      systemctl stop "$XUI_SERVICE" || wm_fail "Could not stop 3X-UI after failed login"
+      wm_fail "Could not verify configured 3X-UI login"
+    fi
+  fi
+  systemctl enable "$XUI_SERVICE" >/dev/null || wm_fail "Could not enable 3X-UI service"
 }
 
 wm_harden_xui_sqlite_settings() {
   local db
   db="$(wm_find_xui_db || true)"
-  [[ -n "$db" ]] || return 0
+  [[ -n "$db" ]] || return 1
   DOMAIN="$DOMAIN" SUB_PATH="$SUB_PATH" python3 - "$db" <<'PY'
 import os
 import sqlite3
@@ -258,60 +271,58 @@ PY
 }
 
 wm_assert_xui_settings_applied() {
-  local settings listen
-  settings="$("$XUI_RUNTIME_BIN" setting -show true 2>/dev/null || "$XUI_RUNTIME_BIN" setting -show 2>/dev/null || true)"
-  listen="$("$XUI_RUNTIME_BIN" setting -getListen true 2>/dev/null || "$XUI_RUNTIME_BIN" setting -getListen 2>/dev/null || true)"
-  grep -q "port: ${PANEL_PORT}" <<< "$settings" || wm_fail "3X-UI panel port setting was not applied"
-  grep -q "webBasePath: ${PANEL_PATH}" <<< "$settings" || wm_fail "3X-UI webBasePath setting was not applied"
-  grep -q "listenIP: 127.0.0.1" <<< "$listen" || wm_fail "3X-UI listenIP setting was not applied"
+  local db
+  db="$(wm_find_xui_db)" && [[ -n "$db" ]] || return 1
+  python3 - "$db" "$PANEL_PORT" "$PANEL_PATH" <<'PY'
+import sqlite3
+import sys
+from pathlib import Path
+
+db, port, path = sys.argv[1:]
+expected = {"webPort": port, "webBasePath": path, "webListen": "127.0.0.1",
+            "webCertFile": "", "webKeyFile": "", "subEnable": "true",
+            "subListen": "127.0.0.1", "subPort": "2096"}
+try:
+    with sqlite3.connect(Path(db).resolve().as_uri() + "?mode=ro", uri=True) as conn:
+        rows = conn.execute(
+            "SELECT key,value FROM settings WHERE key IN (" + ",".join("?" for _ in expected) + ")",
+            tuple(expected),
+        ).fetchall()
+except sqlite3.Error:
+    sys.exit(1)
+sys.exit(0 if len(rows) == len(expected) and dict(rows) == expected else 1)
+PY
 }
 
-wm_wait_for_xui_service() {
-  systemctl daemon-reload >/dev/null 2>&1 || true
-  systemctl enable --now "$XUI_SERVICE" >/dev/null 2>&1 || true
-  for _ in $(seq 1 30); do
-    if systemctl is-active --quiet "$XUI_SERVICE"; then
-      wm_success "3X-UI service is active"
-      return 0
-    fi
-    sleep 1
-  done
-  return 1
+wm_xui_port_is_loopback() {
+  local port="$1" listeners
+  listeners="$(ss -H -ltn "sport = :$port")" || return 1
+  awk -v expected="127.0.0.1:$port" '
+    { if ($4 != expected) wrong=1 }
+    END { exit !(NR == 1 && !wrong) }
+  ' <<< "$listeners"
 }
 
-wm_wait_for_xui_http() {
-  local url
-  url="http://127.0.0.1:${PANEL_PORT}${PANEL_PATH}"
-  for _ in $(seq 1 30); do
-    if curl -fsS --max-time 2 "$url" >/dev/null 2>&1; then
-      wm_success "3X-UI panel HTTP is reachable on 127.0.0.1:${PANEL_PORT}${PANEL_PATH}"
-      return 0
-    fi
-    sleep 1
-  done
-  return 1
+wm_xui_local_ready() {
+  systemctl is-active --quiet "$XUI_SERVICE" &&
+    wm_xui_port_is_loopback "$PANEL_PORT" && wm_xui_port_is_loopback 2096 &&
+    curl -fsS --max-time 2 "$(wm_xui_base_url)" >/dev/null 2>&1
 }
 
-wm_assert_xui_bound_to_loopback() {
-  local listen
-  listen="$(ss -ltnp 2>/dev/null | grep ":${PANEL_PORT} " || true)"
-  [[ -n "$listen" ]] || wm_fail "3X-UI panel is not listening on port ${PANEL_PORT}"
-  if grep -q "127.0.0.1:${PANEL_PORT}" <<< "$listen"; then
-    wm_success "3X-UI panel is bound to 127.0.0.1:${PANEL_PORT}"
-  else
-    wm_fail "3X-UI panel is not loopback-only. Listen output: $listen"
+wm_start_xui_locally() {
+  local attempt
+  if systemctl start "$XUI_SERVICE"; then
+    for (( attempt=1; attempt<=30; attempt++ )); do
+      wm_xui_local_ready && return 0
+      sleep 1
+    done
   fi
+  systemctl stop "$XUI_SERVICE" || wm_fail "Could not stop unready 3X-UI service"
+  return 1
 }
 
 wm_assert_xui_builtin_sub_loopback() {
-  local listen
-  listen="$(ss -ltnp 2>/dev/null | grep ':2096 ' || true)"
-  [[ -n "$listen" ]] || wm_fail "3X-UI built-in subscription server is not listening on 2096"
-  if grep -q '127.0.0.1:2096' <<< "$listen"; then
-    wm_success "3X-UI built-in subscription server is bound to 127.0.0.1:2096"
-  else
-    wm_fail "3X-UI built-in subscription server is not loopback-only. Listen output: $listen"
-  fi
+  wm_xui_port_is_loopback 2096 || wm_fail "3X-UI subscription listener is not loopback-only"
 }
 
 wm_update_config_json_xui_installation() {
@@ -323,7 +334,7 @@ wm_update_config_json_xui_installation() {
 import json
 path = "$WM_CONFIG_JSON"
 cfg = json.load(open(path, encoding="utf-8"))
-cfg.setdefault("installation", {})["xui"] = {
+cfg.setdefault("installation", {}).setdefault("xui", {}).update({
   "repo": "$XUI_REPO",
   "release": "$tag",
   "database": "sqlite",
@@ -333,7 +344,7 @@ cfg.setdefault("installation", {})["xui"] = {
   "builtin_subscription": "enabled-loopback",
   "service": "$XUI_SERVICE",
   "status": "$status"
-}
+})
 cfg["panel"]["internal_url"] = "http://127.0.0.1:$PANEL_PORT$PANEL_PATH"
 cfg["panel"]["public_url"] = "https://$DOMAIN$PANEL_PATH"
 with open(path, "w", encoding="utf-8") as f:
@@ -347,8 +358,8 @@ PY
 wm_install_3xui() {
   wm_info "Installing 3X-UI from latest stable release"
 
-  if wm_xui_panel_installed && systemctl is-active --quiet "$XUI_SERVICE"; then
-    wm_success "3X-UI panel already installed and running"
+  if wm_xui_panel_installed; then
+    wm_success "3X-UI panel already installed"
   else
     local result extract_dir tag
     result="$(wm_download_latest_xui_release)"
@@ -360,11 +371,6 @@ wm_install_3xui() {
   fi
 
   wm_seed_xui_initial_config
-  wm_wait_for_xui_service || wm_fail "3X-UI service did not become active"
-  sleep 1
-  wm_assert_xui_bound_to_loopback
-  wm_assert_xui_builtin_sub_loopback
-  wm_wait_for_xui_http || wm_fail "3X-UI panel did not become reachable locally"
 }
 
 wm_configure_3xui_panel() {

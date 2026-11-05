@@ -55,7 +55,7 @@ wm_cascade_add_exit() {
   python3 "$WM_CASCADE_TOOL" prepare "${prepare_args[@]}" || wm_fail "Could not build Entry candidate state"
   route_id="$(EXIT_ID="$exit_id" python3 -c 'import hashlib,os; v=os.environ["EXIT_ID"]; p="route-"; print(p+v if len(p+v)<=48 else p+v[:48-len(p)-8]+"-"+hashlib.sha256(v.encode()).hexdigest()[:7])')"; inbound_tag="wm-route-${exit_id}"; outbound_tag="wm-exit-${exit_id}"; rule_tag="wm-rule-${exit_id}"
   route_display_name="$(python3 -c 'import json,sys; print(next(r["display_name"] for r in json.load(open(sys.argv[1],encoding="utf-8"))["routes"] if r["id"]==sys.argv[2]))' "$candidate" "$route_id")"
-  python3 "$WM_INBOUND_TOOL" build --tag "$inbound_tag" --remark "$route_display_name" --port "$port" --path "$path" --host "$DOMAIN" --clients "$clients" --public-domain "$DOMAIN" --fingerprint "$FINGERPRINT" --output "$desired"
+  python3 "$WM_INBOUND_TOOL" build --tag "$inbound_tag" --remark="$route_display_name" --port "$port" --path "$path" --host "$DOMAIN" --clients "$clients" --public-domain "$DOMAIN" --fingerprint "$FINGERPRINT" --output "$desired"
   wm_xray_get_template "$xray_before" || wm_fail "Could not capture Xray template before mutation"
   inbound_id="$(wm_inbound_reconcile "$desired")" || wm_fail "Could not create and verify route inbound"
   python3 "$WM_CASCADE_TOOL" finalize --candidate "$candidate" --route-id "$route_id" --inbound-id "$inbound_id" || wm_fail "Could not finalize Entry desired state"
