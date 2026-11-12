@@ -5,6 +5,7 @@ import json
 from pathlib import Path
 import tempfile
 import unittest
+from unittest import mock
 
 spec = importlib.util.spec_from_file_location('placement_runtime', Path(__file__).resolve().parents[2] / 'agent/access_runtime.py')
 runtime = importlib.util.module_from_spec(spec)
@@ -17,6 +18,7 @@ class PlacementFenceTests(unittest.TestCase):
         self.addCleanup(self.tmp.cleanup)
         self.root = Path(self.tmp.name)
         self.effects = []
+        self.barrier = mock.patch.object(runtime, 'quiesce_placement_panel'); self.barrier.start(); self.addCleanup(self.barrier.stop)
 
         @runtime.fenced_access('access.update_entitlements')
         def apply(value, config, root):

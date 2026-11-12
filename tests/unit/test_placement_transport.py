@@ -116,12 +116,13 @@ class PlacementTransportTests(unittest.TestCase):
             root=Path(directory); instance=self.instance(root); path=instance.config.access_runtime_path
             self.assertFalse(instance.placement_runtime_ready())
             path.write_text('old runtime')
-            with mock.patch.object(agent,'run_json_command',return_value={}) as probe:
+            with mock.patch.object(agent,'run_json_command',return_value={
+                'access_command_schemas':[1,2], 'placement_fence':2, 'disable_absent':True}) as probe:
                 self.assertFalse(instance.placement_runtime_ready())
                 self.assertFalse(instance.placement_runtime_ready()); self.assertEqual(probe.call_count,1)
             path.write_text('new runtime')
             with mock.patch.object(agent,'run_json_command',return_value={
-                'access_command_schemas':[1,2], 'placement_fence':2, 'disable_absent':True}) as probe:
+                'access_command_schemas':[1,2], 'placement_fence':2, 'disable_absent':True, 'unknown_effect_barrier':1}) as probe:
                 self.assertTrue(instance.placement_runtime_ready()); self.assertTrue(instance.placement_runtime_ready())
                 self.assertEqual(probe.call_count,1)
                 self.assertEqual(probe.call_args.args[0],['/usr/bin/python3',str(path),'--capabilities'])

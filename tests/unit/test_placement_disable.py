@@ -17,6 +17,7 @@ class PlacementDisableTests(unittest.TestCase):
             placement_id='legacy:access_12345678', tenant_id='tenant001', node_id='node0001',
             command_id='command001', generation=1, entitlement_revision=8, plan_hash='a'*64, expected_version=0)
         self.patch = mock.patch.object(runtime, 'PanelClient', FakePanel); self.patch.start(); self.addCleanup(self.patch.stop)
+        self.barrier = mock.patch.object(runtime, 'quiesce_placement_panel'); self.barrier.start(); self.addCleanup(self.barrier.stop)
 
     def seed(self):
         return entitlements.AccessEntitlementTests().seed(self.root, expiry_ms=2000000000000, limit_ip=1, total_gb=1000)

@@ -14,7 +14,9 @@ from pathlib import Path
 import re
 import secrets
 import stat
+import subprocess
 import tempfile
+import time
 from typing import Any
 from urllib import error, parse, request
 import uuid
@@ -138,6 +140,70 @@ def placement_binding(request_value: dict[str, Any]) -> dict[str, Any] | None:
     return result
 
 
+def quiesce_placement_panel(config: dict[str, Any]) -> None:
+    """End an uncertain local HTTP handler before reconciling its effect.
+
+    Killing the CLI alone cannot cancel a request already received by 3X-UI.
+    The fixed Builder-managed service must stop its whole process group before
+    starting a fresh invocation. Ordinary completed commands do not restart it.
+    Caller holds the Node/access locks; any failure retains the incomplete fence.
+    """
+    if os.name != "posix":
+        raise ProvisionError("Placement uncertainty requires native service reconciliation")
+    properties = ("Id", "LoadState", "ActiveState", "SubState", "MainPID", "ControlPID", "InvocationID",
+                  "KillMode", "SendSIGKILL", "NeedDaemonReload", "Job", "ControlGroup", "Type",
+                  "Triggers", "TriggeredBy", "OnFailure", "OnSuccess", "FileDescriptorStoreMax", "NFileDescriptorStore")
+
+    def run(arguments: list[str], timeout: int):
+        try:
+            result = subprocess.run(["/usr/bin/systemctl", *arguments], check=False, capture_output=True,
+                text=True, timeout=timeout, env={"PATH": "/usr/bin:/bin", "LC_ALL": "C"})
+        except (OSError, subprocess.SubprocessError) as exc:
+            raise ProvisionError("Placement service reconciliation outcome is unknown") from exc
+        if result.returncode != 0:
+            raise ProvisionError("Placement service reconciliation failed")
+        return result.stdout
+
+    def unit():
+        raw = run(["show", "x-ui.service", "--no-pager", "--property=" + ",".join(properties)], 10)
+        values = {}
+        if len(raw) > 32768:
+            raise ProvisionError("Placement service state is invalid")
+        for line in raw.splitlines():
+            key, separator, value = line.partition("=")
+            if not separator or key not in properties or key in values:
+                raise ProvisionError("Placement service state is invalid")
+            values[key] = value
+        if (set(values) != set(properties) or values["Id"] != "x-ui.service" or values["LoadState"] != "loaded" or
+                values["Type"] != "simple" or values["KillMode"] != "control-group" or values["SendSIGKILL"] != "yes" or
+                values["NeedDaemonReload"] != "no" or values["Job"] != "0" or values["ControlPID"] != "0" or
+                values["FileDescriptorStoreMax"] != "0" or values["NFileDescriptorStore"] != "0" or
+                values["ActiveState"] not in {"active", "inactive", "failed"} or not values["MainPID"].isdigit() or
+                any(values[k] for k in ("Triggers", "TriggeredBy", "OnFailure", "OnSuccess")) or
+                (int(values["MainPID"]) > 0 and values["ControlGroup"] != "/system.slice/x-ui.service")):
+            raise ProvisionError("Placement service cannot prove executor quiescence")
+        return values
+
+    before = unit()
+    run(["restart", "--job-mode=fail", "x-ui.service"], 45)
+    after = unit()
+    if (after["ActiveState"] != "active" or after["SubState"] != "running" or int(after["MainPID"]) < 1 or
+            not re.fullmatch(r"[a-f0-9]{32}", after["InvocationID"]) or after["InvocationID"] == before["InvocationID"]):
+        raise ProvisionError("Placement service reconciliation was not verified")
+    panel = PanelClient(config, timeout=1)
+    deadline = time.monotonic() + 20
+    while True:
+        try:
+            ready = panel.call("GET", "/panel/api/clients/list")
+            if ready.get("success") is True and isinstance(ready.get("obj"), list):
+                return
+        except ProvisionError:
+            pass
+        if time.monotonic() >= deadline:
+            raise ProvisionError("Placement service did not become ready after reconciliation")
+        time.sleep(0.1)
+
+
 def fenced_access(operation: str):
     def decorate(function):
         @wraps(function)
@@ -170,7 +236,9 @@ def fenced_access(operation: str):
                         if type(fence["schema_version"]) is not int or fence["schema_version"] != 2:
                             raise ProvisionError("Access placement fence schema is invalid")
                         stored_binding = placement_binding({**fence, "desired_version": fence["version"]})
-                        if set(fence) != {"access_id", "version", "payload_hash", *stored_binding}:
+                        shape = {"access_id", "version", "payload_hash", *stored_binding}
+                        if set(fence) not in (shape, shape | {"execution_complete"}) or (
+                                "execution_complete" in fence and type(fence["execution_complete"]) is not bool):
                             raise ProvisionError("Access placement fence shape is invalid")
                     if fence.get("schema_version") == 2:
                         if binding is None:
@@ -186,6 +254,7 @@ def fenced_access(operation: str):
                     raise ProvisionError("Access placement local state is behind expected version")
                 if version < highest:
                     raise ProvisionError("Access command version is stale")
+                uncertain = binding is not None and highest > 0 and (not fence or fence.get("version") != highest or fence.get("execution_complete") is not True)
                 if operation == "cleanup" and binding is not None and version != highest:
                     raise ProvisionError("Placement cleanup must own the current command")
                 if operation != "cleanup" or binding is not None:
@@ -217,10 +286,19 @@ def fenced_access(operation: str):
                     if version == highest:
                         if fence is None or fence.get("version") != version or fence["payload_hash"] != digest:
                             raise ProvisionError("Access command replay cannot be verified")
-                    else:
+                    if version > highest or binding is not None:
                         atomic_json(fence_path, {"access_id": access_id, "version": version, "payload_hash": digest,
-                                                **(binding or {})})
+                                                **(binding or {}), **({"execution_complete": False} if binding is not None else {})})
+                if uncertain:
+                    quiesce_placement_panel(config)
                 result = function(request_value, config, state_root)
+                if binding is not None:
+                    # Persist terminal local execution before publishing output.
+                    # A lost master response can replay without restarting 3X-UI.
+                    completed = load_private_state(fence_path)
+                    if completed is None:
+                        raise ProvisionError("Placement execution fence disappeared")
+                    atomic_json(fence_path, {**completed, "execution_complete": True})
                 if binding is not None and operation != "cleanup":
                     # The authenticated Agent checks these against its envelope;
                     # an old runtime which ignored v2 cannot produce this proof.
@@ -890,7 +968,7 @@ def main() -> int:
     parser.add_argument("--cleanup-previous", action="store_true")
     args = parser.parse_args()
     if args.capabilities:
-        print(json.dumps({"access_command_schemas": [1, 2], "placement_fence": 2, "disable_absent": True}))
+        print(json.dumps({"access_command_schemas": [1, 2], "placement_fence": 2, "disable_absent": True, "unknown_effect_barrier": 1}))
         return 0
     try:
         # Lock order: node, then access. Hold through configuration read, panel
