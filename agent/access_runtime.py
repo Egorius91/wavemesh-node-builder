@@ -105,12 +105,46 @@ def access_lock(state_root: Path, access_id: str):
         os.close(fd)
 
 
+def placement_binding(request_value: dict[str, Any]) -> dict[str, Any] | None:
+    """Bind the existing local fence to the authenticated v2 command lineage."""
+    schema = request_value.get("schema_version", 1)
+    if type(schema) is not int or schema not in {1, 2}:
+        raise ProvisionError("Access command schema is invalid")
+    if schema == 1:
+        return None
+    placement = request_value.get("placement_id")
+    if not isinstance(placement, str) or not re.fullmatch(r"(?:legacy:)?[A-Za-z0-9_-]{1,128}", placement):
+        raise ProvisionError("Access placement identity is invalid")
+    result = {"schema_version": 2, "placement_id": placement}
+    for name in ("tenant_id", "node_id", "command_id"):
+        value = request_value.get(name)
+        if not isinstance(value, str):
+            raise ProvisionError("Access placement binding is invalid")
+        result[name] = safe_id(value, name)
+    for name in ("generation", "entitlement_revision"):
+        value = request_value.get(name)
+        if type(value) is not int:
+            raise ProvisionError("Access placement revision is invalid")
+        result[name] = integer(value, 1, 2_147_483_647)
+    digest = request_value.get("plan_hash")
+    if not isinstance(digest, str) or not re.fullmatch(r"[a-f0-9]{64}", digest):
+        raise ProvisionError("Access placement plan hash is invalid")
+    result["plan_hash"] = digest
+    expected = request_value.get("expected_version")
+    desired = request_value.get("desired_version")
+    if type(expected) is not int or type(desired) is not int or not 0 <= expected < desired <= 2_147_483_647:
+        raise ProvisionError("Access placement expected version is invalid")
+    result["expected_version"] = expected
+    return result
+
+
 def fenced_access(operation: str):
     def decorate(function):
         @wraps(function)
         def execute(request_value, config, state_root):
             access_id = safe_id(request_value.get("access_id"), "access_id")
             version = integer(request_value.get("desired_version"), 1, 2_147_483_647)
+            binding = placement_binding(request_value)
             with access_lock(state_root, access_id):
                 fence_path = state_root / f"{access_id}.fence"
                 fence = load_private_state(fence_path)
@@ -129,6 +163,27 @@ def fenced_access(operation: str):
                             not re.fullmatch(r"[a-f0-9]{64}", str(fence.get("payload_hash") or ""))):
                         raise ProvisionError("Access command fence is invalid")
                     highest = max(highest, integer(fence.get("version"), 1, 2_147_483_647))
+                    if "schema_version" not in fence:
+                        if set(fence) != {"access_id", "version", "payload_hash"}:
+                            raise ProvisionError("Legacy access fence shape is invalid")
+                    else:
+                        if type(fence["schema_version"]) is not int or fence["schema_version"] != 2:
+                            raise ProvisionError("Access placement fence schema is invalid")
+                        stored_binding = placement_binding({**fence, "desired_version": fence["version"]})
+                        if set(fence) != {"access_id", "version", "payload_hash", *stored_binding}:
+                            raise ProvisionError("Access placement fence shape is invalid")
+                    if fence.get("schema_version") == 2:
+                        if binding is None:
+                            raise ProvisionError("Legacy access writer is fenced")
+                        for name in ("tenant_id", "node_id", "placement_id"):
+                            if fence.get(name) != binding[name]:
+                                raise ProvisionError("Access placement fence identity mismatch")
+                        for name in ("generation", "entitlement_revision"):
+                            previous = fence.get(name)
+                            if type(previous) is not int or previous < 1 or binding[name] < previous:
+                                raise ProvisionError("Access placement fence revision is stale")
+                if binding is not None and binding["expected_version"] > highest:
+                    raise ProvisionError("Access placement local state is behind expected version")
                 if version < highest:
                     raise ProvisionError("Access command version is stale")
                 if operation != "cleanup":
@@ -150,6 +205,10 @@ def fenced_access(operation: str):
                         "device_limit": integer(request_value.get("device_limit"), 0, 10_000),
                         "quota_bytes": integer(request_value.get("quota_bytes"), 0, 9_223_372_036_854_775_807),
                     }
+                    if binding is not None:
+                        if enabled and version > highest and binding["expected_version"] != highest:
+                            raise ProvisionError("Enabled access requires reconciled local version")
+                        canonical.update(binding)
                     if preparing:
                         canonical["replacement_id"] = safe_id(request_value.get("replacement_id"), "replacement_id")
                     digest = hashlib.sha256(json.dumps(canonical, sort_keys=True).encode()).hexdigest()
@@ -157,7 +216,8 @@ def fenced_access(operation: str):
                         if fence is None or fence.get("version") != version or fence["payload_hash"] != digest:
                             raise ProvisionError("Access command replay cannot be verified")
                     else:
-                        atomic_json(fence_path, {"access_id": access_id, "version": version, "payload_hash": digest})
+                        atomic_json(fence_path, {"access_id": access_id, "version": version, "payload_hash": digest,
+                                                **(binding or {})})
                 return function(request_value, config, state_root)
         return execute
     return decorate
