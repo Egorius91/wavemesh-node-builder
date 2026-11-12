@@ -174,6 +174,10 @@ def quiesce_placement_panel(config: dict[str, Any]) -> None:
             if not separator or key not in properties or key in values:
                 raise ProvisionError("Placement service state is invalid")
             values[key] = value
+        # systemctl prints the null D-Bus Job as an empty value on this release.
+        # Both representations mean no job; every nonzero/unknown job stays closed.
+        if values.get("Job") == "":
+            values["Job"] = "0"
         if (set(values) != set(properties) or values["Id"] != "x-ui.service" or values["LoadState"] != "loaded" or
                 values["Type"] != "simple" or values["KillMode"] != "control-group" or values["SendSIGKILL"] != "yes" or
                 values["NeedDaemonReload"] != "no" or values["Job"] != "0" or values["ControlPID"] != "0" or

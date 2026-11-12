@@ -21,14 +21,15 @@ def status(**changes):
 
 class PlacementQuiescenceTests(unittest.TestCase):
     def test_fixed_service_restart_must_complete_with_a_fresh_valid_invocation(self):
-        with mock.patch.object(runtime.os,'name','posix'), mock.patch.object(runtime.subprocess,'run',side_effect=[
-                status(),SimpleNamespace(returncode=0,stdout=''),status(InvocationID='b'*32,MainPID='456')]) as run, \
-                mock.patch.object(runtime,'PanelClient',return_value=SimpleNamespace(call=mock.Mock(return_value={'success':True,'obj':[]}))):
-            runtime.quiesce_placement_panel({})
-        self.assertEqual(run.call_count,3)
-        self.assertEqual(run.call_args_list[1].args[0],['/usr/bin/systemctl','restart','--job-mode=fail','x-ui.service'])
-        self.assertEqual(run.call_args_list[1].kwargs['timeout'],45)
-        self.assertEqual(run.call_args_list[1].kwargs['env'],{'PATH':'/usr/bin:/bin','LC_ALL':'C'})
+        for empty in ('0',''):
+            with self.subTest(job=empty), mock.patch.object(runtime.os,'name','posix'), mock.patch.object(runtime.subprocess,'run',side_effect=[
+                    status(Job=empty),SimpleNamespace(returncode=0,stdout=''),status(Job=empty,InvocationID='b'*32,MainPID='456')]) as run, \
+                    mock.patch.object(runtime,'PanelClient',return_value=SimpleNamespace(call=mock.Mock(return_value={'success':True,'obj':[]}))):
+                runtime.quiesce_placement_panel({})
+            self.assertEqual(run.call_count,3)
+            self.assertEqual(run.call_args_list[1].args[0],['/usr/bin/systemctl','restart','--job-mode=fail','x-ui.service'])
+            self.assertEqual(run.call_args_list[1].kwargs['timeout'],45)
+            self.assertEqual(run.call_args_list[1].kwargs['env'],{'PATH':'/usr/bin:/bin','LC_ALL':'C'})
 
     def test_unsupported_unit_pending_jobs_and_stored_descriptors_stop_before_restart(self):
         for damage in [dict(Id='other.service'),dict(KillMode='process'),dict(SendSIGKILL='no'),dict(NeedDaemonReload='yes'),

@@ -54,7 +54,7 @@ def systemctl(*args):
 
 
 def unit():
-    result=systemctl('show','x-ui.service','--property=MainPID,InvocationID,ActiveState')
+    result=systemctl('show','x-ui.service','--property=MainPID,InvocationID,ActiveState,SubState,Job,KillMode,SendSIGKILL,ControlGroup,FileDescriptorStoreMax,NFileDescriptorStore')
     if result.returncode: raise AssertionError('Cannot read owned fixture unit')
     return dict(line.split('=',1) for line in result.stdout.splitlines())
 
@@ -96,6 +96,7 @@ ExecStart=/usr/bin/python3 -B %s --server %s %s
                     if time.monotonic()>deadline: raise
                     time.sleep(.1)
             initial=unit()
+            print(json.dumps({'fixture_unit_before':initial}),flush=True)
             config={'panel':{'listen_port':port,'path':'/panel-fixture/','api_auth':{'token':'synthetic_token_12345678'}},
                 'server':{'domain':'entry.example.invalid'},'network':{'subscription':{'backend':'xui-native','path':'/opaque/subscription/'}}}
             request=dict(schema_version=2,access_id='access_12345678',placement_id='legacy:access_12345678',tenant_id='tenant001',
@@ -131,6 +132,7 @@ ExecStart=/usr/bin/python3 -B %s --server %s %s
                 runtime.provision(request,config,root/'access')
             print(json.dumps({'proof':'PENDING_HTTP_QUIESCENCE_PASS','runtime_sha256':hashlib.sha256((ROOT/'agent/access_runtime.py').read_bytes()).hexdigest(),
                 'killed_cli_pid':child.pid,'old_invocation':initial['InvocationID'],'fresh_invocation':fresh['InvocationID'],
+                'job_value_before':initial['Job'],'job_value_after':fresh['Job'],
                 'old_service_pid_absent':True,'late_mutation_absent':True,'deny_replay_no_restart':True}),flush=True)
         finally:
             if child is not None and child.poll() is None: child.kill();child.communicate(timeout=10)
