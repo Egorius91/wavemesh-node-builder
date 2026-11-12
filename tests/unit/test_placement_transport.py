@@ -102,6 +102,23 @@ class PlacementTransportTests(unittest.TestCase):
             instance.execute_access_runtime.assert_not_called()
             instance.report_access_command_failure.assert_called_once()
 
+    def test_started_rejection_prevents_local_execution_and_material(self):
+        with tempfile.TemporaryDirectory() as directory:
+            instance = self.instance(Path(directory)); calls = []
+            def api(method, path, body, **kw):
+                calls.append((method, path))
+                if method == 'GET': return envelope()
+                if path.endswith('/started'): raise agent.AgentError('Command superseded before execution')
+                self.fail('Rejected STARTED must not publish material or success')
+            instance.mtls_runtime = SimpleNamespace(api_json=api)
+            instance.placement_runtime_ready = mock.Mock(return_value=True)
+            instance.execute_access_runtime = mock.Mock()
+            instance.report_access_command_failure = mock.Mock()
+            instance.run_access_command_cycle()
+            self.assertEqual(len(calls), 2)
+            instance.execute_access_runtime.assert_not_called()
+            instance.report_access_command_failure.assert_called_once()
+
     def test_old_runtime_output_cannot_be_upgraded_by_agent(self):
         with tempfile.TemporaryDirectory() as directory:
             root=Path(directory); instance=self.instance(root); instance.config.access_runtime_path.write_text('old runtime')
