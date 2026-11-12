@@ -14,6 +14,7 @@ import hashlib
 import json
 import logging
 import os
+import re
 from pathlib import Path
 import secrets
 import shlex
@@ -38,7 +39,7 @@ except ImportError:  # Preserve bearer-only compatibility during staged upgrades
     NodeMtlsRuntime = None  # type: ignore[assignment,misc]
     MtlsRuntimeError = RuntimeError  # type: ignore[assignment,misc]
 
-AGENT_VERSION = "0.6.0-mtls-primary"
+AGENT_VERSION = "0.7.0-placement-v2"
 DEFAULT_ENV_PATH = Path("/etc/wavemesh-agent/agent.env")
 DEFAULT_RUNTIME_PATH = Path("/etc/wavemesh-agent/runtime.json")
 NODE_CONFIG_PATH = Path("/etc/wavemesh-node/config.json")
@@ -447,16 +448,20 @@ class NodeAgent:
             if not command:
                 return
             command_id, attempt, command_type, payload = validate_access_command(
-                command, self.config.node_id
+                command, self.config.node_id, self.config.tenant_id
             )
+            if payload.get("schema_version") == 2 and not self.placement_runtime_ready():
+                raise AgentError("Placement runtime is not installed")
             self.mtls_runtime.api_json(
                 "POST",
                 f"internal/v1/nodes/{self.config.node_id}/commands/{command_id}/started",
-                {},
+                {"attempt": attempt} if payload.get("schema_version") == 2 else {},
                 expected=(204,),
             )
             material = self.execute_access_runtime(command_type, payload)
             material_path = (
+                f"internal/v1/nodes/{self.config.node_id}/accesses/{payload['access_id']}/placements/{payload['placement_id']}/materialize"
+                if payload.get("schema_version") == 2 else
                 f"internal/v1/nodes/{self.config.node_id}/replacements/{payload['replacement_id']}/materialize"
                 if command_type == "access.prepare_replacement" else
                 f"internal/v1/nodes/{self.config.node_id}/accesses/{payload['access_id']}/materialize"
@@ -527,7 +532,10 @@ class NodeAgent:
             if completed.returncode != 0 or not output_path.is_file():
                 raise AgentError("Access runtime failed")
             material = read_json_file(output_path, default={})
-            validate_access_material(material, payload["desired_version"])
+            if payload.get("schema_version") == 2:
+                validate_placement_material(material, payload)
+            else:
+                validate_access_material(material, payload["desired_version"])
             return material
 
     def cleanup_replaced_access_runtime(self, payload: dict[str, Any]) -> None:
@@ -824,6 +832,7 @@ class NodeAgent:
             "command_execution": command_ready,
             "access_lifecycle": command_ready,
             "access_entitlements_v2": command_ready,
+            "access_placements_v2": command_ready and self.placement_runtime_ready(),
             "access_replacement_prepare_v1": command_ready,
             "node_role": node_role,
             "cascade_routes_total": len(state.get("routes") or []),
@@ -842,6 +851,21 @@ class NodeAgent:
             "capabilities": capabilities,
             "sent_at": format_timestamp(datetime.now(timezone.utc)),
         }
+
+    def placement_runtime_ready(self) -> bool:
+        """Read-only installed-runtime probe, cached by actual artifact bytes."""
+        try:
+            path = self.config.access_runtime_path
+            digest = hashlib.sha256(path.read_bytes()).hexdigest()
+            cached = getattr(self, "_placement_runtime_probe", None)
+            if cached is not None and cached[0] == digest:
+                return cached[1]
+            result = run_json_command(["/usr/bin/python3", str(path), "--capabilities"], timeout=10)
+            ready = result == {"access_command_schemas": [1, 2], "placement_fence": 2, "disable_absent": True}
+            self._placement_runtime_probe = (digest, ready)
+            return ready
+        except Exception:
+            return False
 
     def send_heartbeat(self, payload: dict[str, Any] | None = None) -> None:
         self.api_json(
@@ -1213,6 +1237,7 @@ def safe_id(value: Any, name: str) -> str:
 def validate_access_command(
     command: dict[str, Any],
     node_id: str,
+    tenant_id: str | None = None,
 ) -> tuple[str, int, str, dict[str, Any]]:
     command_type = command.get("type")
     if command_type not in {
@@ -1222,7 +1247,8 @@ def validate_access_command(
         "access.prepare_replacement",
     }:
         raise AgentError("Unsupported Node command type")
-    if command.get("target_node_id") != node_id or command.get("schema_version") != 1:
+    schema = command.get("schema_version")
+    if command.get("target_node_id") != node_id or type(schema) is not int or schema not in {1, 2}:
         raise AgentError("Node command target or schema is invalid")
     command_id = safe_id(command.get("command_id"), "command_id")
     attempt = safe_int(command.get("attempt"), 1, 1_000_000)
@@ -1239,6 +1265,10 @@ def validate_access_command(
     }
     if command_type == "access.prepare_replacement":
         required.add("replacement_id")
+    if schema == 2:
+        if command_type == "access.prepare_replacement" or not tenant_id or command.get("tenant_id") != tenant_id:
+            raise AgentError("Placement command tenant or operation is invalid")
+        required.update({"placement_id", "generation", "entitlement_revision", "plan_hash", "command_id"})
     if not isinstance(payload, dict) or set(payload) != required:
         raise AgentError("Node command payload is invalid")
     if command_type == "access.prepare_replacement":
@@ -1261,7 +1291,40 @@ def validate_access_command(
     quota = payload.get("quota_bytes")
     if not isinstance(quota, str) or not quota.isdigit() or int(quota) > 9_223_372_036_854_775_807:
         raise AgentError("Access quota is invalid")
-    return command_id, attempt, str(command_type), dict(payload)
+    result = dict(payload)
+    if schema == 2:
+        if any(type(value) is not int for value in (command.get("attempt"), payload.get("desired_version"), payload.get("device_limit"))):
+            raise AgentError("Placement command integer fields are invalid")
+        placement = payload.get("placement_id")
+        if not isinstance(placement, str) or not re.fullmatch(r"(?:legacy:)?[A-Za-z0-9_-]{1,128}", placement):
+            raise AgentError("Placement command identity is invalid")
+        for name in ("generation", "entitlement_revision"):
+            value = payload.get(name)
+            if type(value) is not int or not 1 <= value <= 2_147_483_647:
+                raise AgentError("Placement command revision is invalid")
+        if payload.get("command_id") != command_id or not isinstance(payload.get("plan_hash"), str) or not re.fullmatch(r"[a-f0-9]{64}", payload["plan_hash"]):
+            raise AgentError("Placement command binding is invalid")
+        expected = command.get("expected_version")
+        if type(expected) is not int or not 0 <= expected < desired_version:
+            raise AgentError("Placement command expected version is invalid")
+        result.update(schema_version=2, tenant_id=tenant_id, node_id=node_id, expected_version=expected)
+    return command_id, attempt, str(command_type), result
+
+
+def validate_placement_material(material: dict[str, Any], payload: dict[str, Any]) -> None:
+    common = {"schema_version", "desired_version", "placement_id", "generation", "entitlement_revision", "plan_hash", "command_id", "client_exists", "enabled"}
+    for key in common - {"client_exists"}:
+        if material.get(key) != payload.get(key) or type(material.get(key)) is not type(payload.get(key)):
+            raise AgentError("Placement material binding is invalid")
+    if type(material.get("client_exists")) is not bool:
+        raise AgentError("Placement material existence proof is invalid")
+    legacy = {"desired_version", "panel_email", "client_uuid", "sub_id", "primary_inbound_id", "protocol", "subscription_url"}
+    if payload["enabled"]:
+        if not material["client_exists"] or set(material) != common | legacy:
+            raise AgentError("Placement profile material is incomplete")
+        validate_access_material({k: material[k] for k in legacy}, payload["desired_version"])
+    elif set(material) != common | {"disabled_identity_count", "inventory_hash"} or type(material.get("disabled_identity_count")) is not int or not int(material["client_exists"]) <= material["disabled_identity_count"] <= 1_000_000 or not isinstance(material.get("inventory_hash"), str) or not re.fullmatch(r"[a-f0-9]{64}", material["inventory_hash"]):
+        raise AgentError("Placement disable material is invalid")
 
 
 def validate_access_material(material: dict[str, Any], desired_version: int) -> None:

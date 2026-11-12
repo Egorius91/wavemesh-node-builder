@@ -186,10 +186,12 @@ def fenced_access(operation: str):
                     raise ProvisionError("Access placement local state is behind expected version")
                 if version < highest:
                     raise ProvisionError("Access command version is stale")
-                if operation != "cleanup":
-                    effective_operation = request_value.get("operation", operation)
+                if operation == "cleanup" and binding is not None and version != highest:
+                    raise ProvisionError("Placement cleanup must own the current command")
+                if operation != "cleanup" or binding is not None:
+                    effective_operation = request_value.get("operation", "access.replace_credential" if operation == "cleanup" else operation)
                     allowed = ({"access.provision", "access.replace_credential", "access.prepare_replacement"}
-                               if operation == "access.provision" else {operation})
+                               if operation == "access.provision" else {"access.replace_credential" if operation == "cleanup" else operation})
                     if effective_operation not in allowed:
                         raise ProvisionError("Access operation mismatch")
                     enabled = request_value.get("enabled", operation == "access.provision")
@@ -218,7 +220,15 @@ def fenced_access(operation: str):
                     else:
                         atomic_json(fence_path, {"access_id": access_id, "version": version, "payload_hash": digest,
                                                 **(binding or {})})
-                return function(request_value, config, state_root)
+                result = function(request_value, config, state_root)
+                if binding is not None and operation != "cleanup":
+                    # The authenticated Agent checks these against its envelope;
+                    # an old runtime which ignored v2 cannot produce this proof.
+                    result = {**result, "schema_version": 2,
+                              **{k: binding[k] for k in ("placement_id", "generation", "entitlement_revision", "plan_hash", "command_id")},
+                              "client_exists": result.get("client_exists", True),
+                              "enabled": request_value["enabled"]}
+                return result
         return execute
     return decorate
 
@@ -271,6 +281,20 @@ def provision(request_value: dict[str, Any], config: dict[str, Any], state_root:
     quota_bytes = integer(request_value.get("quota_bytes"), 0, 9_223_372_036_854_775_807)
     state_path = state_root / f"{access_id}.{desired_version}.json"
     state = load_private_state(state_path)
+    panel = None
+    if request_value.get("schema_version") == 2:
+        # Validate retained identities/inventory before minting another identity.
+        # An explicit replacement may retire known clients; initial provision
+        # requires absence except for this same command's resumable identity.
+        states = retained_access_states(state_root, access_id, desired_version)
+        panel = PanelClient(config)
+        assert_placement_inventory(panel, access_id, states)
+        for email, previous in states.items():
+            record = get_client(panel, email)
+            if record is not None:
+                assert_matching_client(record, previous, [])
+                if request_value.get("operation", "access.provision") == "access.provision" and (state is None or email != state["panel_email"]):
+                    raise ProvisionError("Placement provision requires verified previous absence")
     if state is None:
         state = {
             "access_id": access_id,
@@ -290,7 +314,7 @@ def provision(request_value: dict[str, Any], config: dict[str, Any], state_root:
     if not domain or ".." in sub_path or len(sub_path) < 12:
         raise ProvisionError("Native subscription settings are invalid")
 
-    panel = PanelClient(config)
+    panel = panel or PanelClient(config)
     inbound_ids = visible_vless_inbound_ids(panel.call("GET", "/panel/api/inbounds/list"))
     if not inbound_ids:
         raise ProvisionError("No public VLESS inbound is available")
@@ -344,6 +368,8 @@ def update_entitlements(
     state_root: Path,
 ) -> dict[str, Any]:
     """Update expiry and limits while preserving the accepted access identity."""
+    if request_value.get("schema_version") == 2 and request_value.get("enabled") is False:
+        return disable_placement(request_value, config, state_root)
     access_id = safe_id(request_value.get("access_id"), "access_id")
     desired_version = integer(request_value.get("desired_version"), 2, 2_147_483_647)
     expires_at = parse_time(request_value.get("expires_at"))
@@ -404,6 +430,78 @@ def update_entitlements(
         "protocol": "vless",
         "subscription_url": f"https://{domain}{sub_path}{state['sub_id']}",
     }
+
+
+def retained_access_states(state_root: Path, access_id: str, version: int) -> dict[str, dict[str, Any]]:
+    states: dict[str, dict[str, Any]] = {}
+    for path in sorted(state_root.glob(f"{access_id}.*.json")):
+        state = load_private_state(path)
+        if state is None:
+            raise ProvisionError("Durable access identity disappeared")
+        v = integer(state.get("desired_version"), 1, version)
+        validate_state(state, access_id, v)
+        email = state["panel_email"]
+        if email in states and any(state[k] != states[email][k] for k in ("client_uuid", "sub_id")):
+            raise ProvisionError("Durable access identities conflict")
+        states[email] = state
+    return states
+
+
+def assert_placement_inventory(panel: PanelClient, access_id: str, states: dict[str, dict[str, Any]]) -> None:
+    value = panel.call("GET", "/panel/api/clients/list")
+    rows = value.get("obj")
+    if value.get("success") is not True or not isinstance(rows, list):
+        raise ProvisionError("Placement client inventory is incomplete")
+    seen = set()
+    for row in rows:
+        email = row.get("email") if isinstance(row, dict) else None
+        if not isinstance(email, str) or not email or email.casefold() in seen:
+            raise ProvisionError("Placement client inventory is ambiguous")
+        seen.add(email.casefold())
+        if email.casefold().startswith(f"wm_{access_id[:48]}_".casefold()) and email not in states:
+            raise ProvisionError("Untracked placement credential requires reconciliation")
+
+
+def disable_placement(request_value: dict[str, Any], config: dict[str, Any], state_root: Path) -> dict[str, Any]:
+    """Inside fenced_access: deny every retained identity, never CREATE or reset quota.
+
+    The existing fence is also the absent-state tombstone. Failed/partial reads
+    retain that fence and the original request; no whole-placement ACK is emitted.
+    """
+    access_id = safe_id(request_value.get("access_id"), "access_id")
+    version = integer(request_value.get("desired_version"), 1, 2_147_483_647)
+    states = retained_access_states(state_root, access_id, version)
+    panel = PanelClient(config)
+    assert_placement_inventory(panel, access_id, states)
+    existing = {}
+    # Validate all identities before the first mutation. Unknown or foreign
+    # material is not permission to disable someone else's client.
+    for email, state in states.items():
+        record = get_client(panel, email)
+        if record is not None:
+            assert_matching_client(record, state, [])
+            existing[email] = record
+    for email, record in existing.items():
+        client = record.get("client") if isinstance(record.get("client"), dict) else record
+        reconcile_entitlements(panel, record, states[email], [], enabled=False,
+            expires_at_ms=integer(client.get("expiryTime"), 0, 9_223_372_036_854_775_807),
+            device_limit=integer(client.get("limitIp"), 0, 10_000),
+            quota_bytes=integer(client.get("totalGB"), 0, 9_223_372_036_854_775_807))
+    assert_placement_inventory(panel, access_id, states)
+    present = False
+    proof = []
+    for email, state in sorted(states.items()):
+        record = get_client(panel, email)
+        if record is not None:
+            assert_matching_client(record, state, [])
+            client = record.get("client") if isinstance(record.get("client"), dict) else record
+            if client.get("enable") is not False:
+                raise ProvisionError("Placement disable readback failed")
+            present = True
+        proof.append([email, state["client_uuid"], state["sub_id"], record is not None])
+    return {"desired_version": version, "client_exists": present,
+            "disabled_identity_count": len(states),
+            "inventory_hash": hashlib.sha256(json.dumps(proof, sort_keys=True).encode()).hexdigest()}
 
 
 def reconcile_entitlements(panel: PanelClient, existing: dict[str, Any] | None,
@@ -614,6 +712,13 @@ def cleanup_previous(request_value: dict[str, Any], config: dict[str, Any], stat
     validate_state(current, access_id, desired_version)
 
     panel = PanelClient(config)
+    if request_value.get("schema_version") == 2:
+        states = retained_access_states(state_root, access_id, desired_version)
+        assert_placement_inventory(panel, access_id, states)
+        for email, previous in states.items():
+            existing = get_client(panel, email)
+            if existing is not None:
+                assert_matching_client(existing, previous, [])
     removed = 0
     for state_path in sorted(state_root.glob(f"{access_id}.*.json")):
         if state_path == current_path:
@@ -776,12 +881,17 @@ def parse_time(value: Any) -> datetime:
 
 def main() -> int:
     parser = argparse.ArgumentParser()
-    parser.add_argument("--request", required=True, type=Path)
+    action = parser.add_mutually_exclusive_group(required=True)
+    action.add_argument("--request", type=Path)
+    action.add_argument("--capabilities", action="store_true")
     parser.add_argument("--config", type=Path, default=Path("/etc/wavemesh-node/config.json"))
     parser.add_argument("--state-root", type=Path, default=Path("/var/lib/wavemesh-agent/access"))
     parser.add_argument("--output", type=Path)
     parser.add_argument("--cleanup-previous", action="store_true")
     args = parser.parse_args()
+    if args.capabilities:
+        print(json.dumps({"access_command_schemas": [1, 2], "placement_fence": 2, "disable_absent": True}))
+        return 0
     try:
         # Lock order: node, then access. Hold through configuration read, panel
         # read/write/readback and durable output, including replacement cleanup.
