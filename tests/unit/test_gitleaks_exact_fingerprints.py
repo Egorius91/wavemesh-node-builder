@@ -1,4 +1,4 @@
-"""Only the eight independently triaged immutable false positives are ignored."""
+"""Only the eleven independently triaged immutable false positives are ignored."""
 from pathlib import Path
 import importlib.util
 import unittest
@@ -13,16 +13,20 @@ EXPECTED = (
     '40100ebda67fe4b3778b3015fe985203016e350d:operations/xui_owner_central_schema.json:generic-api-key:227',
     '40100ebda67fe4b3778b3015fe985203016e350d:operations/xui_owner_central_schema.json:generic-api-key:248',
     '40100ebda67fe4b3778b3015fe985203016e350d:operations/xui_owner_central_schema.json:generic-api-key:250',
+    # Synthetic placement requests: each finding is the literal plan_hash='a'*64.
+    '3006b20a1b3b8806df704e6ff0788399165cc924:tests/unit/test_placement_fence.py:generic-api-key:28',
+    '5897ff95bc04d5f579d3d9e222e75125a0f45665:tests/unit/test_placement_quiescence.py:generic-api-key:54',
+    'c0de11e5362121d3d4972f083204faaeb5ce9b75:tests/unit/test_placement_legacy_binary.py:generic-api-key:36',
 )
 
 
 def exact_exceptions(text):
     if tuple(text.splitlines()) != EXPECTED:
-        raise AssertionError('GITLEAKS_ONLY_EIGHT_REVIEWED_IMMUTABLE_FINGERPRINTS')
+        raise AssertionError('GITLEAKS_ONLY_ELEVEN_REVIEWED_IMMUTABLE_FINGERPRINTS')
 
 
 class GitleaksExactFingerprints(unittest.TestCase):
-    def test_exact_eight_fingerprints_only(self):
+    def test_exact_eleven_fingerprints_only(self):
         exact_exceptions((ROOT/'.gitleaksignore').read_text())
 
     def test_broadened_extra_or_retargeted_exception_refused(self):
