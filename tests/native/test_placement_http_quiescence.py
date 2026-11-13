@@ -82,7 +82,7 @@ Restart=no
 TimeoutStopSec=5s
 ExecStart=/usr/bin/python3 -B %s --server %s %s
 ''' % (Path(__file__).resolve(),root,port)).encode()
-            fd=os.open(path,os.O_WRONLY|os.O_CREAT|os.O_EXCL,0o644)
+            fd=os.open(path,os.O_WRONLY|os.O_CREAT|os.O_EXCL,0o600)
             with os.fdopen(fd,'wb') as out: out.write(body)
             installed=True
             self.assertEqual(systemctl('daemon-reload').returncode,0)
