@@ -14,7 +14,9 @@ from pathlib import Path
 import re
 import secrets
 import stat
+import subprocess
 import tempfile
+import time
 from typing import Any
 from urllib import error, parse, request
 import uuid
@@ -105,12 +107,114 @@ def access_lock(state_root: Path, access_id: str):
         os.close(fd)
 
 
+def placement_binding(request_value: dict[str, Any]) -> dict[str, Any] | None:
+    """Bind the existing local fence to the authenticated v2 command lineage."""
+    schema = request_value.get("schema_version", 1)
+    if type(schema) is not int or schema not in {1, 2}:
+        raise ProvisionError("Access command schema is invalid")
+    if schema == 1:
+        return None
+    placement = request_value.get("placement_id")
+    if not isinstance(placement, str) or not re.fullmatch(r"(?:legacy:)?[A-Za-z0-9_-]{1,128}", placement):
+        raise ProvisionError("Access placement identity is invalid")
+    result = {"schema_version": 2, "placement_id": placement}
+    for name in ("tenant_id", "node_id", "command_id"):
+        value = request_value.get(name)
+        if not isinstance(value, str):
+            raise ProvisionError("Access placement binding is invalid")
+        result[name] = safe_id(value, name)
+    for name in ("generation", "entitlement_revision"):
+        value = request_value.get(name)
+        if type(value) is not int:
+            raise ProvisionError("Access placement revision is invalid")
+        result[name] = integer(value, 1, 2_147_483_647)
+    digest = request_value.get("plan_hash")
+    if not isinstance(digest, str) or not re.fullmatch(r"[a-f0-9]{64}", digest):
+        raise ProvisionError("Access placement plan hash is invalid")
+    result["plan_hash"] = digest
+    expected = request_value.get("expected_version")
+    desired = request_value.get("desired_version")
+    if type(expected) is not int or type(desired) is not int or not 0 <= expected < desired <= 2_147_483_647:
+        raise ProvisionError("Access placement expected version is invalid")
+    result["expected_version"] = expected
+    return result
+
+
+def quiesce_placement_panel(config: dict[str, Any]) -> None:
+    """End an uncertain local HTTP handler before reconciling its effect.
+
+    Killing the CLI alone cannot cancel a request already received by 3X-UI.
+    The fixed Builder-managed service must stop its whole process group before
+    starting a fresh invocation. Ordinary completed commands do not restart it.
+    Caller holds the Node/access locks; any failure retains the incomplete fence.
+    """
+    if os.name != "posix":
+        raise ProvisionError("Placement uncertainty requires native service reconciliation")
+    properties = ("Id", "LoadState", "ActiveState", "SubState", "MainPID", "ControlPID", "InvocationID",
+                  "KillMode", "SendSIGKILL", "NeedDaemonReload", "Job", "ControlGroup", "Type",
+                  "Triggers", "TriggeredBy", "OnFailure", "OnSuccess", "FileDescriptorStoreMax", "NFileDescriptorStore")
+
+    def run(arguments: list[str], timeout: int):
+        try:
+            result = subprocess.run(["/usr/bin/systemctl", *arguments], check=False, capture_output=True,
+                text=True, timeout=timeout, env={"PATH": "/usr/bin:/bin", "LC_ALL": "C"})
+        except (OSError, subprocess.SubprocessError) as exc:
+            raise ProvisionError("Placement service reconciliation outcome is unknown") from exc
+        if result.returncode != 0:
+            raise ProvisionError("Placement service reconciliation failed")
+        return result.stdout
+
+    def unit():
+        raw = run(["show", "x-ui.service", "--no-pager", "--property=" + ",".join(properties)], 10)
+        values = {}
+        if len(raw) > 32768:
+            raise ProvisionError("Placement service state is invalid")
+        for line in raw.splitlines():
+            key, separator, value = line.partition("=")
+            if not separator or key not in properties or key in values:
+                raise ProvisionError("Placement service state is invalid")
+            values[key] = value
+        # systemctl prints the null D-Bus Job as an empty value on this release.
+        # Both representations mean no job; every nonzero/unknown job stays closed.
+        if values.get("Job") == "":
+            values["Job"] = "0"
+        if (set(values) != set(properties) or values["Id"] != "x-ui.service" or values["LoadState"] != "loaded" or
+                values["Type"] != "simple" or values["KillMode"] != "control-group" or values["SendSIGKILL"] != "yes" or
+                values["NeedDaemonReload"] != "no" or values["Job"] != "0" or values["ControlPID"] != "0" or
+                values["FileDescriptorStoreMax"] != "0" or values["NFileDescriptorStore"] != "0" or
+                values["ActiveState"] not in {"active", "inactive", "failed"} or not values["MainPID"].isdigit() or
+                any(values[k] for k in ("Triggers", "TriggeredBy", "OnFailure", "OnSuccess")) or
+                (int(values["MainPID"]) > 0 and values["ControlGroup"] != "/system.slice/x-ui.service")):
+            raise ProvisionError("Placement service cannot prove executor quiescence")
+        return values
+
+    before = unit()
+    run(["restart", "--job-mode=fail", "x-ui.service"], 45)
+    after = unit()
+    if (after["ActiveState"] != "active" or after["SubState"] != "running" or int(after["MainPID"]) < 1 or
+            not re.fullmatch(r"[a-f0-9]{32}", after["InvocationID"]) or after["InvocationID"] == before["InvocationID"]):
+        raise ProvisionError("Placement service reconciliation was not verified")
+    panel = PanelClient(config, timeout=1)
+    deadline = time.monotonic() + 20
+    while True:
+        try:
+            ready = panel.call("GET", "/panel/api/clients/list")
+            if ready.get("success") is True and isinstance(ready.get("obj"), list):
+                return
+        except ProvisionError:
+            pass
+        if time.monotonic() >= deadline:
+            raise ProvisionError("Placement service did not become ready after reconciliation")
+        time.sleep(0.1)
+
+
 def fenced_access(operation: str):
     def decorate(function):
         @wraps(function)
         def execute(request_value, config, state_root):
             access_id = safe_id(request_value.get("access_id"), "access_id")
             version = integer(request_value.get("desired_version"), 1, 2_147_483_647)
+            binding = placement_binding(request_value)
             with access_lock(state_root, access_id):
                 fence_path = state_root / f"{access_id}.fence"
                 fence = load_private_state(fence_path)
@@ -125,16 +229,46 @@ def fenced_access(operation: str):
                         raise ProvisionError("Durable access state filename is invalid")
                     highest = max(highest, candidate)
                 if fence is not None:
+                    # A V2 fence deliberately has no legacy payload_hash. The
+                    # actual pre-placement executable requires that field and
+                    # must fail before mutation, even at a higher version.
+                    hash_key = "payload_hash" if "schema_version" not in fence else "placement_payload_hash"
                     if (fence.get("access_id") != access_id or
-                            not re.fullmatch(r"[a-f0-9]{64}", str(fence.get("payload_hash") or ""))):
+                            not re.fullmatch(r"[a-f0-9]{64}", str(fence.get(hash_key) or ""))):
                         raise ProvisionError("Access command fence is invalid")
                     highest = max(highest, integer(fence.get("version"), 1, 2_147_483_647))
+                    if "schema_version" not in fence:
+                        if set(fence) != {"access_id", "version", "payload_hash"}:
+                            raise ProvisionError("Legacy access fence shape is invalid")
+                    else:
+                        if type(fence["schema_version"]) is not int or fence["schema_version"] != 2:
+                            raise ProvisionError("Access placement fence schema is invalid")
+                        stored_binding = placement_binding({**fence, "desired_version": fence["version"]})
+                        shape = {"access_id", "version", "placement_payload_hash", *stored_binding}
+                        if set(fence) not in (shape, shape | {"execution_complete"}) or (
+                                "execution_complete" in fence and type(fence["execution_complete"]) is not bool):
+                            raise ProvisionError("Access placement fence shape is invalid")
+                    if fence.get("schema_version") == 2:
+                        if binding is None:
+                            raise ProvisionError("Legacy access writer is fenced")
+                        for name in ("tenant_id", "node_id", "placement_id"):
+                            if fence.get(name) != binding[name]:
+                                raise ProvisionError("Access placement fence identity mismatch")
+                        for name in ("generation", "entitlement_revision"):
+                            previous = fence.get(name)
+                            if type(previous) is not int or previous < 1 or binding[name] < previous:
+                                raise ProvisionError("Access placement fence revision is stale")
+                if binding is not None and binding["expected_version"] > highest:
+                    raise ProvisionError("Access placement local state is behind expected version")
                 if version < highest:
                     raise ProvisionError("Access command version is stale")
-                if operation != "cleanup":
-                    effective_operation = request_value.get("operation", operation)
+                uncertain = binding is not None and highest > 0 and (not fence or fence.get("version") != highest or fence.get("execution_complete") is not True)
+                if operation == "cleanup" and binding is not None and version != highest:
+                    raise ProvisionError("Placement cleanup must own the current command")
+                if operation != "cleanup" or binding is not None:
+                    effective_operation = request_value.get("operation", "access.replace_credential" if operation == "cleanup" else operation)
                     allowed = ({"access.provision", "access.replace_credential", "access.prepare_replacement"}
-                               if operation == "access.provision" else {operation})
+                               if operation == "access.provision" else {"access.replace_credential" if operation == "cleanup" else operation})
                     if effective_operation not in allowed:
                         raise ProvisionError("Access operation mismatch")
                     enabled = request_value.get("enabled", operation == "access.provision")
@@ -150,15 +284,38 @@ def fenced_access(operation: str):
                         "device_limit": integer(request_value.get("device_limit"), 0, 10_000),
                         "quota_bytes": integer(request_value.get("quota_bytes"), 0, 9_223_372_036_854_775_807),
                     }
+                    if binding is not None:
+                        if enabled and version > highest and binding["expected_version"] != highest:
+                            raise ProvisionError("Enabled access requires reconciled local version")
+                        canonical.update(binding)
                     if preparing:
                         canonical["replacement_id"] = safe_id(request_value.get("replacement_id"), "replacement_id")
                     digest = hashlib.sha256(json.dumps(canonical, sort_keys=True).encode()).hexdigest()
+                    hash_key = "placement_payload_hash" if binding is not None else "payload_hash"
                     if version == highest:
-                        if fence is None or fence.get("version") != version or fence["payload_hash"] != digest:
+                        if fence is None or fence.get("version") != version or fence.get(hash_key) != digest:
                             raise ProvisionError("Access command replay cannot be verified")
-                    else:
-                        atomic_json(fence_path, {"access_id": access_id, "version": version, "payload_hash": digest})
-                return function(request_value, config, state_root)
+                    if version > highest or binding is not None:
+                        atomic_json(fence_path, {"access_id": access_id, "version": version, hash_key: digest,
+                                                **(binding or {}), **({"execution_complete": False} if binding is not None else {})})
+                if uncertain:
+                    quiesce_placement_panel(config)
+                result = function(request_value, config, state_root)
+                if binding is not None:
+                    # Persist terminal local execution before publishing output.
+                    # A lost master response can replay without restarting 3X-UI.
+                    completed = load_private_state(fence_path)
+                    if completed is None:
+                        raise ProvisionError("Placement execution fence disappeared")
+                    atomic_json(fence_path, {**completed, "execution_complete": True})
+                if binding is not None and operation != "cleanup":
+                    # The authenticated Agent checks these against its envelope;
+                    # an old runtime which ignored v2 cannot produce this proof.
+                    result = {**result, "schema_version": 2,
+                              **{k: binding[k] for k in ("placement_id", "generation", "entitlement_revision", "plan_hash", "command_id")},
+                              "client_exists": result.get("client_exists", True),
+                              "enabled": request_value["enabled"]}
+                return result
         return execute
     return decorate
 
@@ -211,6 +368,20 @@ def provision(request_value: dict[str, Any], config: dict[str, Any], state_root:
     quota_bytes = integer(request_value.get("quota_bytes"), 0, 9_223_372_036_854_775_807)
     state_path = state_root / f"{access_id}.{desired_version}.json"
     state = load_private_state(state_path)
+    panel = None
+    if request_value.get("schema_version") == 2:
+        # Validate retained identities/inventory before minting another identity.
+        # An explicit replacement may retire known clients; initial provision
+        # requires absence except for this same command's resumable identity.
+        states = retained_access_states(state_root, access_id, desired_version)
+        panel = PanelClient(config)
+        assert_placement_inventory(panel, access_id, states)
+        for email, previous in states.items():
+            record = get_client(panel, email)
+            if record is not None:
+                assert_matching_client(record, previous, [])
+                if request_value.get("operation", "access.provision") == "access.provision" and (state is None or email != state["panel_email"]):
+                    raise ProvisionError("Placement provision requires verified previous absence")
     if state is None:
         state = {
             "access_id": access_id,
@@ -230,7 +401,7 @@ def provision(request_value: dict[str, Any], config: dict[str, Any], state_root:
     if not domain or ".." in sub_path or len(sub_path) < 12:
         raise ProvisionError("Native subscription settings are invalid")
 
-    panel = PanelClient(config)
+    panel = panel or PanelClient(config)
     inbound_ids = visible_vless_inbound_ids(panel.call("GET", "/panel/api/inbounds/list"))
     if not inbound_ids:
         raise ProvisionError("No public VLESS inbound is available")
@@ -284,6 +455,8 @@ def update_entitlements(
     state_root: Path,
 ) -> dict[str, Any]:
     """Update expiry and limits while preserving the accepted access identity."""
+    if request_value.get("schema_version") == 2 and request_value.get("enabled") is False:
+        return disable_placement(request_value, config, state_root)
     access_id = safe_id(request_value.get("access_id"), "access_id")
     desired_version = integer(request_value.get("desired_version"), 2, 2_147_483_647)
     expires_at = parse_time(request_value.get("expires_at"))
@@ -344,6 +517,78 @@ def update_entitlements(
         "protocol": "vless",
         "subscription_url": f"https://{domain}{sub_path}{state['sub_id']}",
     }
+
+
+def retained_access_states(state_root: Path, access_id: str, version: int) -> dict[str, dict[str, Any]]:
+    states: dict[str, dict[str, Any]] = {}
+    for path in sorted(state_root.glob(f"{access_id}.*.json")):
+        state = load_private_state(path)
+        if state is None:
+            raise ProvisionError("Durable access identity disappeared")
+        v = integer(state.get("desired_version"), 1, version)
+        validate_state(state, access_id, v)
+        email = state["panel_email"]
+        if email in states and any(state[k] != states[email][k] for k in ("client_uuid", "sub_id")):
+            raise ProvisionError("Durable access identities conflict")
+        states[email] = state
+    return states
+
+
+def assert_placement_inventory(panel: PanelClient, access_id: str, states: dict[str, dict[str, Any]]) -> None:
+    value = panel.call("GET", "/panel/api/clients/list")
+    rows = value.get("obj")
+    if value.get("success") is not True or not isinstance(rows, list):
+        raise ProvisionError("Placement client inventory is incomplete")
+    seen = set()
+    for row in rows:
+        email = row.get("email") if isinstance(row, dict) else None
+        if not isinstance(email, str) or not email or email.casefold() in seen:
+            raise ProvisionError("Placement client inventory is ambiguous")
+        seen.add(email.casefold())
+        if email.casefold().startswith(f"wm_{access_id[:48]}_".casefold()) and email not in states:
+            raise ProvisionError("Untracked placement credential requires reconciliation")
+
+
+def disable_placement(request_value: dict[str, Any], config: dict[str, Any], state_root: Path) -> dict[str, Any]:
+    """Inside fenced_access: deny every retained identity, never CREATE or reset quota.
+
+    The existing fence is also the absent-state tombstone. Failed/partial reads
+    retain that fence and the original request; no whole-placement ACK is emitted.
+    """
+    access_id = safe_id(request_value.get("access_id"), "access_id")
+    version = integer(request_value.get("desired_version"), 1, 2_147_483_647)
+    states = retained_access_states(state_root, access_id, version)
+    panel = PanelClient(config)
+    assert_placement_inventory(panel, access_id, states)
+    existing = {}
+    # Validate all identities before the first mutation. Unknown or foreign
+    # material is not permission to disable someone else's client.
+    for email, state in states.items():
+        record = get_client(panel, email)
+        if record is not None:
+            assert_matching_client(record, state, [])
+            existing[email] = record
+    for email, record in existing.items():
+        client = record.get("client") if isinstance(record.get("client"), dict) else record
+        reconcile_entitlements(panel, record, states[email], [], enabled=False,
+            expires_at_ms=integer(client.get("expiryTime"), 0, 9_223_372_036_854_775_807),
+            device_limit=integer(client.get("limitIp"), 0, 10_000),
+            quota_bytes=integer(client.get("totalGB"), 0, 9_223_372_036_854_775_807))
+    assert_placement_inventory(panel, access_id, states)
+    present = False
+    proof = []
+    for email, state in sorted(states.items()):
+        record = get_client(panel, email)
+        if record is not None:
+            assert_matching_client(record, state, [])
+            client = record.get("client") if isinstance(record.get("client"), dict) else record
+            if client.get("enable") is not False:
+                raise ProvisionError("Placement disable readback failed")
+            present = True
+        proof.append([email, state["client_uuid"], state["sub_id"], record is not None])
+    return {"desired_version": version, "client_exists": present,
+            "disabled_identity_count": len(states),
+            "inventory_hash": hashlib.sha256(json.dumps(proof, sort_keys=True).encode()).hexdigest()}
 
 
 def reconcile_entitlements(panel: PanelClient, existing: dict[str, Any] | None,
@@ -554,6 +799,13 @@ def cleanup_previous(request_value: dict[str, Any], config: dict[str, Any], stat
     validate_state(current, access_id, desired_version)
 
     panel = PanelClient(config)
+    if request_value.get("schema_version") == 2:
+        states = retained_access_states(state_root, access_id, desired_version)
+        assert_placement_inventory(panel, access_id, states)
+        for email, previous in states.items():
+            existing = get_client(panel, email)
+            if existing is not None:
+                assert_matching_client(existing, previous, [])
     removed = 0
     for state_path in sorted(state_root.glob(f"{access_id}.*.json")):
         if state_path == current_path:
@@ -716,12 +968,17 @@ def parse_time(value: Any) -> datetime:
 
 def main() -> int:
     parser = argparse.ArgumentParser()
-    parser.add_argument("--request", required=True, type=Path)
+    action = parser.add_mutually_exclusive_group(required=True)
+    action.add_argument("--request", type=Path)
+    action.add_argument("--capabilities", action="store_true")
     parser.add_argument("--config", type=Path, default=Path("/etc/wavemesh-node/config.json"))
     parser.add_argument("--state-root", type=Path, default=Path("/var/lib/wavemesh-agent/access"))
     parser.add_argument("--output", type=Path)
     parser.add_argument("--cleanup-previous", action="store_true")
     args = parser.parse_args()
+    if args.capabilities:
+        print(json.dumps({"access_command_schemas": [1, 2], "placement_fence": 3, "disable_absent": True, "unknown_effect_barrier": 1}))
+        return 0
     try:
         # Lock order: node, then access. Hold through configuration read, panel
         # read/write/readback and durable output, including replacement cleanup.

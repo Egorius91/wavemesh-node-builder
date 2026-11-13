@@ -8,6 +8,43 @@ Existing identity state files also contribute to the maximum version. A same-ver
 
 Cleanup holds the same lock and rejects stale versions. It skips older records sharing the current panel identity, as entitlement updates intentionally preserve that identity.
 
-This is one prerequisite for suspension/restoration. Disabled entitlements remain unsupported. SaaS receipt semantics, version/capability negotiation, managed expiry scanning, unreachable-node cleanup and isolated runtime acceptance remain outstanding. The fence prevents local replay from reverting a newer locally admitted command; it cannot know about a newer SaaS desired version that the Node has not received. Control-plane leasing/reconciliation must handle that distributed race.
+The placement executor also supports absolute disabled entitlements, including a tombstone without a known identity. Its all-identity inventory, material and successful result are separate required proofs. The fence prevents local replay from reverting a newer locally admitted command; it cannot know about a newer SaaS desired version that the Node has not received. Control-plane leasing/reconciliation must handle that distributed race. Source and synthetic tests do not establish live VPN or whole-system acceptance.
 
 Acceptance tests cover identical replay, payload conflict, stale provisioning/update/cleanup, failure after fence persistence, legacy-state migration, identity-preserving cleanup, concurrent processes and lock release after process death. Existing entitlement tests cover panel lost responses. This source change does not deploy or enable commands on a live Node.
+
+## Placement local fence capability 3
+
+The schema 2 wire command and per-access lock/path stay unchanged. The current
+V2 durable fence uses `placement_payload_hash`, without a legacy `payload_hash`.
+The actual pre-placement executor requires the latter field. It therefore
+refuses the guarded V2 fence before update, provision or cleanup, even with a
+larger requested version. Extra generation/revision fields alone did not provide
+that property: the old executable ignored them. Tests retain the exact old
+`dc4e66d` source and SHA-256 in `tests/fixtures/access_runtime_dc4e66d.json`, and
+exercise it in a separate process against the new file.
+
+V1 files retain their original shape. A higher V2 command may replace a legacy
+fence under the existing lock, uncertainty/quiescence and identity rules. A
+same-version legacy record cannot be given an invented replay hash. Older,
+preparation-only V2 files with the legacy-compatible hash are refused and kept
+intact for reconciliation; there is no implicit migration or deletion of that
+unknown state. Production V2 admission remains closed until the whole transition
+is qualified. No accepted production V2 state or runtime grant is assumed here.
+
+The installed runtime advertises `placement_fence: 3`; the paired Agent requires
+that exact capability and the existing unknown-effect barrier. An old Agent or
+old runtime cannot be substituted for the qualified pair. Genuine in-flight
+panel requests still require the existing POSIX lock and service quiescence
+proof. This field change does not cancel an HTTP request already accepted by
+the panel, exclude a writer using another state directory, or authorize runtime
+upgrade, bootstrap, SIGN or cleanup. Admission must bind the existing durable
+state directory and compatible artifacts before enabling V2.
+
+Legacy adoption first uses the ordinary schema2 all-identity deny, then restores
+the retained current identity at the next local version after the deny's
+material/result are accepted. Tests exercise this sequence over actual legacy
+state files with a synthetic panel: UUID/subscription and usage counters survive,
+old state bytes remain, and the pinned old executor refuses the new fence.
+The existing entitlement reconciler can independently confirm an applied update
+after a lost panel response. These are local/source proofs, not Node admission or
+a guarantee of uninterrupted service during a real migration.
