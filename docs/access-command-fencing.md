@@ -39,3 +39,12 @@ proof. This field change does not cancel an HTTP request already accepted by
 the panel, exclude a writer using another state directory, or authorize runtime
 upgrade, bootstrap, SIGN or cleanup. Admission must bind the existing durable
 state directory and compatible artifacts before enabling V2.
+
+Legacy adoption first uses the ordinary schema2 all-identity deny, then restores
+the retained current identity at the next local version after the deny's
+material/result are accepted. Tests exercise this sequence over actual legacy
+state files with a synthetic panel: UUID/subscription and usage counters survive,
+old state bytes remain, and the pinned old executor refuses the new fence.
+The existing entitlement reconciler can independently confirm an applied update
+after a lost panel response. These are local/source proofs, not Node admission or
+a guarantee of uninterrupted service during a real migration.
