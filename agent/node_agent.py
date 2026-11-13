@@ -861,7 +861,7 @@ class NodeAgent:
             if cached is not None and cached[0] == digest:
                 return cached[1]
             result = run_json_command(["/usr/bin/python3", str(path), "--capabilities"], timeout=10)
-            ready = result == {"access_command_schemas": [1, 2], "placement_fence": 2, "disable_absent": True, "unknown_effect_barrier": 1}
+            ready = result == {"access_command_schemas": [1, 2], "placement_fence": 3, "disable_absent": True, "unknown_effect_barrier": 1}
             self._placement_runtime_probe = (digest, ready)
             return ready
         except Exception:

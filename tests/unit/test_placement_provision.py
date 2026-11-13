@@ -72,7 +72,7 @@ class PlacementProvisionTests(unittest.TestCase):
                 mock.patch.object(runtime,'node_mutation_lock') as lock, \
                 mock.patch.object(runtime.Path,'read_text') as read, redirect_stdout(output):
             self.assertEqual(runtime.main(),0); lock.assert_not_called(); read.assert_not_called()
-        self.assertEqual(json.loads(output.getvalue()),{'access_command_schemas':[1,2],'placement_fence':2,'disable_absent':True,'unknown_effect_barrier':1})
+        self.assertEqual(json.loads(output.getvalue()),{'access_command_schemas':[1,2],'placement_fence':3,'disable_absent':True,'unknown_effect_barrier':1})
         self.assertEqual(list(self.root.iterdir()),[])
 
 

@@ -229,8 +229,12 @@ def fenced_access(operation: str):
                         raise ProvisionError("Durable access state filename is invalid")
                     highest = max(highest, candidate)
                 if fence is not None:
+                    # A V2 fence deliberately has no legacy payload_hash. The
+                    # actual pre-placement executable requires that field and
+                    # must fail before mutation, even at a higher version.
+                    hash_key = "payload_hash" if "schema_version" not in fence else "placement_payload_hash"
                     if (fence.get("access_id") != access_id or
-                            not re.fullmatch(r"[a-f0-9]{64}", str(fence.get("payload_hash") or ""))):
+                            not re.fullmatch(r"[a-f0-9]{64}", str(fence.get(hash_key) or ""))):
                         raise ProvisionError("Access command fence is invalid")
                     highest = max(highest, integer(fence.get("version"), 1, 2_147_483_647))
                     if "schema_version" not in fence:
@@ -240,7 +244,7 @@ def fenced_access(operation: str):
                         if type(fence["schema_version"]) is not int or fence["schema_version"] != 2:
                             raise ProvisionError("Access placement fence schema is invalid")
                         stored_binding = placement_binding({**fence, "desired_version": fence["version"]})
-                        shape = {"access_id", "version", "payload_hash", *stored_binding}
+                        shape = {"access_id", "version", "placement_payload_hash", *stored_binding}
                         if set(fence) not in (shape, shape | {"execution_complete"}) or (
                                 "execution_complete" in fence and type(fence["execution_complete"]) is not bool):
                             raise ProvisionError("Access placement fence shape is invalid")
@@ -287,11 +291,12 @@ def fenced_access(operation: str):
                     if preparing:
                         canonical["replacement_id"] = safe_id(request_value.get("replacement_id"), "replacement_id")
                     digest = hashlib.sha256(json.dumps(canonical, sort_keys=True).encode()).hexdigest()
+                    hash_key = "placement_payload_hash" if binding is not None else "payload_hash"
                     if version == highest:
-                        if fence is None or fence.get("version") != version or fence["payload_hash"] != digest:
+                        if fence is None or fence.get("version") != version or fence.get(hash_key) != digest:
                             raise ProvisionError("Access command replay cannot be verified")
                     if version > highest or binding is not None:
-                        atomic_json(fence_path, {"access_id": access_id, "version": version, "payload_hash": digest,
+                        atomic_json(fence_path, {"access_id": access_id, "version": version, hash_key: digest,
                                                 **(binding or {}), **({"execution_complete": False} if binding is not None else {})})
                 if uncertain:
                     quiesce_placement_panel(config)
@@ -972,7 +977,7 @@ def main() -> int:
     parser.add_argument("--cleanup-previous", action="store_true")
     args = parser.parse_args()
     if args.capabilities:
-        print(json.dumps({"access_command_schemas": [1, 2], "placement_fence": 2, "disable_absent": True, "unknown_effect_barrier": 1}))
+        print(json.dumps({"access_command_schemas": [1, 2], "placement_fence": 3, "disable_absent": True, "unknown_effect_barrier": 1}))
         return 0
     try:
         # Lock order: node, then access. Hold through configuration read, panel
