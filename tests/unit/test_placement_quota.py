@@ -28,7 +28,11 @@ class QuotaPanel(legacy.FakePanel):
             email = path.rsplit("/", 1)[-1]
             if email not in self.counters:
                 raise runtime.ProvisionError("Traffic history missing")
-            return {"success": True, "obj": {"email": email, **self.counters[email]}}
+            # Pinned stock v3.11.0 ClientTraffic also binds uuid/subId. Keep
+            # the fake's response faithful to that actual contract.
+            client = self.clients.get(email, {}).get("client", {})
+            return {"success": True, "obj": {"email": email, "uuid": client.get("uuid"),
+                "subId": client.get("subId"), **self.counters[email]}}
         if path.startswith("/panel/api/clients/update/"):
             email = path.rsplit("/", 1)[-1]
             client = dict(payload)
@@ -132,6 +136,21 @@ class PlacementQuotaTests(unittest.TestCase):
         self.assertFalse(material["quota_history_complete"])
         with self.assertRaisesRegex(runtime.ProvisionError, "history"):
             runtime.update_entitlements(self.update(4), self.config, self.root)
+
+    def test_traffic_response_cannot_rebind_a_counter_to_another_credential(self):
+        runtime.provision(self.first, self.config, self.root)
+        original = QuotaPanel.call
+        for version, field in enumerate(("uuid", "subId"), start=2):
+            def substituted(panel, method, path, payload=None):
+                response = original(panel, method, path, payload)
+                if path.startswith("/panel/api/clients/traffic/"):
+                    response["obj"][field] = "another-credential"
+                return response
+            with self.subTest(field=field), mock.patch.object(QuotaPanel, "call", substituted):
+                mutations = list(QuotaPanel.mutations)
+                with self.assertRaisesRegex(runtime.ProvisionError, "counter identity"):
+                    runtime.update_entitlements(self.update(version), self.config, self.root)
+                self.assertEqual(QuotaPanel.mutations, mutations)
 
     def test_topup_increases_absolute_credit_once_without_resetting_stats(self):
         first = runtime.provision(self.first, self.config, self.root); email = first["panel_email"]

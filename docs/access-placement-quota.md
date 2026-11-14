@@ -36,6 +36,14 @@ unsigned decimal strings. The identity is SHA256 of UTF-8
 `JSON.stringify([panel_email, client_uuid, sub_id])`. Counters do not export those
 underlying credentials. Enabled material must include its own identity and
 usable credit. Disabled material covers the entire retained identity count.
+The panel's traffic reply must match email, uuid and subId from the retained
+credential before its counters are hashed or recorded. A matching email alone
+does not bind a counter after another writer changed the underlying client.
+This response shape is traced to pinned stock v3.11.0
+[ClientTraffic](https://github.com/MHSanaei/3x-ui/blob/v3.11.0/internal/xray/client_traffic.go)
+and its [lookup](https://github.com/MHSanaei/3x-ui/blob/v3.11.0/internal/web/service/inbound_traffic.go).
+An incompatible/missing response remains unknown; these source links do not
+qualify an installed panel or enable admission.
 
 These are panel-observed counters, not a final traffic settlement proof.
 SaaS must independently qualify initial usage, deny/final counters and the

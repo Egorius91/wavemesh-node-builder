@@ -1049,7 +1049,8 @@ def quota_identity_hash(state: dict[str, Any]) -> str:
 def read_quota_counter(panel: PanelClient, state: dict[str, Any]) -> dict[str, str]:
     value = panel.call("GET", f"/panel/api/clients/traffic/{parse.quote(state['panel_email'], safe='')}")
     row = value.get("obj")
-    if not isinstance(row, dict) or row.get("email") != state["panel_email"]:
+    if (not isinstance(row, dict) or row.get("email") != state["panel_email"] or
+            row.get("uuid") != state["client_uuid"] or row.get("subId") != state["sub_id"]):
         raise ProvisionError("Placement traffic counter identity is invalid")
     result = {"identity_hash": quota_identity_hash(state)}
     for source, target in (("up", "up_bytes"), ("down", "down_bytes")):
