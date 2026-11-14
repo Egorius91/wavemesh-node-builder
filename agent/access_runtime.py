@@ -110,14 +110,14 @@ def access_lock(state_root: Path, access_id: str):
 def placement_binding(request_value: dict[str, Any]) -> dict[str, Any] | None:
     """Bind the existing local fence to the authenticated v2 command lineage."""
     schema = request_value.get("schema_version", 1)
-    if type(schema) is not int or schema not in {1, 2}:
+    if type(schema) is not int or schema not in {1, 2, 3}:
         raise ProvisionError("Access command schema is invalid")
     if schema == 1:
         return None
     placement = request_value.get("placement_id")
     if not isinstance(placement, str) or not re.fullmatch(r"(?:legacy:)?[A-Za-z0-9_-]{1,128}", placement):
         raise ProvisionError("Access placement identity is invalid")
-    result = {"schema_version": 2, "placement_id": placement}
+    result = {"schema_version": schema, "placement_id": placement}
     for name in ("tenant_id", "node_id", "command_id"):
         value = request_value.get(name)
         if not isinstance(value, str):
@@ -137,7 +137,104 @@ def placement_binding(request_value: dict[str, Any]) -> dict[str, Any] | None:
     if type(expected) is not int or type(desired) is not int or not 0 <= expected < desired <= 2_147_483_647:
         raise ProvisionError("Access placement expected version is invalid")
     result["expected_version"] = expected
+    if schema == 3:
+        if "traffic_budget" not in request_value:
+            raise ProvisionError("Placement traffic budget is missing")
+        result["traffic_budget"] = validate_traffic_budget(request_value["traffic_budget"])
     return result
+
+
+def quota_bytes(value: Any) -> int:
+    if not isinstance(value, str) or not re.fullmatch(r"0|[1-9][0-9]{0,18}", value) or int(value) > 9_223_372_036_854_775_807:
+        raise ProvisionError("Traffic counter is invalid")
+    return int(value)
+
+
+def validate_traffic_budget(value: Any) -> dict[str, Any] | None:
+    if value is None:
+        return None
+    fields = {"epoch_id", "baseline_receipt_id", "credit_receipt_id", "credit_revision", "counter_baseline_bytes",
+              "counter_identity_hash", "counter_source_receipt_id", "credit_bytes"}
+    if not isinstance(value, dict) or set(value) != fields:
+        raise ProvisionError("Placement traffic budget shape is invalid")
+    if not isinstance(value["epoch_id"], str) or not re.fullmatch(r"[a-f0-9]{8}-[a-f0-9]{4}-4[a-f0-9]{3}-[89ab][a-f0-9]{3}-[a-f0-9]{12}", value["epoch_id"]):
+        raise ProvisionError("Placement meter epoch is invalid")
+    for name in ("baseline_receipt_id", "credit_receipt_id"):
+        if not isinstance(value[name], str) or not re.fullmatch(r"[A-Za-z0-9_-]{1,128}", value[name]):
+            raise ProvisionError("Placement credit receipt is invalid")
+    if type(value["credit_revision"]) is not int or not 1 <= value["credit_revision"] <= 2_147_483_647:
+        raise ProvisionError("Placement credit revision is invalid")
+    base, credit = quota_bytes(value["counter_baseline_bytes"]), quota_bytes(value["credit_bytes"])
+    if credit == 0 or base + credit > 9_223_372_036_854_775_807:
+        raise ProvisionError("Placement credit is invalid")
+    identity, source = value["counter_identity_hash"], value["counter_source_receipt_id"]
+    if identity is None:
+        if base != 0 or source is not None:
+            raise ProvisionError("New placement meter must start at zero")
+    elif (not isinstance(identity, str) or not re.fullmatch(r"[a-f0-9]{64}", identity) or
+          not isinstance(source, str) or not re.fullmatch(r"[A-Za-z0-9_-]{1,128}", source)):
+        raise ProvisionError("Placement counter source is invalid")
+    return dict(value)
+
+
+def placement_quota_limit(value: dict[str, Any]) -> int:
+    cap = integer(value.get("quota_bytes"), 0, 9_223_372_036_854_775_807)
+    if value.get("schema_version") != 3:
+        return cap
+    cap = quota_bytes(value.get("quota_bytes"))
+    budget = validate_traffic_budget(value.get("traffic_budget"))
+    if budget is None:
+        if value.get("enabled") is True and cap != 0:
+            raise ProvisionError("Enabled finite access requires reserved credit")
+        return cap
+    if value.get("enabled") is True and (cap == 0 or quota_bytes(budget["credit_bytes"]) > cap):
+        raise ProvisionError("Placement credit exceeds current rights")
+    return quota_bytes(budget["counter_baseline_bytes"]) + quota_bytes(budget["credit_bytes"])
+
+
+def quota_epochs(value: Any) -> dict[str, Any]:
+    if not isinstance(value, dict):
+        raise ProvisionError("Placement quota history is invalid")
+    result = {}
+    for key, epoch in value.items():
+        if not isinstance(epoch, dict) or set(epoch) != {"budget", "identity_hash", "up_bytes", "down_bytes", "terminal"}:
+            raise ProvisionError("Placement quota epoch shape is invalid")
+        budget = validate_traffic_budget(epoch["budget"])
+        if budget is None or key != budget["epoch_id"] or type(epoch["terminal"]) is not bool:
+            raise ProvisionError("Placement quota epoch is invalid")
+        identity = epoch["identity_hash"]
+        if identity is not None and (not isinstance(identity, str) or not re.fullmatch(r"[a-f0-9]{64}", identity)):
+            raise ProvisionError("Placement meter identity is invalid")
+        up, down = quota_bytes(epoch["up_bytes"]), quota_bytes(epoch["down_bytes"])
+        if up + down > 9_223_372_036_854_775_807 or identity is None and (up or down):
+            raise ProvisionError("Placement meter counter is invalid")
+        result[key] = {**epoch, "budget": budget}
+    return result
+
+
+def advance_quota_epochs(previous: dict[str, Any], budget: dict[str, Any] | None, enabled: bool) -> dict[str, Any]:
+    epochs = quota_epochs(previous)
+    if budget is None:
+        if enabled and any(not e["terminal"] for e in epochs.values()):
+            raise ProvisionError("Unsettled quota prevents an unlimited transition")
+        return epochs
+    old = epochs.get(budget["epoch_id"])
+    if old is not None:
+        if old["terminal"] and enabled:
+            raise ProvisionError("A settled placement meter cannot reopen")
+        if budget != old["budget"]:
+            fixed = set(budget) - {"credit_receipt_id", "credit_revision", "credit_bytes"}
+            if (old["terminal"] or any(budget[k] != old["budget"][k] for k in fixed) or
+                    budget["credit_revision"] != old["budget"]["credit_revision"] + 1 or
+                    budget["credit_receipt_id"] == old["budget"]["credit_receipt_id"] or
+                    quota_bytes(budget["credit_bytes"]) <= quota_bytes(old["budget"]["credit_bytes"])):
+                raise ProvisionError("Placement credit chain is invalid")
+            epochs[budget["epoch_id"]] = {**old, "budget": budget}
+    else:
+        if enabled and any(not e["terminal"] for e in epochs.values()):
+            raise ProvisionError("Previous placement credit must be disabled first")
+        epochs[budget["epoch_id"]] = {"budget": budget, "identity_hash": None, "up_bytes": "0", "down_bytes": "0", "terminal": False}
+    return epochs
 
 
 def quiesce_placement_panel(config: dict[str, Any]) -> None:
@@ -241,16 +338,29 @@ def fenced_access(operation: str):
                         if set(fence) != {"access_id", "version", "payload_hash"}:
                             raise ProvisionError("Legacy access fence shape is invalid")
                     else:
-                        if type(fence["schema_version"]) is not int or fence["schema_version"] != 2:
+                        if type(fence["schema_version"]) is not int or fence["schema_version"] not in {2, 3}:
                             raise ProvisionError("Access placement fence schema is invalid")
                         stored_binding = placement_binding({**fence, "desired_version": fence["version"]})
                         shape = {"access_id", "version", "placement_payload_hash", *stored_binding}
+                        if fence["schema_version"] == 3:
+                            shape.update({"quota_epochs", "quota_history_complete", "quota_material", "quota_material_hash"})
+                            quota_epochs(fence.get("quota_epochs"))
+                            if type(fence.get("quota_history_complete")) is not bool:
+                                raise ProvisionError("Placement quota history proof is invalid")
+                            cached, cached_hash = fence.get("quota_material"), fence.get("quota_material_hash")
+                            if (cached is None and cached_hash is not None or cached is not None and
+                                    (not isinstance(cached, dict) or cached_hash != hashlib.sha256(json.dumps(cached, sort_keys=True).encode()).hexdigest())):
+                                raise ProvisionError("Placement quota execution receipt is invalid")
                         if set(fence) not in (shape, shape | {"execution_complete"}) or (
                                 "execution_complete" in fence and type(fence["execution_complete"]) is not bool):
                             raise ProvisionError("Access placement fence shape is invalid")
-                    if fence.get("schema_version") == 2:
+                    if fence.get("schema_version") in {2, 3}:
                         if binding is None:
                             raise ProvisionError("Legacy access writer is fenced")
+                        if fence["schema_version"] == 3 and binding["schema_version"] != 3:
+                            raise ProvisionError("Pre-budget placement writer is fenced")
+                        if fence["schema_version"] == 3 and not fence["quota_history_complete"] and request_value.get("enabled") is True:
+                            raise ProvisionError("Placement quota history requires reconciliation")
                         for name in ("tenant_id", "node_id", "placement_id"):
                             if fence.get(name) != binding[name]:
                                 raise ProvisionError("Access placement fence identity mismatch")
@@ -260,6 +370,8 @@ def fenced_access(operation: str):
                                 raise ProvisionError("Access placement fence revision is stale")
                 if binding is not None and binding["expected_version"] > highest:
                     raise ProvisionError("Access placement local state is behind expected version")
+                if binding is not None and binding["schema_version"] == 3 and request_value.get("enabled") is True and highest > 0 and fence is None:
+                    raise ProvisionError("Placement quota history is missing")
                 if version < highest:
                     raise ProvisionError("Access command version is stale")
                 uncertain = binding is not None and highest > 0 and (not fence or fence.get("version") != highest or fence.get("execution_complete") is not True)
@@ -284,6 +396,8 @@ def fenced_access(operation: str):
                         "device_limit": integer(request_value.get("device_limit"), 0, 10_000),
                         "quota_bytes": integer(request_value.get("quota_bytes"), 0, 9_223_372_036_854_775_807),
                     }
+                    if binding is not None and binding["schema_version"] == 3:
+                        placement_quota_limit(request_value)
                     if binding is not None:
                         if enabled and version > highest and binding["expected_version"] != highest:
                             raise ProvisionError("Enabled access requires reconciled local version")
@@ -295,12 +409,30 @@ def fenced_access(operation: str):
                     if version == highest:
                         if fence is None or fence.get("version") != version or fence.get(hash_key) != digest:
                             raise ProvisionError("Access command replay cannot be verified")
+                        if (binding is not None and binding["schema_version"] == 3 and operation != "cleanup" and
+                                fence.get("execution_complete") is True and fence.get("quota_material") is not None):
+                            # A durable applied receipt is not a live observation.
+                            # Lost HTTP replies replay the exact material bytes,
+                            # without re-enabling an exhausted/reset client.
+                            return fence["quota_material"]
                     if version > highest or binding is not None:
+                        epochs = {}
+                        history_complete = False
+                        if binding is not None and binding["schema_version"] == 3:
+                            epochs = advance_quota_epochs((fence or {}).get("quota_epochs", {}), binding["traffic_budget"], enabled)
+                            history_complete = fence["quota_history_complete"] if (fence or {}).get("schema_version") == 3 else fence is not None or highest == 0
                         atomic_json(fence_path, {"access_id": access_id, "version": version, hash_key: digest,
-                                                **(binding or {}), **({"execution_complete": False} if binding is not None else {})})
+                                                **(binding or {}), **({"execution_complete": False} if binding is not None else {}),
+                                                **({"quota_epochs": epochs, "quota_history_complete": history_complete,
+                                                    "quota_material": (fence or {}).get("quota_material") if version == highest else None,
+                                                    "quota_material_hash": (fence or {}).get("quota_material_hash") if version == highest else None}
+                                                   if binding is not None and binding["schema_version"] == 3 else {})})
                 if uncertain:
                     quiesce_placement_panel(config)
                 result = function(request_value, config, state_root)
+                counters = []
+                if binding is not None and binding["schema_version"] == 3 and operation != "cleanup":
+                    counters = record_quota_counters(request_value, config, state_root)
                 if binding is not None:
                     # Persist terminal local execution before publishing output.
                     # A lost master response can replay without restarting 3X-UI.
@@ -311,10 +443,15 @@ def fenced_access(operation: str):
                 if binding is not None and operation != "cleanup":
                     # The authenticated Agent checks these against its envelope;
                     # an old runtime which ignored v2 cannot produce this proof.
-                    result = {**result, "schema_version": 2,
+                    result = {**result, "schema_version": binding["schema_version"],
                               **{k: binding[k] for k in ("placement_id", "generation", "entitlement_revision", "plan_hash", "command_id")},
                               "client_exists": result.get("client_exists", True),
                               "enabled": request_value["enabled"]}
+                    if binding["schema_version"] == 3:
+                        result.update(traffic_budget=binding["traffic_budget"], traffic_counters=counters,
+                                      quota_history_complete=completed["quota_history_complete"])
+                        atomic_json(fence_path, {**completed, "execution_complete": True, "quota_material": result,
+                            "quota_material_hash": hashlib.sha256(json.dumps(result, sort_keys=True).encode()).hexdigest()})
                 return result
         return execute
     return decorate
@@ -365,11 +502,11 @@ def provision(request_value: dict[str, Any], config: dict[str, Any], state_root:
     enabled = request_value.get("enabled", True)
     expires_at = parse_time(request_value.get("expires_at"))
     device_limit = integer(request_value.get("device_limit"), 0, 10_000)
-    quota_bytes = integer(request_value.get("quota_bytes"), 0, 9_223_372_036_854_775_807)
+    quota_bytes = placement_quota_limit(request_value)
     state_path = state_root / f"{access_id}.{desired_version}.json"
     state = load_private_state(state_path)
     panel = None
-    if request_value.get("schema_version") == 2:
+    if request_value.get("schema_version") in {2, 3}:
         # Validate retained identities/inventory before minting another identity.
         # An explicit replacement may retire known clients; initial provision
         # requires absence except for this same command's resumable identity.
@@ -382,6 +519,10 @@ def provision(request_value: dict[str, Any], config: dict[str, Any], state_root:
                 assert_matching_client(record, previous, [])
                 if request_value.get("operation", "access.provision") == "access.provision" and (state is None or email != state["panel_email"]):
                     raise ProvisionError("Placement provision requires verified previous absence")
+                if request_value.get("schema_version") == 3 and (state is None or email != state["panel_email"]):
+                    client = record.get("client") if isinstance(record.get("client"), dict) else record
+                    if client.get("enable") is not False:
+                        raise ProvisionError("Quota replacement requires previous identities disabled")
     if state is None:
         state = {
             "access_id": access_id,
@@ -407,6 +548,8 @@ def provision(request_value: dict[str, Any], config: dict[str, Any], state_root:
         raise ProvisionError("No public VLESS inbound is available")
     email = str(state["panel_email"])
     existing = get_client(panel, email)
+    if request_value.get("schema_version") == 3:
+        prepare_quota_identity(request_value, state, existing, panel, state_root)
     if existing is None:
         panel.call(
             "POST",
@@ -421,6 +564,7 @@ def provision(request_value: dict[str, Any], config: dict[str, Any], state_root:
                     "tgId": 0,
                     "subId": state["sub_id"],
                     "reset": 0,
+                    **({"resetDay": 0, "resetWeekday": 0} if request_value.get("schema_version") == 3 else {}),
                     "id": state["client_uuid"],
                     "flow": "",
                 },
@@ -455,13 +599,13 @@ def update_entitlements(
     state_root: Path,
 ) -> dict[str, Any]:
     """Update expiry and limits while preserving the accepted access identity."""
-    if request_value.get("schema_version") == 2 and request_value.get("enabled") is False:
+    if request_value.get("schema_version") in {2, 3} and request_value.get("enabled") is False:
         return disable_placement(request_value, config, state_root)
     access_id = safe_id(request_value.get("access_id"), "access_id")
     desired_version = integer(request_value.get("desired_version"), 2, 2_147_483_647)
     expires_at = parse_time(request_value.get("expires_at"))
     device_limit = integer(request_value.get("device_limit"), 0, 10_000)
-    quota_bytes = integer(request_value.get("quota_bytes"), 0, 9_223_372_036_854_775_807)
+    quota_bytes = placement_quota_limit(request_value)
     expires_at_ms = int(expires_at.timestamp() * 1000)
     enabled = request_value.get("enabled")
     if type(enabled) is not bool:
@@ -496,6 +640,9 @@ def update_entitlements(
     email = str(state["panel_email"])
     existing = get_client(panel, email)
     assert_matching_client(existing, state, inbound_ids)
+
+    if request_value.get("schema_version") == 3:
+        prepare_quota_identity(request_value, state, existing, panel, state_root)
 
     reconcile_entitlements(panel, existing, state, inbound_ids, enabled=enabled,
                            expires_at_ms=expires_at_ms, device_limit=device_limit, quota_bytes=quota_bytes)
@@ -798,8 +945,14 @@ def cleanup_previous(request_value: dict[str, Any], config: dict[str, Any], stat
         raise ProvisionError("Replacement durable state is missing")
     validate_state(current, access_id, desired_version)
 
+    if request_value.get("schema_version") == 3:
+        # Retain disabled clients/counters until their accounting evidence has
+        # a separately qualified cleanup contract. Ordinary v2 cleanup cannot
+        # delete a meter which still backs a retained reservation/settlement.
+        return 0
+
     panel = PanelClient(config)
-    if request_value.get("schema_version") == 2:
+    if request_value.get("schema_version") in {2, 3}:
         states = retained_access_states(state_root, access_id, desired_version)
         assert_placement_inventory(panel, access_id, states)
         for email, previous in states.items():
@@ -865,6 +1018,133 @@ def get_client(panel: PanelClient, email: str) -> dict[str, Any] | None:
     if value.get("success") is not True or not isinstance(obj, dict):
         raise ProvisionError("Client readback is invalid")
     return obj
+
+
+def quota_identity_hash(state: dict[str, Any]) -> str:
+    # Same byte representation as JSON.stringify([email, uuid, subId]) in SaaS.
+    return hashlib.sha256(json.dumps([state["panel_email"], state["client_uuid"], state["sub_id"]],
+                                    separators=(",", ":"), ensure_ascii=False).encode()).hexdigest()
+
+
+def read_quota_counter(panel: PanelClient, state: dict[str, Any]) -> dict[str, str]:
+    value = panel.call("GET", f"/panel/api/clients/traffic/{parse.quote(state['panel_email'], safe='')}")
+    row = value.get("obj")
+    if not isinstance(row, dict) or row.get("email") != state["panel_email"]:
+        raise ProvisionError("Placement traffic counter identity is invalid")
+    result = {"identity_hash": quota_identity_hash(state)}
+    for source, target in (("up", "up_bytes"), ("down", "down_bytes")):
+        raw = row.get(source)
+        if type(raw) is int:
+            raw = str(raw)
+        result[target] = str(quota_bytes(raw))
+    if int(result["up_bytes"]) + int(result["down_bytes"]) > 9_223_372_036_854_775_807:
+        raise ProvisionError("Placement traffic counter overflows")
+    return result
+
+
+def assert_quota_counter_progress(epoch: dict[str, Any], counter: dict[str, str]) -> None:
+    if (epoch["identity_hash"] not in (None, counter["identity_hash"]) or
+            quota_bytes(counter["up_bytes"]) < quota_bytes(epoch["up_bytes"]) or
+            quota_bytes(counter["down_bytes"]) < quota_bytes(epoch["down_bytes"])):
+        raise ProvisionError("Placement traffic counter regressed or changed identity")
+
+
+def assert_no_quota_reset(record: dict[str, Any]) -> None:
+    client = record.get("client") if isinstance(record.get("client"), dict) else record
+    for name in ("reset", "resetDay", "resetWeekday"):
+        if type(client.get(name, 0)) is not int or client.get(name, 0) != 0:
+            raise ProvisionError("Automatic traffic reset is incompatible with reserved credit")
+
+
+def prepare_quota_identity(value: dict[str, Any], state: dict[str, Any], record: dict[str, Any] | None,
+                           panel: PanelClient, state_root: Path) -> None:
+    budget = validate_traffic_budget(value.get("traffic_budget"))
+    if budget is None:
+        return
+    states = retained_access_states(state_root, value["access_id"], value["desired_version"])
+    assert_placement_inventory(panel, value["access_id"], states)
+    for email, previous in states.items():
+        if email == state["panel_email"]:
+            continue
+        other = get_client(panel, email)
+        if other is not None:
+            assert_matching_client(other, previous, [])
+            client = other.get("client") if isinstance(other.get("client"), dict) else other
+            if client.get("enable") is not False:
+                raise ProvisionError("Other placement identities must be disabled before applying credit")
+    path = state_root / f"{value['access_id']}.fence"
+    fence = load_private_state(path)
+    if fence is None or fence.get("traffic_budget") != budget:
+        raise ProvisionError("Placement quota execution fence disappeared")
+    epochs = quota_epochs(fence.get("quota_epochs"))
+    epoch = epochs[budget["epoch_id"]]
+    identity = quota_identity_hash(state)
+    if (budget["counter_identity_hash"] not in (None, identity) or epoch["identity_hash"] not in (None, identity) or
+            record is not None and budget["counter_identity_hash"] is None and epoch["identity_hash"] is None):
+        raise ProvisionError("Placement credit is bound to another counter")
+    if record is None:
+        if epoch["identity_hash"] is not None or budget["counter_identity_hash"] is not None:
+            raise ProvisionError("Placement quota identity disappeared; recreation would reset credit")
+        counter = {"identity_hash": identity, "up_bytes": "0", "down_bytes": "0"}
+    else:
+        assert_matching_client(record, state, [])
+        assert_no_quota_reset(record)
+        counter = read_quota_counter(panel, state)
+    assert_quota_counter_progress(epoch, counter)
+    consumed = quota_bytes(counter["up_bytes"]) + quota_bytes(counter["down_bytes"])
+    if consumed < quota_bytes(budget["counter_baseline_bytes"]):
+        raise ProvisionError("Placement counter is behind the reserved baseline")
+    epochs[budget["epoch_id"]] = {**epoch, **counter}
+    atomic_json(path, {**fence, "quota_epochs": epochs})
+    if consumed >= placement_quota_limit(value):
+        # Do not turn a quota-disabled client on again on a retry/renewal.
+        # The deny/counter path can still report the actual overrun for debt.
+        raise ProvisionError("Placement credit is exhausted")
+
+
+def record_quota_counters(value: dict[str, Any], config: dict[str, Any], state_root: Path) -> list[dict[str, str]]:
+    """Report panel-observed counters, never assert a final settlement proof.
+
+    A successful deny retains these observations and the local epoch. SaaS
+    still owns qualification/settlement before unused credit can be reissued.
+    Missing counters or rollback are UNKNOWN, never zero or another allowance.
+    """
+    path = state_root / f"{value['access_id']}.fence"
+    fence = load_private_state(path)
+    if fence is None or fence.get("schema_version") != 3:
+        raise ProvisionError("Placement quota execution fence disappeared")
+    epochs = quota_epochs(fence.get("quota_epochs"))
+    states = retained_access_states(state_root, value["access_id"], value["desired_version"])
+    panel = PanelClient(config)
+    counters = {}
+    for state in states.values():
+        record = get_client(panel, state["panel_email"])
+        if record is not None:
+            assert_matching_client(record, state, [])
+            assert_no_quota_reset(record)
+            client = record.get("client") if isinstance(record.get("client"), dict) else record
+            if value["enabled"] is False and client.get("enable") is not False:
+                raise ProvisionError("Placement quota deny readback failed")
+        counter = read_quota_counter(panel, state)
+        if counter["identity_hash"] in counters:
+            raise ProvisionError("Duplicate placement traffic identity")
+        counters[counter["identity_hash"]] = counter
+    for key, epoch in epochs.items():
+        if epoch["identity_hash"] is None:
+            # No bound identity is not a claim that an unknown HTTP effect had
+            # zero consumption. Such an epoch remains reserved in SaaS.
+            continue
+        counter = counters.get(epoch["identity_hash"])
+        if counter is None:
+            raise ProvisionError("Retained placement traffic identity disappeared")
+        assert_quota_counter_progress(epoch, counter)
+        epochs[key] = {**epoch, **counter, "terminal": epoch["terminal"] or value["enabled"] is False}
+    atomic_json(path, {**fence, "quota_epochs": epochs})
+    if value["enabled"] is True and value.get("traffic_budget") is not None:
+        epoch = epochs[value["traffic_budget"]["epoch_id"]]
+        if quota_bytes(epoch["up_bytes"]) + quota_bytes(epoch["down_bytes"]) >= placement_quota_limit(value):
+            raise ProvisionError("Placement credit is exhausted")
+    return [counters[key] for key in sorted(counters)]
 
 
 def assert_matching_client(record: dict[str, Any] | None, state: dict[str, Any], inbound_ids: list[int]) -> None:
@@ -977,7 +1257,8 @@ def main() -> int:
     parser.add_argument("--cleanup-previous", action="store_true")
     args = parser.parse_args()
     if args.capabilities:
-        print(json.dumps({"access_command_schemas": [1, 2], "placement_fence": 3, "disable_absent": True, "unknown_effect_barrier": 1}))
+        print(json.dumps({"access_command_schemas": [1, 2, 3], "placement_fence": 4, "disable_absent": True,
+                          "unknown_effect_barrier": 1, "traffic_budget": 1, "counter_observations": 1}))
         return 0
     try:
         # Lock order: node, then access. Hold through configuration read, panel

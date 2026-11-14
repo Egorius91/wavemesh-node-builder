@@ -1,0 +1,7 @@
+{
+  "repository": "Egorius91/wavemesh-node-builder",
+  "commit": "6228bb78fbb9e2fb71b1b92eb7edb6c2fc9f7f6d",
+  "path": "agent/access_runtime.py",
+  "sha256": "f1d5da59301927373b55abe612de48aae355a51092d11f6ea0d2f6c13546581c",
+  "purpose": "Pinned pre-budget schema2 executable for actual downgrade/first-dispatch rejection proof"
+}
