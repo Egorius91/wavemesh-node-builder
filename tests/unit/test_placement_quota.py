@@ -124,6 +124,15 @@ class PlacementQuotaTests(unittest.TestCase):
         self.assertEqual(QuotaPanel.mutations, mutations)
         self.assertFalse(QuotaPanel.clients[first["panel_email"]]["client"]["enable"])
 
+    def test_deny_cannot_fabricate_complete_history_for_an_unknown_credit_epoch(self):
+        self.precredit_observation()
+        # A higher deny may stop credentials, but merely receiving an epoch ID
+        # cannot prove its earlier execution/history survived on this Node.
+        material = runtime.update_entitlements(self.update(3, enabled=False), self.config, self.root)
+        self.assertFalse(material["quota_history_complete"])
+        with self.assertRaisesRegex(runtime.ProvisionError, "history"):
+            runtime.update_entitlements(self.update(4), self.config, self.root)
+
     def test_topup_increases_absolute_credit_once_without_resetting_stats(self):
         first = runtime.provision(self.first, self.config, self.root); email = first["panel_email"]
         QuotaPanel.counters[email] = {"up": 30, "down": 20}

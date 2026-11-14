@@ -435,8 +435,11 @@ def fenced_access(operation: str):
                         epochs = {}
                         history_complete = False
                         if binding is not None and binding["schema_version"] == 3:
-                            epochs = advance_quota_epochs((fence or {}).get("quota_epochs", {}), binding["traffic_budget"], enabled)
+                            previous_epochs = (fence or {}).get("quota_epochs", {})
+                            epochs = advance_quota_epochs(previous_epochs, binding["traffic_budget"], enabled)
                             history_complete = fence["quota_history_complete"] if (fence or {}).get("schema_version") == 3 else fence is not None or highest == 0
+                            if not enabled and binding["traffic_budget"] is not None and binding["traffic_budget"]["epoch_id"] not in previous_epochs:
+                                history_complete = False
                         atomic_json(fence_path, {"access_id": access_id, "version": version, hash_key: digest,
                                                 **(binding or {}), **({"execution_complete": False} if binding is not None else {}),
                                                 **({"quota_epochs": epochs, "quota_counters": (fence or {}).get("quota_counters", []),

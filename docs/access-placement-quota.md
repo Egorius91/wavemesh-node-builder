@@ -53,6 +53,9 @@ counter high-water marks before any credit epoch exists. A higher command
 cannot forget an orphan, accept a lower counter or recreate a missing known
 identity. Enabled work checks these observations before panel mutation; a deny
 still needs complete retained counters before it can report accounting proof.
+A deny referring to a previously unknown credit epoch still disables identities
+but permanently marks its local history incomplete. Receiving the reservation
+ID cannot establish that its earlier effects or counter history survived.
 New credit revisions strictly increase the same absolute allowance; a new
 epoch cannot enable while an earlier local epoch is still open. Rotation also
 requires all previous identities disabled before the new identity can apply
