@@ -212,6 +212,21 @@ def quota_epochs(value: Any) -> dict[str, Any]:
     return result
 
 
+def quota_counters(value: Any) -> dict[str, dict[str, str]]:
+    """Retain every observed identity, including before its first credit."""
+    if not isinstance(value, list) or len(value) > 1_000_000:
+        raise ProvisionError("Placement counter history is invalid")
+    result = {}
+    for counter in value:
+        if (not isinstance(counter, dict) or set(counter) != {"identity_hash", "up_bytes", "down_bytes"} or
+                not isinstance(counter["identity_hash"], str) or not re.fullmatch(r"[a-f0-9]{64}", counter["identity_hash"]) or
+                counter["identity_hash"] in result or
+                quota_bytes(counter["up_bytes"]) + quota_bytes(counter["down_bytes"]) > 9_223_372_036_854_775_807):
+            raise ProvisionError("Placement counter history is invalid")
+        result[counter["identity_hash"]] = dict(counter)
+    return result
+
+
 def advance_quota_epochs(previous: dict[str, Any], budget: dict[str, Any] | None, enabled: bool) -> dict[str, Any]:
     epochs = quota_epochs(previous)
     if budget is None:
@@ -343,8 +358,9 @@ def fenced_access(operation: str):
                         stored_binding = placement_binding({**fence, "desired_version": fence["version"]})
                         shape = {"access_id", "version", "placement_payload_hash", *stored_binding}
                         if fence["schema_version"] == 3:
-                            shape.update({"quota_epochs", "quota_history_complete", "quota_material", "quota_material_hash"})
+                            shape.update({"quota_epochs", "quota_counters", "quota_history_complete", "quota_material", "quota_material_hash"})
                             quota_epochs(fence.get("quota_epochs"))
+                            quota_counters(fence.get("quota_counters"))
                             if type(fence.get("quota_history_complete")) is not bool:
                                 raise ProvisionError("Placement quota history proof is invalid")
                             cached, cached_hash = fence.get("quota_material"), fence.get("quota_material_hash")
@@ -423,7 +439,8 @@ def fenced_access(operation: str):
                             history_complete = fence["quota_history_complete"] if (fence or {}).get("schema_version") == 3 else fence is not None or highest == 0
                         atomic_json(fence_path, {"access_id": access_id, "version": version, hash_key: digest,
                                                 **(binding or {}), **({"execution_complete": False} if binding is not None else {}),
-                                                **({"quota_epochs": epochs, "quota_history_complete": history_complete,
+                                                **({"quota_epochs": epochs, "quota_counters": (fence or {}).get("quota_counters", []),
+                                                    "quota_history_complete": history_complete,
                                                     "quota_material": (fence or {}).get("quota_material") if version == highest else None,
                                                     "quota_material_hash": (fence or {}).get("quota_material_hash") if version == highest else None}
                                                    if binding is not None and binding["schema_version"] == 3 else {})})
@@ -1090,6 +1107,11 @@ def prepare_quota_identity(value: dict[str, Any], state: dict[str, Any], record:
         assert_matching_client(record, state, [])
         assert_no_quota_reset(record)
         counter = read_quota_counter(panel, state)
+    prior = quota_counters(fence.get("quota_counters")).get(identity)
+    if prior is not None:
+        if record is None:
+            raise ProvisionError("Retained placement traffic identity disappeared")
+        assert_quota_counter_progress(prior, counter)
     assert_quota_counter_progress(epoch, counter)
     consumed = quota_bytes(counter["up_bytes"]) + quota_bytes(counter["down_bytes"])
     if consumed < quota_bytes(budget["counter_baseline_bytes"]):
@@ -1114,6 +1136,7 @@ def record_quota_counters(value: dict[str, Any], config: dict[str, Any], state_r
     if fence is None or fence.get("schema_version") != 3:
         raise ProvisionError("Placement quota execution fence disappeared")
     epochs = quota_epochs(fence.get("quota_epochs"))
+    previous = quota_counters(fence.get("quota_counters"))
     states = retained_access_states(state_root, value["access_id"], value["desired_version"])
     panel = PanelClient(config)
     counters = {}
@@ -1129,6 +1152,11 @@ def record_quota_counters(value: dict[str, Any], config: dict[str, Any], state_r
         if counter["identity_hash"] in counters:
             raise ProvisionError("Duplicate placement traffic identity")
         counters[counter["identity_hash"]] = counter
+    for identity, prior in previous.items():
+        counter = counters.get(identity)
+        if counter is None:
+            raise ProvisionError("Retained placement traffic identity disappeared")
+        assert_quota_counter_progress(prior, counter)
     for key, epoch in epochs.items():
         if epoch["identity_hash"] is None:
             # No bound identity is not a claim that an unknown HTTP effect had
@@ -1139,7 +1167,7 @@ def record_quota_counters(value: dict[str, Any], config: dict[str, Any], state_r
             raise ProvisionError("Retained placement traffic identity disappeared")
         assert_quota_counter_progress(epoch, counter)
         epochs[key] = {**epoch, **counter, "terminal": epoch["terminal"] or value["enabled"] is False}
-    atomic_json(path, {**fence, "quota_epochs": epochs})
+    atomic_json(path, {**fence, "quota_epochs": epochs, "quota_counters": [counters[key] for key in sorted(counters)]})
     if value["enabled"] is True and value.get("traffic_budget") is not None:
         epoch = epochs[value["traffic_budget"]["epoch_id"]]
         if quota_bytes(epoch["up_bytes"]) + quota_bytes(epoch["down_bytes"]) >= placement_quota_limit(value):

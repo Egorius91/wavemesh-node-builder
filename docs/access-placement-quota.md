@@ -48,6 +48,11 @@ The existing atomic per-access fence owns schema3 budget history; no second
 meter file or new runtime service is introduced. `quota_epochs` retains every
 credit, bound identity and observed up/down high-water marks. Its `terminal`
 flag means the local deny was observed, not that SaaS settled the reservation.
+The same fence's `quota_counters` retains every observed identity and both
+counter high-water marks before any credit epoch exists. A higher command
+cannot forget an orphan, accept a lower counter or recreate a missing known
+identity. Enabled work checks these observations before panel mutation; a deny
+still needs complete retained counters before it can report accounting proof.
 New credit revisions strictly increase the same absolute allowance; a new
 epoch cannot enable while an earlier local epoch is still open. Rotation also
 requires all previous identities disabled before the new identity can apply

@@ -89,6 +89,41 @@ class PlacementQuotaTests(unittest.TestCase):
         self.assertEqual(QuotaPanel.clients[email]["client"]["totalGB"], 200)
         self.assertEqual(set(second["traffic_counters"][0]), {"identity_hash", "up_bytes", "down_bytes"})
 
+    def precredit_observation(self):
+        legacy_request = {k: v for k, v in self.first.items() if k != "traffic_budget"}
+        legacy_request["schema_version"] = 2
+        first = runtime.provision(legacy_request, self.config, self.root)
+        QuotaPanel.counters[first["panel_email"]] = {"up": 40, "down": 10}
+        material = runtime.update_entitlements(self.update(2, enabled=False, traffic_budget=None), self.config, self.root)
+        self.assertEqual(material["traffic_counters"][0]["up_bytes"], "40")
+        self.assertEqual(self.fence()["quota_epochs"], {})
+        return first
+
+    def test_precredit_counter_regression_cannot_establish_another_baseline(self):
+        first = self.precredit_observation()
+        QuotaPanel.counters[first["panel_email"]] = {"up": 39, "down": 10}
+        with self.assertRaisesRegex(runtime.ProvisionError, "counter regressed"):
+            runtime.update_entitlements(self.update(3, enabled=False, traffic_budget=None), self.config, self.root)
+
+    def test_precredit_identity_loss_preserves_counter_debt_even_when_clients_are_absent(self):
+        self.precredit_observation()
+        for path in self.root.glob("access_12345678.*.json"):
+            path.unlink()
+        QuotaPanel.clients.clear()
+        with self.assertRaisesRegex(runtime.ProvisionError, "traffic identity disappeared"):
+            runtime.update_entitlements(self.update(3, enabled=False, traffic_budget=None), self.config, self.root)
+
+    def test_precredit_highwater_is_checked_before_any_enabled_panel_mutation(self):
+        first = self.precredit_observation()
+        QuotaPanel.counters[first["panel_email"]] = {"up": 39, "down": 11}
+        allocated = {**budget(), "counter_baseline_bytes": "50", "counter_identity_hash": runtime.quota_identity_hash(first),
+                     "counter_source_receipt_id": "initial-deny"}
+        mutations = list(QuotaPanel.mutations)
+        with self.assertRaisesRegex(runtime.ProvisionError, "counter regressed"):
+            runtime.update_entitlements(self.update(3, traffic_budget=allocated), self.config, self.root)
+        self.assertEqual(QuotaPanel.mutations, mutations)
+        self.assertFalse(QuotaPanel.clients[first["panel_email"]]["client"]["enable"])
+
     def test_topup_increases_absolute_credit_once_without_resetting_stats(self):
         first = runtime.provision(self.first, self.config, self.root); email = first["panel_email"]
         QuotaPanel.counters[email] = {"up": 30, "down": 20}
