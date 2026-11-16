@@ -82,4 +82,31 @@ assert json.load(open(sys.argv[1],encoding="utf-8"))["status"] == "committed"
 PY
 
 trap 'rm -rf "$tmp"' EXIT
+# A lost prepared Xray response can still have a writer in flight. Even an
+# apparently usable old snapshot cannot authorize a second mutation/restore.
+wm_transaction_begin "unit-prepared-validation"
+transaction="$WM_ACTIVE_TRANSACTION"
+printf '{"status":"NO_CONFIG_MUTATION_DISPATCHED"}\n' > "$transaction/prepared.no-effect.json"
+printf '{"schema_version":98}\n' > "$WM_CONFIG_JSON"
+wm_transaction_rollback "$transaction" "unsupported engine before dispatch"
+grep -q '"schema_version":98' "$WM_CONFIG_JSON"
+python3 - "$transaction/result.json" <<'PY'
+import json,sys
+assert json.load(open(sys.argv[1],encoding='utf-8'))['status']=='rolled_back'
+PY
+wm_transaction_begin "unit-prepared-unknown"
+transaction="$WM_ACTIVE_TRANSACTION"
+printf '{"status":"UNKNOWN_UNTIL_HTTP_SUCCESS"}\n' > "$transaction/prepared.apply.pending.json"
+printf '{"schema_version":99}\n' > "$WM_CONFIG_JSON"
+if wm_transaction_rollback "$transaction" "lost prepared reply"; then exit 71; fi
+grep -q '"schema_version":99' "$WM_CONFIG_JSON"
+python3 - "$transaction/result.json" <<'PY'
+import json,sys
+assert json.load(open(sys.argv[1],encoding='utf-8'))['status']=='rollback_failed'
+PY
+[[ -f "$transaction/prepared.apply.pending.json" ]]
+if python3 "$WM_TRANSACTION_TOOL" check --root "$WM_TRANSACTION_ROOT"; then exit 72; fi
+python3 "$WM_TRANSACTION_TOOL" prune --root "$WM_TRANSACTION_ROOT" --keep 0
+[[ -f "$transaction/prepared.apply.pending.json" ]]
+trap 'rm -rf "$tmp"' EXIT
 echo "transaction shell tests: OK"

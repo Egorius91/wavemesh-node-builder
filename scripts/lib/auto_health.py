@@ -3,7 +3,12 @@
 
 import argparse
 import json
+import sys
+import time
 from pathlib import Path
+
+sys.path.insert(0, str(Path(__file__).resolve().parent))
+import prepared_channels
 
 
 def load(path, default=None):
@@ -27,7 +32,7 @@ def parse_inbounds(response):
     return values if isinstance(values, list) else []
 
 
-def evaluate(config, runtime, inbounds_response, template, overrides=None):
+def evaluate(config, runtime, inbounds_response, template, overrides=None, now=None):
     overrides = overrides or {}
     inbounds = parse_inbounds(inbounds_response)
     by_tag = {item.get("tag") or item.get("remark"): item for item in inbounds}
@@ -44,6 +49,22 @@ def evaluate(config, runtime, inbounds_response, template, overrides=None):
     rows = []
     for route in config.get("routes", []):
         if route.get("kind") != "auto":
+            continue
+        if route.get("prepared_plan"):
+            plan = route["prepared_plan"]
+            state = runtime.get("prepared_routes", {}).get(route["id"], {})
+            timestamp = int(time.time()) if now is None else now
+            try:
+                expected, binding = prepared_channels.compile_template(config, route["id"], plan, template, state, timestamp)
+                matches = expected == template
+                inbound = by_tag.get(route.get("entry", {}).get("inbound_tag"))
+                structural = matches and inbound is not None and inbound.get("enable", True) is True
+                fresh = state.get("binding") == binding and type(state.get("sample_at")) is int and 0 <= timestamp-state["sample_at"] <= plan["health"]["max_age_seconds"]
+                healthy_exits = {p["exit_id"] for p in plan["paths"] if fresh and state.get("paths", {}).get(p["id"], {}).get("status") == "healthy" and state["paths"][p["id"]].get("consecutive_successes", 0) > 0}
+                status = "misconfigured" if not structural else ("healthy" if len(healthy_exits) == len(plan["exits"]) else "degraded") if fresh and state.get("selected") else "blocked"
+            except (KeyError, TypeError, ValueError):
+                status, binding, healthy_exits = "misconfigured", None, set()
+            rows.append({"id": route["id"], "display_name": route.get("display_name"), "status": status, "enabled": route.get("enabled", True), "published": route.get("presentation", {}).get("published", False), "strategy": "prepared", "selectors": [], "override_exit_id": None, "healthy_exits": len(healthy_exits), "total_exits": len(plan.get("exits", [])), "route_binding": binding, "evidence_scope": "local-entry-path-only"})
             continue
         balancer = configured_balancers.get(route.get("balancer_id"), {})
         enabled = bool(route.get("enabled", True) and balancer.get("enabled", True))

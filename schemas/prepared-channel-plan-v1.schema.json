@@ -1,0 +1,65 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://wavemesh.local/schemas/prepared-channel-plan-v1.schema.json",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["schema_version", "node_id", "route_id", "channel", "exits", "paths", "health"],
+  "properties": {
+    "schema_version": {"const": 1},
+    "node_id": {"$ref": "#/$defs/id"},
+    "route_id": {"$ref": "#/$defs/id"},
+    "channel": {"$ref": "#/$defs/channel"},
+    "exits": {
+      "type": "array", "minItems": 2, "maxItems": 2,
+      "items": {
+        "type": "object", "additionalProperties": false,
+        "required": ["id", "provider", "failure_domain", "manifest_checksum", "channel"],
+        "properties": {
+          "id": {"$ref": "#/$defs/id"},
+          "provider": {"enum": ["upcloud", "infomaniak"]},
+          "failure_domain": {"$ref": "#/$defs/id"},
+          "manifest_checksum": {"$ref": "#/$defs/hash"},
+          "channel": {"$ref": "#/$defs/channel"}
+        }
+      }
+    },
+    "paths": {
+      "type": "array", "minItems": 2, "maxItems": 4,
+      "items": {
+        "type": "object", "additionalProperties": false,
+        "required": ["id", "exit_id", "address_family", "address"],
+        "properties": {
+          "id": {"$ref": "#/$defs/id"}, "exit_id": {"$ref": "#/$defs/id"},
+          "address_family": {"enum": [4, 6]}, "address": {"type": "string", "minLength": 2}
+        }
+      }
+    },
+    "health": {
+      "type": "object", "additionalProperties": false,
+      "required": ["failure_samples", "recovery_samples", "sample_interval_seconds", "max_age_seconds", "cooldown_seconds"],
+      "properties": {
+        "failure_samples": {"type": "integer", "minimum": 1, "maximum": 86400},
+        "recovery_samples": {"type": "integer", "minimum": 1, "maximum": 86400},
+        "sample_interval_seconds": {"type": "integer", "minimum": 1, "maximum": 86400},
+        "max_age_seconds": {"type": "integer", "minimum": 1, "maximum": 86400},
+        "cooldown_seconds": {"type": "integer", "minimum": 0, "maximum": 86400}
+      }
+    }
+  },
+  "$defs": {
+    "id": {"type": "string", "pattern": "^[a-z0-9][a-z0-9-]{1,47}$"},
+    "hash": {"type": "string", "pattern": "^[a-f0-9]{64}$"},
+    "channel": {
+      "type": "object", "additionalProperties": false,
+      "required": ["schema_version", "protocol", "transport", "security", "engine"],
+      "properties": {
+        "schema_version": {"const": 1}, "protocol": {"const": "vless"}, "security": {"const": "tls"},
+        "transport": {"type": "object", "additionalProperties": false, "required": ["name", "mode"], "properties": {"name": {"const": "xhttp"}, "mode": {"const": "stream-one"}}},
+        "engine": {
+          "type": "object", "additionalProperties": false, "required": ["name", "version", "sha256"],
+          "properties": {"name": {"const": "xray"}, "version": {"type": "string", "pattern": "^[0-9]+\\.[0-9]+\\.[0-9]+$"}, "sha256": {"$ref": "#/$defs/hash"}}
+        }
+      }
+    }
+  }
+}

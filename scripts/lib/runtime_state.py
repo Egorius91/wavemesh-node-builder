@@ -84,6 +84,8 @@ def mutate(config, operation, target, force=False):
             client["credentials"] = [item for item in client.get("credentials", []) if item.get("route_id") != target]
         return result, [target]
     if operation == "remove-exit":
+        if any(p.get("exit_id") == target for r in result.get("routes", []) for p in r.get("prepared_plan", {}).get("paths", [])):
+            raise ValueError("Exit belongs to an active prepared EU-only route")
         if not any(item.get("id") == target for item in result.get("exits", [])):
             raise ValueError(f"Exit not found: {target}")
         attached = [item["id"] for item in result.get("routes", []) if item.get("exit_id") == target]
@@ -211,7 +213,7 @@ def is_catch_all(rule):
     return not any(key in rule and rule[key] not in (None, "", []) for key in MATCH_KEYS)
 
 
-def transition(previous, success, enabled=True, misconfigured=False):
+def transition(previous, success, enabled=True, misconfigured=False, failure_threshold=3, recovery_threshold=3):
     previous = previous or {}
     if not enabled:
         return "disabled", 0, 0
@@ -219,10 +221,10 @@ def transition(previous, success, enabled=True, misconfigured=False):
         return "misconfigured", 0, previous.get("consecutive_failures", 0) + 1
     if success:
         successes = previous.get("consecutive_successes", 0) + 1
-        status = "healthy" if successes >= 3 else ("healthy" if previous.get("status") == "healthy" else "unknown")
+        status = "healthy" if successes >= recovery_threshold else ("healthy" if previous.get("status") == "healthy" else "unknown")
         return status, successes, 0
     failures = previous.get("consecutive_failures", 0) + 1
-    status = "unhealthy" if failures >= 3 else ("healthy" if previous.get("status") == "healthy" else "unknown")
+    status = "unhealthy" if failures >= failure_threshold else ("healthy" if previous.get("status") == "healthy" else "unknown")
     return status, 0, failures
 
 

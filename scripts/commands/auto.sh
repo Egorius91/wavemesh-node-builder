@@ -3,6 +3,69 @@
 WM_AUTO_TOOL="${WM_AUTO_TOOL:-$WM_LIB_DIR/lib/auto_route.py}"
 WM_AUTO_HEALTH_TOOL="${WM_AUTO_HEALTH_TOOL:-$WM_LIB_DIR/lib/auto_health.py}"
 WM_AUTO_OVERRIDE_FILE="${WM_AUTO_OVERRIDE_FILE:-$WM_STATE_DIR/auto-overrides.json}"
+WM_PREPARED_TOOL="$WM_LIB_DIR/lib/prepared_channels.py"
+
+# One local mutation owner. Repeated health ticks belong to the existing Agent
+# integration; this command never starts a provider operation or edits rights.
+wm_auto_prepared() {
+  local action="${1:-}" auto_id="auto-europe" plan="" engine="/usr/local/x-ui/bin/xray-linux-amd64"
+  [[ "$action" == install || "$action" == reconcile ]] || wm_fail "Usage: wavemesh cascade auto prepared install --plan FILE | reconcile [--id ID]"
+  shift
+  while [[ $# -gt 0 ]]; do
+    case "$1" in
+      --id) auto_id="${2:-}"; shift 2 ;;
+      --plan) plan="${2:-}"; shift 2 ;;
+      *) wm_fail "Unknown prepared route option" ;;
+    esac
+  done
+  [[ "$action" != install || -n "$plan" ]] || wm_fail "Prepared route install requires a private plan"
+  wm_lock_mutation "auto-prepared-$action"; wm_load_config; wm_require_entry_role
+  wm_transaction_begin "auto-prepared-$action"
+  local transaction="$WM_ACTIVE_TRANSACTION" route_id="route-auto-${auto_id}" path_id probe_file result=0
+  python3 - "$transaction" "$WM_LIB_DIR/lib" <<'PY' || wm_fail "Could not retain prepared no-effect guard"
+import sys
+from pathlib import Path
+sys.path.insert(0,sys.argv[2])
+from transaction_state import atomic_json
+atomic_json(Path(sys.argv[1])/'prepared.no-effect.json', {'status':'NO_CONFIG_MUTATION_DISPATCHED'})
+PY
+  local args=("$action" --config "$WM_CONFIG_JSON" --runtime "$WM_RUNTIME_JSON" --route-id "$route_id" --template "$transaction/xray.before.json" --engine-binary "$engine" --output "$transaction")
+  if [[ "$action" == install ]]; then
+    args+=(--plan "$plan")
+  else
+    python3 "$WM_PREPARED_TOOL" probe-input --config "$WM_CONFIG_JSON" --route-id "$route_id" --template "$transaction/xray.before.json" --engine-binary "$engine" --output "$transaction" || wm_fail "Prepared probe admission failed"
+    while IFS= read -r path_id; do
+      probe_file="$transaction/probe-${path_id}.json"; result=0
+      wm_xray_test_outbound "$probe_file" "$transaction/xray.before.json" >/dev/null 2>&1 && result=1
+      python3 - "$transaction/probe-input.json" "$path_id" "$result" <<'PY' || wm_fail "Could not record prepared path probe"
+import json,sys
+from pathlib import Path
+p=Path(sys.argv[1]); d=json.loads(p.read_text()); d['paths'][sys.argv[2]]=sys.argv[3]=='1'; p.write_text(json.dumps(d)+'\n')
+PY
+    done < <(python3 -c 'import json,sys; print("\n".join(json.load(open(sys.argv[1]))["paths"]))' "$transaction/probe-input.json")
+    # Keep the collection START timestamp. Slow probes cannot extend freshness.
+    args+=(--observations "$transaction/probe-input.json")
+  fi
+  python3 "$WM_PREPARED_TOOL" "${args[@]}" || wm_fail "Prepared route compilation/native validation failed"
+  python3 - "$transaction" "$WM_LIB_DIR/lib" <<'PY' || wm_fail "Could not retain prepared dispatch guard"
+import json,sys
+from pathlib import Path
+sys.path.insert(0,sys.argv[2])
+from transaction_state import atomic_json
+from prepared_channels import digest
+directory=Path(sys.argv[1])
+atomic_json(directory/'prepared.apply.pending.json', {'status':'UNKNOWN_UNTIL_HTTP_SUCCESS','candidate_sha256':digest(json.loads((directory/'prepared.xray.json').read_text()))})
+PY
+  rm -f "$transaction/prepared.no-effect.json"
+  wm_xray_apply_template "$transaction/prepared.xray.json" || wm_fail "Prepared route apply failed"
+  rm -f "$transaction/prepared.apply.pending.json"
+  wm_xray_get_template "$transaction/prepared.readback.json" || wm_fail "Prepared route readback failed"
+  python3 "$WM_PREPARED_TOOL" verify --config "$transaction/prepared.config.json" --route-id "$route_id" --template "$transaction/prepared.readback.json" --engine-binary "$engine" --output "$transaction" || wm_fail "Prepared route validation failed"
+  wm_atomic_install_json "$transaction/prepared.config.json" "$WM_CONFIG_JSON"
+  wm_atomic_install_json "$transaction/prepared.runtime.json" "$WM_RUNTIME_JSON"
+  wm_export_config_env_from_json; wm_transaction_commit "$transaction"
+  wm_success "Prepared EU-only route reconciled"
+}
 
 wm_auto_create() {
   local auto_id="auto-europe" display_name="⚡ RU -> Auto Europe" exit_ids="" sort_order=50 dry_run=0
@@ -76,6 +139,7 @@ wm_auto_override() {
   while [[ $# -gt 0 ]]; do case "$1" in --id) auto_id="${2:-}"; shift 2 ;; --exit-id) exit_id="${2:-}"; shift 2 ;; clear) clear=1; shift ;; *) wm_fail "Usage: wavemesh cascade auto override [--id ID] --exit-id EXIT_ID | clear" ;; esac; done
   wm_lock_mutation "auto-route-override"; wm_load_config; wm_require_entry_role
   description="$(python3 "$WM_AUTO_TOOL" describe --config "$WM_CONFIG_JSON" --id "$auto_id")" || wm_fail "Auto Route not found: $auto_id"
+  printf '%s' "$description" | python3 -c 'import json,sys; sys.exit(1 if json.load(sys.stdin).get("prepared") else 0)' || wm_fail "Prepared routes cannot use legacy overrides"
   inbound_tag="$(printf '%s' "$description" | python3 -c 'import json,sys; print(json.load(sys.stdin)["inbound_tag"])')"; balancer_tag="$(printf '%s' "$description" | python3 -c 'import json,sys; print(json.load(sys.stdin)["balancer_tag"])')"; rule_tag="$(printf '%s' "$description" | python3 -c 'import json,sys; print(json.load(sys.stdin)["rule_tag"])')"; strategy="$(printf '%s' "$description" | python3 -c 'import json,sys; print(json.load(sys.stdin)["strategy"])')"
   if (( clear == 1 )); then selectors="$(printf '%s' "$description" | python3 -c 'import json,sys; print(",".join(json.load(sys.stdin)["selectors"]))')"; else [[ -n "$exit_id" ]] || wm_fail "--exit-id is required"; selectors="$(EXIT_ID="$exit_id" python3 - "$WM_CONFIG_JSON" <<'PY'
 import json,os,sys
@@ -114,5 +178,6 @@ wm_auto_publish_toggle() {
 
 wm_auto_command() {
   case "${1:-}" in
+    prepared) shift; wm_auto_prepared "$@" ;;
     create) shift; wm_auto_create "$@" ;; status|list) shift; wm_auto_status "$@" ;; health) shift; wm_auto_health "$@" ;; enable) shift; wm_auto_toggle true "$@" ;; disable) shift; wm_auto_toggle false "$@" ;; override) shift; wm_auto_override "$@" ;; publish) shift; wm_auto_publish_toggle true "$@" ;; unpublish) shift; wm_auto_publish_toggle false "$@" ;; *) wm_fail "Usage: wavemesh cascade auto create [...] | status [--json] | health [--json] | enable|disable [--id ID] | override [--id ID] --exit-id EXIT_ID|clear | publish|unpublish [--id ID]" ;; esac
 }
