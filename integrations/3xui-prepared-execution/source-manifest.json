@@ -1,6 +1,6 @@
 {
   "schema": 1,
-  "status": "SOURCE_PRIVATE_CONSUMER_PASS_CURRENT_NATIVE_READER_NOT_RUN",
+  "status": "FIXED_NATIVE_EPOCH_ADAPTER_SOURCE_PASS_NATIVE_RERUN_PENDING",
   "at_utc": "2026-11-16T17:38:23.095993+00:00",
   "upstream": {
     "repository": "https://github.com/MHSanaei/3x-ui",
@@ -133,6 +133,36 @@
       "applicability": "Only lifecycle test changes Stat to ReadAt while retaining errors.Is(os.ErrClosed); product and all other tested bytes unchanged. Original FAIL retained; this is not one all-green grouped run."
     },
     "private_consumer": {
+      "status": "SOURCE_SYNTHETIC_PASS_NATIVE_RERUN_PENDING",
+      "top_level_pass": 19,
+      "fail": 0,
+      "skip": 0,
+      "evidence": {
+        "file": "PR4-PHASE776FIX-READER.log",
+        "sha256": "a3e8ee848bdcbe5d5eaca83de7e68caa597eaae176cfb80724dce6d4ab6f83f7"
+      },
+      "go_vectors": {
+        "total": 13,
+        "supported_match": 4,
+        "explicit_refusal": 9,
+        "actual_native_snapshot_dto": true,
+        "fixture_sha256": "9320a78a0fdf47257895b706fe2bc3b4974b0d55ea5994fc02c5b9d936ede5f4",
+        "overlay_source_sha256": "f23310748d167001c770c8173bf5fea8ca62cdf6ebb6824a9e6c67939d0922d9",
+        "evidence_sha256": "3e2db1d2f13bdbe3f9868eca51585dca86cd0160d416769546658231f7dc33f6"
+      },
+      "original_native_failed_attempt": {
+        "file": "PR4-CONSUMER-FAILED-834.json",
+        "sha256": "cf91b02ffa4d19c92c379613af31c6e406b52d0ad615c0d35c31c386d9382da8"
+      },
+      "production_approval": null,
+      "native_execution_current_fix": false,
+      "wire_change": false
+    },
+    "template_regression_red": {
+      "file": "PR4-PHASE766-TEMPLATE-RED.jsonl",
+      "sha256": "55fe517f3d8db26ecfec28dc69cd2c09dee1ececfaf7fdb1b9a21da6d016fa2e"
+    },
+    "private_consumer_before_native_adapter_fix": {
       "status": "SOURCE_SYNTHETIC_PASS_NATIVE_NOT_RUN",
       "top_level_pass": 18,
       "fail": 0,
@@ -161,10 +191,6 @@
       "current_production_approval": null,
       "native_execution": false,
       "integration": "Library returns only private in-memory data; no installed caller, Agent or health transport."
-    },
-    "template_regression_red": {
-      "file": "PR4-PHASE766-TEMPLATE-RED.jsonl",
-      "sha256": "55fe517f3d8db26ecfec28dc69cd2c09dee1ececfaf7fdb1b9a21da6d016fa2e"
     }
   },
   "remaining_gates": [
@@ -181,8 +207,8 @@
   "publication": false,
   "live_changes": false,
   "private_consumer_source_sha256": {
-    "scripts/lib/prepared_execution.py": "a62fd36e75c77807a0bd5035f1e37112d389d7b9f01150e3f18e1c2bdfbb71af",
-    "tests/unit/test_prepared_execution.py": "ffcf959a1e2854e58e141294c5253457e512d2a8ff88fbec93a0be7ba0bc5be8",
-    "tests/fixtures/prepared-execution-go-json-vectors.json": "b4e3262c19ca45ff47334a479fab74def0d004f75be4212270eb474b263fc61a"
+    "scripts/lib/prepared_execution.py": "40655130633a1cf8bb3e20230124b473a2c93bb83482a75278edebc367903428",
+    "tests/unit/test_prepared_execution.py": "1c57f4317f0ecbac691260ca7570153c6cc38f01ab156185748346c037692fdd",
+    "tests/fixtures/prepared-execution-go-json-vectors.json": "9320a78a0fdf47257895b706fe2bc3b4974b0d55ea5994fc02c5b9d936ede5f4"
   }
 }

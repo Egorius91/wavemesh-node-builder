@@ -30,15 +30,10 @@ def approval():
 
 
 def snapshot(nonce=NONCE):
-    config = {"fixture": "private synthetic config", "n": 18446744073709551615, "text": "Привет <>& 😀"}
-    return {"schema_version": 3, "challenge": nonce, "qualified": True, "reason": "custody_attested",
-            "mutation_epoch": "0", "effective_config": config,
-            "effective_config_sha256": channels.digest(config),
-            "execution_sha256": channels.digest({"effective_config": config, "balancer_overrides": {}}),
-            "identity": {"generation": "00000000-0000-4000-8000-000000000002", "boot_id": "00000000-0000-4000-8000-000000000001",
-                         "pid": 20, "start_ticks": "200", "producer_pid": 10, "producer_start_ticks": "100",
-                         "core_sha256": execution.CORE, "producer_sha256": approval()["producer_sha256"],
-                         "producer_upstream": execution.UPSTREAM, "consumed_sha256": "3" * 64}}
+    fixture = json.loads((ROOT / "tests/fixtures/prepared-execution-go-json-vectors.json").read_text(encoding="utf-8"))
+    value = execution._decode(base64.b64decode(fixture["native_snapshot_base64"]))
+    value["challenge"] = nonce
+    return value
 
 
 class PreparedExecution(unittest.TestCase):
@@ -73,10 +68,20 @@ class PreparedExecution(unittest.TestCase):
         self.assertNotIn("prepared_eu_paths_v1", view)
         self.assertNotIn("public_profile", view)
 
+    def test_actual_go_wire_epoch_is_projected_without_accepting_a_compiler_alias(self):
+        value = snapshot()
+        self.assertEqual(value["epoch"], "0")
+        self.assertNotIn("mutation_epoch", value)
+        view, _ = execution._snapshot(value, NONCE, 10, approval())
+        self.assertEqual(view["mutation_epoch"], value["epoch"])
+        value["mutation_epoch"] = value.pop("epoch")
+        with self.assertRaisesRegex(execution.ExecutionUnavailable, "^SNAPSHOT_SHAPE$"):
+            execution._snapshot(value, NONCE, 10, approval())
+
     def test_snapshot_header_context_and_hash_fail_closed(self):
         changes = [{"schema_version": 2}, {"schema_version": True}, {"challenge": NEXT_NONCE},
                    {"qualified": False}, {"qualified": 1}, {"reason": "unknown"},
-                   {"mutation_epoch": True}, {"mutation_epoch": "01"}, {"mutation_epoch": "18446744073709551616"},
+                   {"epoch": True}, {"epoch": "01"}, {"epoch": "18446744073709551616"},
                    {"effective_config_sha256": "0" * 64}, {"execution_sha256": "0" * 64},
                    {"effective_config": {"private": "DO_NOT_LEAK"}}, {"balancer_overrides": {"b": "target"}},
                    {"balancer_overrides": []}, {"unexpected": "DO_NOT_LEAK"}]
@@ -108,7 +113,7 @@ class PreparedExecution(unittest.TestCase):
 
     def test_selector_receipt_must_end_at_current_generation_epoch_and_hash(self):
         value = snapshot()
-        value["mutation_epoch"] = "1"
+        value["epoch"] = "1"
         receipt = {"generation": value["identity"]["generation"], "from_epoch": "0", "to_epoch": "1",
                    "before_sha256": "4" * 64, "after_sha256": value["effective_config_sha256"],
                    "normalized_sha256": "5" * 64, "rule_tag": "wm-rule-fixture"}
@@ -223,7 +228,7 @@ class PreparedExecution(unittest.TestCase):
         rechecked.assert_called_once_with("observed")
 
     def test_changed_epoch_even_equal_json_or_replayed_nonce_cannot_be_current(self):
-        for second in ({**snapshot(NEXT_NONCE), "mutation_epoch": "2"}, snapshot(NONCE)):
+        for second in ({**snapshot(NEXT_NONCE), "epoch": "2"}, snapshot(NONCE)):
             result, _, _, rechecked = self.collect_fixture(second=second)
             self.assertIsInstance(result, execution.ExecutionUnavailable)
             self.assertEqual(str(result), "EXECUTION_CHANGED_DURING_COLLECTION")

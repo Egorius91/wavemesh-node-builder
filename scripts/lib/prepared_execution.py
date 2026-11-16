@@ -243,7 +243,7 @@ def _recheck(observed):
 
 
 def _snapshot(value, nonce, peer, approval):
-    _shape(value, ("schema_version", "challenge", "qualified", "reason", "identity", "mutation_epoch",
+    _shape(value, ("schema_version", "challenge", "qualified", "reason", "identity", "epoch",
                    "effective_config_sha256", "execution_sha256", "effective_config"), ("balancer_overrides", "selector_transition"))
     if type(value["schema_version"]) is not int or value["schema_version"] != 3 or value["challenge"] != nonce:
         _fail("SNAPSHOT_CHALLENGE")
@@ -270,7 +270,7 @@ def _snapshot(value, nonce, peer, approval):
     transition = value.get("selector_transition")
     view = {"schema_version": 3, "engine_instance": {"boot_id": identity["boot_id"], "pid": identity["pid"], "start_ticks": identity["start_ticks"]},
             "effective_config_sha256": value["effective_config_sha256"], "native_generation": identity["generation"],
-            "mutation_epoch": value["mutation_epoch"], "selector_transitions": [] if transition is None else [transition]}
+            "mutation_epoch": value["epoch"], "selector_transitions": [] if transition is None else [transition]}
     channels.validate_runtime_view(view)
     if transition is not None and (transition["generation"] != view["native_generation"] or transition["to_epoch"] != view["mutation_epoch"] or transition["after_sha256"] != view["effective_config_sha256"]):
         _fail("SELECTOR_CONTEXT")

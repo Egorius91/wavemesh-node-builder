@@ -44,7 +44,7 @@ still owns route-specific normalized hash/continuity checks. The reader does not
 invent a receipt chain or advance health counters. Fixed errors contain no raw
 configuration, credentials, paths or exception payloads.
 
-Source proof: reader18 tests PASS0skip with mocked Unix/proc facts,13 actual Go
+Source proof: reader19 tests PASS0skip with mocked Unix/proc facts,13 actual Go
 canonical vectors, and current producer owner21+17 race cases PASS. These are
 source/synthetic checks. Actual Linux consumer/peer/proc/descriptor integration
 and a full producer build remain NOT VERIFIED. Native757 custody/mutator proof
@@ -66,3 +66,12 @@ placement/generation/revision/material/attempt/quota composition and Agent/SaaS/
 integration. Raw JSON, relay credentials, UUIDs, Exit addresses, process data or
 unreviewed public profiles do not enter health. CAS/persistence settlement,
 watchdog, IPv4/IPv6/DNS/existing-flow and management-loss proof are separate gaps.
+
+
+The first real Linux consumer run failed closed because the adapter expected the
+compiler's mutation_epoch field on the native wire. The native DTO uses epoch;
+that field now maps explicitly to runtime-view3.mutation_epoch. No producer wire
+was changed and the compiler alias is refused on input. Unit snapshots now come
+from the actual Go ExecutionSnapshot serializer, with a dedicated alias regression.
+The failed attempt and independent cleanup are retained; current native rerun is
+pending. This supersedes the earlier hand-constructed unit header assumption.
