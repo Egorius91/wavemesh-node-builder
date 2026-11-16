@@ -30,8 +30,8 @@ and outbound renderer still own the relay credentials and TLS identity.
 After explicit runtime admission, the existing local mutation owner can use:
 
 ```sh
-wavemesh cascade auto prepared install --id europe --plan /protected/plan.json --runtime-view /protected/current-runtime.json
-wavemesh cascade auto prepared reconcile --id europe --runtime-view /protected/current-runtime.json --observations /protected/observations-v2.json
+wavemesh cascade auto prepared install --id europe --plan /protected/plan.json --runtime-view /protected/current-runtime.json --effective-config /protected/executing.json
+wavemesh cascade auto prepared reconcile --id europe --runtime-view /protected/current-runtime.json --effective-config /protected/executing.json --observations /protected/observations-v2.json
 ```
 
 These are source interface examples, not authorization to run on a VPS. Install
@@ -65,8 +65,9 @@ default direct outbound. Unrelated inbounds, rules and observatory subjects are
 preserved. The local Auto health reader labels these observations as
 `local-entry-path-only`, independently of financial or service readiness.
 
-Operations keep the existing lock → snapshot → compile/native parse → mutation
-→ full-template readback → validation → atomic config/runtime commit flow.
+Operations reuse the existing lock, snapshot and compile/native parse owner.
+The intended mutation → settled executing readback → validation → atomic
+config/runtime commit flow still needs the shared settlement integration below.
 The saved config, effective template and stored SQLite template must prove a
 safe recovery policy before restore. Missing rules for an active saved Entry
 or an unsafe fallback refuse rollback. Existing durable `rollback_failed` debt
@@ -76,8 +77,8 @@ its migration needs a separately reviewed fail-closed transition. Returning to
 an unsafe historical template is not an upgrade strategy.
 
 Before a prepared Xray POST, the transaction persists the candidate hash and a
-pending-effect guard. Only a proven successful terminal HTTP response clears
-it. Lost/failed replies or interruption leave the guard, stop automatic restore
+pending-effect guard. HTTP success does not clear it. Missing settlement,
+lost/failed replies or interruption leave the guard, stop automatic restore
 and retain `rollback_failed` debt. Recovery refuses while that effect remains
 UNKNOWN; a readback alone cannot prove that a still-running writer is finished.
 Validation failures before dispatch record a no-effect rollback without sending
@@ -123,8 +124,29 @@ The existing Agent collector must supply an independently CURRENT, SETTLED
 runtime view. Missing, ambiguous or pending transitions have no qualified view.
 Comparing a receipt to its own saved process metadata is insufficient. Compiler
 and health readers require the saved instance/readback to match that view and
-the exact supplied template. Process/readback changes reset path hysteresis;
-heartbeat/replay cannot extend collection-start freshness.
+the full supplied executing JSON. This input is separate from the stored panel
+template: stock adds DB inbounds, subscription outbounds and injected rules.
+Generated state is never copied back into the mutation template. A raw on-disk
+config/PID pair is insufficient after hot apply: stock can fail to persist its
+changed config while the engine has already changed.
+
+Each fresh sample still binds the complete current executing digest. Within
+the same process, accumulated hysteresis may survive a change to exactly the
+owned rule's `outboundTag`. The compiler first validates the unique unconditional
+rule, exact inbound, approved target and all prepared outbounds, EU guards,
+ordering and selector collisions, then replaces only this one selector with
+blackhole in a copy of the full executing JSON to derive a continuity hash.
+All other fields, generated inbounds, array ordering and new processes reset
+history. This prevents recovery → selector update → hash reset → block loops.
+The derived hash is stored only in the existing private runtime slot; it never
+qualifies a new sample, settles a mutation or refreshes an old timestamp.
+Heartbeat/replay cannot extend collection-start freshness.
+
+No-op comparison checks owned rule/balancer/path/observatory intent against the
+policy-validated full execution. Unrelated stock-generated objects are retained
+in execution without forcing template rewrites. Their changes still reset
+accumulated health. Public descriptors and private observation schema2 are
+unchanged by this separation.
 
 The pure compiler/health/no-op checks and default-closed CLI boundary are
 implemented locally. A no-op routine tick updates only the atomic health file;

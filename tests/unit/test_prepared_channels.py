@@ -84,7 +84,7 @@ class PreparedChannels(unittest.TestCase):
         self.assertEqual(third["selected"], "upcloud-v4")
         fourth = self.sample(130, live, third)
         self.assertEqual(fourth["selected"], "upcloud-v6")
-        compiled, _ = channels.compile_template(self.config, "route-auto-europe", self.plan, self.initial, fourth, now=130, runtime_view=self.view)
+        compiled, _ = channels.compile_template(self.config, "route-auto-europe", self.plan, self.initial, fourth, now=130, runtime_view=self.view, effective_config=self.initial)
         self.assertEqual(self.rule(compiled)["outboundTag"], "wm-exit-path-upcloud-v6")
 
     def test_exit_failure_selects_other_provider(self):
@@ -187,21 +187,21 @@ class PreparedChannels(unittest.TestCase):
         row = auto_health.evaluate(self.config, self.runtime, inbound, self.initial, now=100)[0]
         self.assertEqual(row["status"], "blocked")
         state = self.sample(110, previous=self.sample(100))
-        template, _ = channels.compile_template(self.config, "route-auto-europe", self.plan, self.initial, state, now=110, runtime_view=self.view)
+        template, _ = channels.compile_template(self.config, "route-auto-europe", self.plan, self.initial, state, now=110, runtime_view=self.view, effective_config=self.initial)
         view = {**self.view, "effective_config_sha256": channels.digest(template)}
         state = self.sample(120, previous=state, view=view)
         self.assertIsNone(state["selected"])
         state = self.sample(130, previous=state, view=view)
         runtime = {"prepared_routes": {"route-auto-europe": state}}
-        row = auto_health.evaluate(self.config, runtime, inbound, template, now=130, runtime_view=view)[0]
+        row = auto_health.evaluate(self.config, runtime, inbound, template, now=130, runtime_view=view, effective_config=template)[0]
         self.assertEqual((row["status"], row["healthy_exits"], row["evidence_scope"]), ("healthy", 2, "local-entry-path-only"))
-        self.assertNotEqual(auto_health.evaluate(self.config, runtime, inbound, template, now=171, runtime_view=view)[0]["status"], "healthy")
+        self.assertNotEqual(auto_health.evaluate(self.config, runtime, inbound, template, now=171, runtime_view=view, effective_config=template)[0]["status"], "healthy")
 
     def test_new_process_cannot_reuse_selection_with_identical_engine_and_config(self):
         state = self.sample(110, previous=self.sample(100))
         replacement = copy.deepcopy(self.view)
         replacement["engine_instance"]["pid"] += 1
-        result, _ = channels.compile_template(self.config, "route-auto-europe", self.plan, self.initial, state, now=120, runtime_view=replacement)
+        result, _ = channels.compile_template(self.config, "route-auto-europe", self.plan, self.initial, state, now=120, runtime_view=replacement, effective_config=self.initial)
         self.assertEqual(self.rule(result)["outboundTag"], xray.BLOCK_TAG)
         recovered = self.sample(120, previous=state, view=replacement)
         self.assertIsNone(recovered["selected"])
@@ -238,29 +238,29 @@ class PreparedChannels(unittest.TestCase):
 
     def test_live_view_cannot_describe_another_effective_template(self):
         view = copy.deepcopy(self.view); view["effective_config_sha256"] = "f"*64
-        with self.assertRaises(ValueError): channels.compile_template(self.config, "route-auto-europe", self.plan, self.initial, now=100, runtime_view=view)
+        with self.assertRaises(ValueError): channels.compile_template(self.config, "route-auto-europe", self.plan, self.initial, now=100, runtime_view=view, effective_config=self.initial)
 
     def test_unchanged_template_needs_no_post_but_restart_still_invalidates_health(self):
-        self.assertFalse(channels.template_needs_update(self.initial, self.initial, self.view))
+        self.assertFalse(channels.template_needs_update(self.initial, self.initial, self.view, self.initial, self.config["routes"][0]))
         state = self.sample(110, previous=self.sample(100))
         new_view = copy.deepcopy(self.view); new_view["engine_instance"]["start_ticks"] = "2000"
-        self.assertFalse(channels.template_needs_update(self.initial, self.initial, new_view))
+        self.assertFalse(channels.template_needs_update(self.initial, self.initial, new_view, self.initial, self.config["routes"][0]))
         self.assertFalse(channels.state_is_current(state, self.binding, new_view, 110, 40))
-        with self.assertRaises(ValueError): channels.template_needs_update(self.initial, self.initial, None)
+        with self.assertRaises(ValueError): channels.template_needs_update(self.initial, self.initial, None, None, self.config["routes"][0])
 
     def test_changed_desired_route_requires_update_and_qualified_readback(self):
         state = self.sample(110, previous=self.sample(100))
-        selected, _ = channels.compile_template(self.config, "route-auto-europe", self.plan, self.initial, state, now=110, runtime_view=self.view)
-        self.assertTrue(channels.template_needs_update(selected, self.initial, self.view))
+        selected, _ = channels.compile_template(self.config, "route-auto-europe", self.plan, self.initial, state, now=110, runtime_view=self.view, effective_config=self.initial)
+        self.assertTrue(channels.template_needs_update(selected, self.initial, self.view, self.initial, self.config["routes"][0]))
         stale_view = copy.deepcopy(self.view); stale_view["effective_config_sha256"] = "f"*64
-        with self.assertRaises(ValueError): channels.template_needs_update(selected, self.initial, stale_view)
+        with self.assertRaises(ValueError): channels.template_needs_update(selected, self.initial, stale_view, self.initial, self.config["routes"][0])
 
     def test_probe_preparation_cannot_mint_a_completed_process_observation(self):
         with tempfile.TemporaryDirectory() as name:
             directory = Path(name)
             for file, data in (("config.json", self.config), ("effective.json", self.initial), ("view.json", self.view)):
                 (directory/file).write_text(json.dumps(data))
-            argv = ["prepared_channels.py", "probe-input", "--config", str(directory/"config.json"), "--route-id", "route-auto-europe", "--template", str(directory/"effective.json"), "--runtime-view", str(directory/"view.json"), "--engine-binary", "synthetic-not-executed", "--output", str(directory)]
+            argv = ["prepared_channels.py", "probe-input", "--config", str(directory/"config.json"), "--route-id", "route-auto-europe", "--template", str(directory/"effective.json"), "--effective-config", str(directory/"effective.json"), "--runtime-view", str(directory/"view.json"), "--engine-binary", "synthetic-not-executed", "--output", str(directory)]
             with mock.patch.object(sys, "argv", argv), mock.patch.object(channels, "check_engine"):
                 channels.main()
             observation = json.loads((directory/"probe-input.json").read_text())
@@ -273,7 +273,7 @@ class PreparedChannels(unittest.TestCase):
             directory = Path(name)
             for file, data in (("config.json", self.config), ("effective.json", effective), ("prepared.xray.json", effective), ("prepared.runtime.json", {"prepared_routes": {"route-auto-europe": state}})):
                 (directory/file).write_text(json.dumps(data))
-            argv = ["prepared_channels.py", "verify", "--config", str(directory/"config.json"), "--route-id", "route-auto-europe", "--template", str(directory/"effective.json"), "--engine-binary", "synthetic-not-executed", "--output", str(directory)]
+            argv = ["prepared_channels.py", "verify", "--config", str(directory/"config.json"), "--route-id", "route-auto-europe", "--template", str(directory/"effective.json"), "--effective-config", str(directory/"effective.json"), "--engine-binary", "synthetic-not-executed", "--output", str(directory)]
             if view is not None:
                 (directory/"view.json").write_text(json.dumps(view)); argv += ["--runtime-view", str(directory/"view.json")]
             with mock.patch.object(sys, "argv", argv), mock.patch.object(channels, "check_engine"), mock.patch.object(channels.time, "time", return_value=130):
@@ -288,7 +288,7 @@ class PreparedChannels(unittest.TestCase):
 
     def test_verify_rejects_replacement_even_with_identical_template(self):
         state = self.sample(110, previous=self.sample(100))
-        effective, _ = channels.compile_template(self.config, "route-auto-europe", self.plan, self.initial, state, now=110, runtime_view=self.view)
+        effective, _ = channels.compile_template(self.config, "route-auto-europe", self.plan, self.initial, state, now=110, runtime_view=self.view, effective_config=self.initial)
         view = {**self.view, "effective_config_sha256": channels.digest(effective)}
         state = self.sample(120, previous=state, view=view)
         state = self.sample(130, previous=state, view=view)
@@ -310,6 +310,123 @@ class PreparedChannels(unittest.TestCase):
         rule = next(r for r in removed["routing"]["rules"] if r.get("inboundTag") == [route["entry"]["inbound_tag"]])
         self.assertEqual(rule["outboundTag"], xray.BLOCK_TAG)
         self.assertTrue(xray.validate_eu_only(removed, self.config))
+
+    def test_selector_hot_apply_keeps_recovery_without_recover_apply_block_loop(self):
+        actual = copy.deepcopy(self.initial)
+        # Generated runtime input is intentionally different from the stored
+        # template. The compiler must never persist these generated inbounds.
+        actual["inbounds"].append({"tag": "generated-inbound", "protocol": "vless", "settings": {"clients": []}})
+        stored, config, runtime = self.initial, self.config, self.runtime
+        selections = []
+        for at in (100, 110, 120, 130, 140):
+            view = {**self.view, "effective_config_sha256": channels.digest(actual)}
+            obs = self.observation(at, {p["id"]: True for p in self.plan["paths"]}, view)
+            config, runtime, candidate, _ = channels.stage(config, runtime, "route-auto-europe", self.plan, stored, obs, at, view, actual)
+            state = runtime["prepared_routes"]["route-auto-europe"]
+            selections.append(state["selected"])
+            projected, _ = channels.compile_template(config, "route-auto-europe", self.plan, actual, state, at, view, actual)
+            changed = channels.template_needs_update(candidate, stored, view, actual, config["routes"][0])
+            self.assertEqual(changed, at == 110)
+            self.assertEqual(candidate.get("inbounds"), stored.get("inbounds"))
+            # Model successful same-process hot apply; this test neither
+            # implements nor qualifies the production settlement owner.
+            stored, actual = candidate, projected
+        self.assertEqual(selections, [None, *["upcloud-v4"]*4])
+        self.assertEqual(state["paths"]["upcloud-v4"]["consecutive_successes"], 5)
+
+    def test_continuity_normalizes_only_the_single_owned_selector(self):
+        fingerprint = channels.health_config_fingerprint(self.config, "route-auto-europe", self.plan, self.initial, self.view)
+        selected = copy.deepcopy(self.initial); self.rule(selected)["outboundTag"] = "wm-exit-path-upcloud-v4"
+        view = {**self.view, "effective_config_sha256": channels.digest(selected)}
+        self.assertEqual(channels.health_config_fingerprint(self.config, "route-auto-europe", self.plan, selected, view), fingerprint)
+        mutations = [lambda d: d.update(inbounds=[{"tag": "generated"}]),
+                     lambda d: d["log"].update(loglevel="error"),
+                     lambda d: d.update(stats={"changed": True}),
+                     lambda d: d["routing"]["rules"].append({"type": "field", "domain": ["example.org"], "outboundTag": "direct"})]
+        for mutate in mutations:
+            changed = copy.deepcopy(selected); mutate(changed)
+            changed_view = {**view, "effective_config_sha256": channels.digest(changed)}
+            self.assertNotEqual(channels.health_config_fingerprint(self.config, "route-auto-europe", self.plan, changed, changed_view), fingerprint)
+
+    def test_continuity_refuses_changed_paths_and_unsafe_or_ambiguous_rules(self):
+        mutations = [lambda d: self.rule(d).update(outboundTag="direct"),
+                     lambda d: self.rule(d).update(network="tcp"),
+                     lambda d: self.rule(d).update(inboundTag=["wm-route-other"]),
+                     lambda d: d["routing"]["rules"].append(copy.deepcopy(self.rule(d))),
+                     lambda d: d["routing"]["rules"].insert(0, {"type": "field", "network": "udp", "outboundTag": "direct"}),
+                     lambda d: next(o for o in d["outbounds"] if o["tag"] == "wm-exit-path-upcloud-v4")["streamSettings"]["tlsSettings"].update(allowInsecure=True)]
+        for mutate in mutations:
+            actual = copy.deepcopy(self.initial); mutate(actual)
+            view = {**self.view, "effective_config_sha256": channels.digest(actual)}
+            with self.assertRaises(ValueError):
+                channels.health_config_fingerprint(self.config, "route-auto-europe", self.plan, actual, view)
+
+    def test_any_other_config_change_or_replacement_resets_stage_history(self):
+        config, runtime, actual = self.config, self.runtime, self.initial
+        for at in (100, 110):
+            obs = self.observation(at, {p["id"]: True for p in self.plan["paths"]})
+            config, runtime, _, _ = channels.stage(config, runtime, "route-auto-europe", self.plan, actual, obs, at, self.view, actual)
+        for replacement in (False, True):
+            changed = copy.deepcopy(actual); view = copy.deepcopy(self.view)
+            if replacement: view["engine_instance"]["start_ticks"] = "2000"
+            else: changed["inbounds"] = [{"tag": "new-generated-inbound"}]
+            view["effective_config_sha256"] = channels.digest(changed)
+            obs = self.observation(120, {p["id"]: True for p in self.plan["paths"]}, view)
+            _, observed, candidate, _ = channels.stage(config, runtime, "route-auto-europe", self.plan, actual, obs, 120, view, changed)
+            state = observed["prepared_routes"]["route-auto-europe"]
+            self.assertIsNone(state["selected"])
+            self.assertEqual(state["paths"]["upcloud-v4"]["consecutive_successes"], 1)
+            self.assertEqual(self.rule(candidate)["outboundTag"], xray.BLOCK_TAG)
+
+    def test_old_full_hash_sample_never_becomes_current_via_continuity(self):
+        config, runtime, candidate, _ = channels.stage(self.config, self.runtime, "route-auto-europe", self.plan, self.initial, self.observation(100, {p["id"]: True for p in self.plan["paths"]}), 100, self.view, self.initial)
+        actual = copy.deepcopy(candidate); self.rule(actual)["outboundTag"] = "wm-exit-path-upcloud-v4"
+        view = {**self.view, "effective_config_sha256": channels.digest(actual)}
+        state = runtime["prepared_routes"]["route-auto-europe"]
+        self.assertFalse(channels.state_is_current(state, self.binding, view, 110, 40))
+        with self.assertRaises(ValueError):
+            channels.stage(config, runtime, "route-auto-europe", self.plan, candidate, self.observation(110, {p["id"]: True for p in self.plan["paths"]}), 110, view, actual)
+
+    def test_missing_actual_or_stored_cache_cannot_bind_generated_execution(self):
+        actual = copy.deepcopy(self.initial); actual["inbounds"] = [{"tag": "generated"}]
+        view = {**self.view, "effective_config_sha256": channels.digest(actual)}
+        for supplied in (None, self.initial):
+            with self.assertRaises(ValueError):
+                channels.compile_template(self.config, "route-auto-europe", self.plan, self.initial, runtime_view=view, effective_config=supplied)
+            with self.assertRaises(ValueError):
+                channels.template_needs_update(self.initial, self.initial, view, supplied, self.config["routes"][0])
+        self.assertFalse(channels.template_needs_update(self.initial, self.initial, view, actual, self.config["routes"][0]))
+
+    def test_generated_stock_layout_does_not_force_template_rewrites(self):
+        actual = copy.deepcopy(self.initial)
+        actual["inbounds"].append({"tag": "panel-egress", "protocol": "socks"})
+        actual["routing"]["rules"].insert(0, {"type": "field", "inboundTag": ["panel-egress"], "outboundTag": "direct"})
+        actual["outbounds"].insert(0, {"tag": "subscription-outbound", "protocol": "freedom"})
+        view = {**self.view, "effective_config_sha256": channels.digest(actual)}
+        route = self.config["routes"][0]
+        self.assertFalse(channels.template_needs_update(self.initial, self.initial, view, actual, route=route))
+        changed = copy.deepcopy(actual); self.rule(changed)["outboundTag"] = "wm-exit-path-upcloud-v4"
+        changed_view = {**view, "effective_config_sha256": channels.digest(changed)}
+        self.assertTrue(channels.template_needs_update(self.initial, self.initial, changed_view, changed, route=route))
+        unsafe = copy.deepcopy(actual); unsafe["routing"]["rules"][0].pop("inboundTag")
+        unsafe_view = {**view, "effective_config_sha256": channels.digest(unsafe)}
+        with self.assertRaises(ValueError): channels.template_needs_update(self.initial, self.initial, unsafe_view, unsafe, route=route)
+
+    def test_settled_selection_failover_and_all_down_stay_closed(self):
+        config, runtime, stored, actual = self.config, self.runtime, self.initial, self.initial
+        selections = []
+        for at in (100, 110, 120, 130, 140, 150):
+            live = {p["id"]: at < 140 and (at < 120 or p["id"] != "upcloud-v4") for p in self.plan["paths"]}
+            view = {**self.view, "effective_config_sha256": channels.digest(actual)}
+            config, runtime, candidate, _ = channels.stage(config, runtime, "route-auto-europe", self.plan, stored, self.observation(at, live, view), at, view, actual)
+            state = runtime["prepared_routes"]["route-auto-europe"]
+            selections.append(state["selected"])
+            actual, _ = channels.compile_template(config, "route-auto-europe", self.plan, actual, state, at, view, actual)
+            stored = candidate
+            if at >= 140:
+                self.assertEqual(self.rule(actual)["outboundTag"], xray.BLOCK_TAG)
+                self.assertTrue(xray.validate_eu_only(actual, config))
+        self.assertEqual(selections, [None, "upcloud-v4", "upcloud-v4", "upcloud-v6", None, None])
 
     def test_descriptor_strict_version_and_public_allowlist(self):
         for mutate in (lambda d: d.update(schema_version=True), lambda d: d.update(internal_exit="private"), lambda d: d["transport"].update(extra="unsupported"), lambda d: d["engine"].update(sha256="unpinned")):

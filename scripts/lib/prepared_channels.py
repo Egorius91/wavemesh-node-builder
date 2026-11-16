@@ -74,18 +74,76 @@ def state_is_current(state, binding, runtime_view, now, max_age):
         return False
 
 
-def template_needs_update(candidate, effective_template, runtime_view):
+def qualified_effective_config(effective_config, runtime_view):
+    view = validate_runtime_view(runtime_view)
+    if not isinstance(effective_config, dict) or digest(effective_config) != view["effective_config_sha256"]:
+        raise ValueError("qualified executing configuration is required, not panel cache")
+    return effective_config
+
+
+def health_config_fingerprint(config, route_id, plan, effective_config, runtime_view):
+    """Ignore exactly our selector when accumulating same-process samples.
+
+    Each sample still binds the full current digest. Generated inbounds, rule
+    order and every other byte of semantic JSON participate in continuity.
+    This does not qualify a disk file or settle a pending engine mutation.
+    """
+    effective = qualified_effective_config(effective_config, runtime_view)
+    route, outbounds, _ = bound_plan(config, route_id, plan)
+    xray_template.validate_log_policy(effective)
+    xray_template.validate_eu_only(effective, config)
+    selectors = [item["tag"] for item in outbounds]
+    xray_template.validate_exit_selectors(effective, selectors)
+    for outbound in outbounds:
+        if next(item for item in effective["outbounds"] if item["tag"] == outbound["tag"]) != outbound:
+            raise ValueError("executing prepared path differs from its approved definition")
+    rules = effective.get("routing", {}).get("rules", [])
+    matches = [rule for rule in rules if rule.get("ruleTag") == route["routing"]["rule_tag"]]
+    if len(matches) != 1:
+        raise ValueError("executing prepared selector is missing or duplicated")
+    rule = matches[0]
+    if (set(rule) != {"type", "inboundTag", "ruleTag", "outboundTag"}
+            or rule["type"] != "field" or rule["inboundTag"] != [route["entry"]["inbound_tag"]]
+            or rule["outboundTag"] not in [xray_template.BLOCK_TAG, *selectors]):
+        raise ValueError("executing prepared selector is not the owned unconditional rule")
+    normalized = copy.deepcopy(effective)
+    next(r for r in normalized["routing"]["rules"] if r.get("ruleTag") == rule["ruleTag"])["outboundTag"] = xray_template.BLOCK_TAG
+    return digest(normalized)
+
+
+def executing_intent_matches(candidate, effective, route):
+    """Compare owned intent without copying generated stock state to storage.
+
+    The full execution is still policy-validated; a preceding unrelated
+    inbound-specific stock rule is allowed only by the existing EU guard.
+    Array order outside our owned objects is not an editable template field.
+    """
+    def intent(document):
+        xray_template.validate_log_policy(document)
+        xray_template.validate_eu_only(document)
+        routing = document.get("routing", {})
+        rules = [r for r in routing.get("rules", []) if r.get("ruleTag") == route["routing"]["rule_tag"]]
+        balancers = [b for b in routing.get("balancers", []) if b.get("tag") == route["routing"]["balancer_tag"]]
+        if len(rules) != 1 or len(balancers) != 1:
+            return None
+        tags = balancers[0].get("selector", [])
+        paths = [next((o for o in document.get("outbounds", []) if o.get("tag") == tag), None) for tag in tags]
+        return rules, balancers, paths, document.get("observatory")
+    expected = intent(candidate)
+    return expected is not None and expected == intent(effective)
+
+
+def template_needs_update(candidate, stored_template, runtime_view, effective_config, route):
     """A no-op tick never restarts the engine merely to refresh health.
 
     The collector must qualify the effective input against the executing
     instance. A panel template/cache alone does not satisfy this boundary.
     """
-    view = validate_runtime_view(runtime_view)
-    if view["effective_config_sha256"] != digest(effective_template):
-        raise ValueError("template comparison lacks qualified effective readback")
+    effective = qualified_effective_config(effective_config, runtime_view)
     xray_template.validate_log_policy(candidate)
     xray_template.validate_eu_only(candidate)
-    return candidate != effective_template
+    matches = executing_intent_matches(candidate, effective, route)
+    return candidate != stored_template or not matches
 
 
 def channel_descriptor(engine):
@@ -176,7 +234,7 @@ def bound_plan(config, route_id, plan):
     return route, outbounds, binding
 
 
-def select_paths(plan, binding, previous, observations, now, runtime_view=None):
+def select_paths(plan, binding, previous, observations, now, runtime_view=None, health_config_sha256=None):
     """One distinct fresh complete-path sample per interval; unknown means block.
 
     Hysteresis delays recovery and ordinary failover. An all-paths-down sample
@@ -196,9 +254,12 @@ def select_paths(plan, binding, previous, observations, now, runtime_view=None):
     expected = {p["id"] for p in plan["paths"]}
     if not isinstance(observations["paths"], dict) or set(observations["paths"]) != expected or any(type(v) is not bool for v in observations["paths"].values()):
         raise ValueError("complete boolean VPN-path observations are required")
+    # Only the stage owner derives the selector-normalized fingerprint from
+    # qualified full input. Callers without it retain strict full-hash reset.
+    continuity = health_config_sha256 or view["effective_config_sha256"]
     previous = previous if (previous.get("binding") == binding
                             and previous.get("engine_instance") == after
-                            and previous.get("effective_config_sha256") == view["effective_config_sha256"]) else {}
+                            and previous.get("health_config_sha256", previous.get("effective_config_sha256")) == continuity) else {}
     last = previous.get("sample_at")
     if last is not None and at-last < plan["health"]["sample_interval_seconds"]:
         raise ValueError("replayed or too frequent health sample")
@@ -226,10 +287,10 @@ def select_paths(plan, binding, previous, observations, now, runtime_view=None):
         if selected != current and selected is not None:
             switched_at = at
     return {"binding": binding, "sample_at": at, "switched_at": switched_at, "selected": selected, "paths": counters,
-            "engine_instance": after, "effective_config_sha256": view["effective_config_sha256"]}
+            "engine_instance": after, "effective_config_sha256": view["effective_config_sha256"], "health_config_sha256": continuity}
 
 
-def compile_template(config, route_id, plan, template, state=None, now=None, runtime_view=None):
+def compile_template(config, route_id, plan, template, state=None, now=None, runtime_view=None, effective_config=None):
     route, outbounds, binding = bound_plan(config, route_id, plan)
     result = copy.deepcopy(template)
     xray_template.ensure_block_outbound(result)
@@ -246,8 +307,8 @@ def compile_template(config, route_id, plan, template, state=None, now=None, run
     # A direct rule selects only an admitted prepared path, and observes ALL
     # backups. Block is the initial state and is independent of probe timing.
     now = int(time.time()) if now is None else now
-    if runtime_view is not None and validate_runtime_view(runtime_view)["effective_config_sha256"] != digest(template):
-        raise ValueError("current engine view does not bind the supplied effective template")
+    if runtime_view is not None:
+        qualified_effective_config(effective_config, runtime_view)
     selected = state.get("selected") if state and state_is_current(state, binding, runtime_view, now, plan["health"]["max_age_seconds"]) else None
     if selected not in {p["id"] for p in plan["paths"]}:
         selected = None
@@ -274,7 +335,7 @@ def check_engine(plan, binary):
         raise ValueError("installed Xray version differs from the prepared plan")
 
 
-def stage(config, runtime, route_id, plan, template, observations=None, now=None, runtime_view=None):
+def stage(config, runtime, route_id, plan, template, observations=None, now=None, runtime_view=None, effective_config=None):
     candidate = copy.deepcopy(config)
     route, _, _ = bound_plan(candidate, route_id, plan)
     if route.get("presentation", {}).get("published"):
@@ -285,9 +346,10 @@ def stage(config, runtime, route_id, plan, template, observations=None, now=None
     _, _, binding = bound_plan(candidate, route_id, plan)
     observed = copy.deepcopy(runtime or {})
     previous = observed.setdefault("prepared_routes", {}).get(route_id, {})
-    state = select_paths(plan, binding, previous, observations, now, runtime_view) if observations is not None else {"binding": binding, "selected": None}
+    fingerprint = health_config_fingerprint(candidate, route_id, plan, effective_config, runtime_view) if observations is not None else None
+    state = select_paths(plan, binding, previous, observations, now, runtime_view, fingerprint) if observations is not None else {"binding": binding, "selected": None}
     observed["prepared_routes"][route_id] = state
-    result, _ = compile_template(candidate, route_id, plan, template, state, now, runtime_view)
+    result, _ = compile_template(candidate, route_id, plan, template, state, now, runtime_view, effective_config)
     return candidate, observed, result, binding
 
 
@@ -300,6 +362,7 @@ def main():
     parser.add_argument("--template", required=True)
     parser.add_argument("--runtime")
     parser.add_argument("--runtime-view", help="Independent settled process/effective-config view from the owning collector")
+    parser.add_argument("--effective-config", help="Full qualified executing JSON, separate from the stored mutation template")
     parser.add_argument("--observations")
     parser.add_argument("--engine-binary")
     parser.add_argument("--output", required=True, help="Private transaction directory")
@@ -316,20 +379,20 @@ def main():
             raise ValueError("installed engine readback check is required")
         check_engine(plan, args.engine_binary)
         desired = load(directory/"prepared.xray.json")
-        effective = load(args.template)
-        if desired != effective:
+        stored = load(args.template)
+        if desired != stored:
             raise ValueError("prepared route readback differs from the complete candidate")
         xray_template.validate_eu_only(desired)
         view = validate_runtime_view(load(args.runtime_view) if args.runtime_view else None)
-        if view["effective_config_sha256"] != digest(effective):
-            raise ValueError("verification requires qualified executing configuration, not panel cache")
+        effective = qualified_effective_config(load(args.effective_config) if args.effective_config else None, view)
+        health_config_fingerprint(config, args.route_id, plan, effective, view)
         _, _, binding = bound_plan(config, args.route_id, plan)
         state = load(directory/"prepared.runtime.json", {}).get("prepared_routes", {}).get(args.route_id, {})
         now = int(time.time())
         if state.get("selected") not in {p["id"] for p in plan["paths"]} or not state_is_current(state, binding, view, now, plan["health"]["max_age_seconds"]):
             raise ValueError("current engine has no qualified fresh path observation")
-        expected, _ = compile_template(config, args.route_id, plan, effective, state, now, view)
-        if expected != effective:
+        expected, _ = compile_template(config, args.route_id, plan, stored, state, now, view, effective)
+        if not executing_intent_matches(expected, effective, route):
             raise ValueError("current path observation differs from executing route selection")
         return
     if not args.engine_binary:
@@ -337,8 +400,7 @@ def main():
     check_engine(plan, args.engine_binary)
     if args.command == "probe-input":
         runtime_view = validate_runtime_view(load(args.runtime_view) if args.runtime_view else None)
-        if runtime_view["effective_config_sha256"] != digest(load(args.template)):
-            raise ValueError("probe preparation requires qualified effective readback")
+        qualified_effective_config(load(args.effective_config) if args.effective_config else None, runtime_view)
         _, outbounds, binding = bound_plan(config, args.route_id, plan)
         for path, outbound in zip(plan["paths"], outbounds):
             runtime_state.atomic(directory/f"probe-{path['id']}.json", outbound)
@@ -353,15 +415,16 @@ def main():
     observations = load(args.observations) if args.observations else None
     if args.command == "reconcile" and observations is None:
         raise ValueError("reconcile requires complete fresh path observations")
-    effective_template = load(args.template)
-    candidate, runtime, template, binding = stage(config, load(args.runtime, {}), args.route_id, plan, effective_template, observations, now, runtime_view)
+    stored_template = load(args.template)
+    effective = load(args.effective_config) if args.effective_config else None
+    candidate, runtime, template, binding = stage(config, load(args.runtime, {}), args.route_id, plan, stored_template, observations, now, runtime_view, effective)
     runtime_state.atomic(directory/"prepared.config.json", candidate)
     runtime_state.atomic(directory/"prepared.runtime.json", runtime)
     runtime_state.atomic(directory/"prepared.xray.json", template)
     runtime_state.atomic(directory/"prepared.descriptor.json", public_descriptor(plan))
     runtime_state.atomic(directory/"prepared.binding.json", {"binding": binding, "capability": CAPABILITY})
     if runtime_view is not None:
-        runtime_state.atomic(directory/"prepared.update.json", {"update_required": template_needs_update(template, effective_template, runtime_view)})
+        runtime_state.atomic(directory/"prepared.update.json", {"update_required": template_needs_update(template, stored_template, runtime_view, effective, route=route)})
     # Parse the exact candidate with the same installed engine before mutation.
     subprocess.run([args.engine_binary, "run", "-test", "-config", str(directory/"prepared.xray.json")], stdin=subprocess.DEVNULL, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, timeout=15, check=True)
 

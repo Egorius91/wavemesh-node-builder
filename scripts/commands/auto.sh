@@ -8,7 +8,7 @@ WM_PREPARED_TOOL="$WM_LIB_DIR/lib/prepared_channels.py"
 # One local mutation owner. Repeated health ticks belong to the existing Agent
 # integration; this command never starts a provider operation or edits rights.
 wm_auto_prepared() {
-  local action="${1:-}" auto_id="auto-europe" plan="" runtime_view="" observations="" engine="/usr/local/x-ui/bin/xray-linux-amd64"
+  local action="${1:-}" auto_id="auto-europe" plan="" runtime_view="" effective_config="" observations="" engine="/usr/local/x-ui/bin/xray-linux-amd64"
   [[ "$action" == install || "$action" == reconcile ]] || wm_fail "Usage: wavemesh cascade auto prepared install --plan FILE | reconcile [--id ID]"
   shift
   while [[ $# -gt 0 ]]; do
@@ -16,16 +16,18 @@ wm_auto_prepared() {
       --id) auto_id="${2:-}"; shift 2 ;;
       --plan) plan="${2:-}"; shift 2 ;;
       --runtime-view) runtime_view="${2:-}"; shift 2 ;;
+      --effective-config) effective_config="${2:-}"; shift 2 ;;
       --observations) observations="${2:-}"; shift 2 ;;
       *) wm_fail "Unknown prepared route option" ;;
     esac
   done
   [[ "$action" != install || -n "$plan" ]] || wm_fail "Prepared route install requires a private plan"
   [[ -n "$runtime_view" ]] || wm_fail "Prepared routes require an independent settled process/effective-config collector view"
+  [[ -n "$effective_config" ]] || wm_fail "Prepared routes require full qualified executing config separately from the stored panel template"
   [[ "$action" != reconcile || -n "$observations" ]] || wm_fail "Prepared reconcile requires collector-qualified observationv2"
   wm_lock_mutation "auto-prepared-$action"; wm_load_config; wm_require_entry_role
   wm_transaction_begin "auto-prepared-$action"
-  local transaction="$WM_ACTIVE_TRANSACTION" route_id="route-auto-${auto_id}" path_id probe_file result=0
+  local transaction="$WM_ACTIVE_TRANSACTION" route_id="route-auto-${auto_id}"
   python3 - "$transaction" "$WM_LIB_DIR/lib" <<'PY' || wm_fail "Could not retain prepared no-effect guard"
 import sys
 from pathlib import Path
@@ -33,7 +35,7 @@ sys.path.insert(0,sys.argv[2])
 from transaction_state import atomic_json
 atomic_json(Path(sys.argv[1])/'prepared.no-effect.json', {'status':'NO_CONFIG_MUTATION_DISPATCHED'})
 PY
-  local args=("$action" --config "$WM_CONFIG_JSON" --runtime "$WM_RUNTIME_JSON" --runtime-view "$runtime_view" --route-id "$route_id" --template "$transaction/xray.before.json" --engine-binary "$engine" --output "$transaction")
+  local args=("$action" --config "$WM_CONFIG_JSON" --runtime "$WM_RUNTIME_JSON" --runtime-view "$runtime_view" --effective-config "$effective_config" --route-id "$route_id" --template "$transaction/xray.before.json" --engine-binary "$engine" --output "$transaction")
   if [[ "$action" == install ]]; then
     args+=(--plan "$plan")
   else
