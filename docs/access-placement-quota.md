@@ -1,8 +1,9 @@
 # Allocation-bound placement commands
 
-Status: local schema3 executor/transport implementation. SaaS reservation,
-database guards, final counter qualification and real engine/native acceptance
-are still required. This document does not enable finite or V2 admission.
+Status: schema3 protocol2 executor/transport source implementation. Paired SaaS
+reservation, database guards and counter qualification are implemented. Local
+source/platform proof does not enable finite or V2 admission; installed Node,
+public subscription delivery and service/fleet acceptance remain separate.
 Existing schema1/2 paths keep their existing contract until a local schema3
 fence is established. Stock 3x-ui quota overrun is accepted by the owner; Q
 bounds issued portions, rather than an exact dataplane byte cutoff.
@@ -127,3 +128,12 @@ must use current source and the exact paired SaaS contract before admission.
 against the pinned cached stock archive and a fixture-owned systemd service.
 It requires an owned disposable Linux VM and private loopback network namespace;
 it is not ordinary unit discovery or deployed Node acceptance.
+
+Local qualification includes68 combined placement unit cases with zero skips
+and one full stock3x-ui3.11.0/Xray26.10.21 Agent/CLI/systemd scenario. The latter
+proves old process/stream termination, disabled new authentication, sentinel
+reconnect, observed counter highwater and cached replay in an owned offline VM.
+The paired SaaS protocol has78 distinct qualified PostgreSQL scenarios across
+an original74 PASS and two fixture-only focused corrections of2 cases each;
+original failures remain retained. These figures are scoped local evidence,
+not one fresh complete hosted run. Current-head hosted checks remain required.
