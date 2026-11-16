@@ -32,7 +32,7 @@ def parse_inbounds(response):
     return values if isinstance(values, list) else []
 
 
-def evaluate(config, runtime, inbounds_response, template, overrides=None, now=None):
+def evaluate(config, runtime, inbounds_response, template, overrides=None, now=None, runtime_view=None):
     overrides = overrides or {}
     inbounds = parse_inbounds(inbounds_response)
     by_tag = {item.get("tag") or item.get("remark"): item for item in inbounds}
@@ -55,11 +55,11 @@ def evaluate(config, runtime, inbounds_response, template, overrides=None, now=N
             state = runtime.get("prepared_routes", {}).get(route["id"], {})
             timestamp = int(time.time()) if now is None else now
             try:
-                expected, binding = prepared_channels.compile_template(config, route["id"], plan, template, state, timestamp)
+                expected, binding = prepared_channels.compile_template(config, route["id"], plan, template, state, timestamp, runtime_view)
                 matches = expected == template
                 inbound = by_tag.get(route.get("entry", {}).get("inbound_tag"))
                 structural = matches and inbound is not None and inbound.get("enable", True) is True
-                fresh = state.get("binding") == binding and type(state.get("sample_at")) is int and 0 <= timestamp-state["sample_at"] <= plan["health"]["max_age_seconds"]
+                fresh = prepared_channels.state_is_current(state, binding, runtime_view, timestamp, plan["health"]["max_age_seconds"])
                 healthy_exits = {p["exit_id"] for p in plan["paths"] if fresh and state.get("paths", {}).get(p["id"], {}).get("status") == "healthy" and state["paths"][p["id"]].get("consecutive_successes", 0) > 0}
                 status = "misconfigured" if not structural else ("healthy" if len(healthy_exits) == len(plan["exits"]) else "degraded") if fresh and state.get("selected") else "blocked"
             except (KeyError, TypeError, ValueError):
@@ -145,9 +145,10 @@ def main():
     parser.add_argument("--inbounds", required=True)
     parser.add_argument("--template", required=True)
     parser.add_argument("--overrides", required=True)
+    parser.add_argument("--runtime-view", help="Independent settled executing instance/config view; absent means unqualified")
     parser.add_argument("--json", action="store_true")
     args = parser.parse_args()
-    rows = evaluate(load(args.config, {}), load(args.runtime, {}), load(args.inbounds, {}), load(args.template, {}), load(args.overrides, {}))
+    rows = evaluate(load(args.config, {}), load(args.runtime, {}), load(args.inbounds, {}), load(args.template, {}), load(args.overrides, {}), runtime_view=load(args.runtime_view) if args.runtime_view else None)
     print(render(rows, args.json))
 
 

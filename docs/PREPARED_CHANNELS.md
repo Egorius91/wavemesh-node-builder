@@ -30,15 +30,17 @@ and outbound renderer still own the relay credentials and TLS identity.
 After explicit runtime admission, the existing local mutation owner can use:
 
 ```sh
-wavemesh cascade auto prepared install --id europe --plan /protected/plan.json
-wavemesh cascade auto prepared reconcile --id europe
+wavemesh cascade auto prepared install --id europe --plan /protected/plan.json --runtime-view /protected/current-runtime.json
+wavemesh cascade auto prepared reconcile --id europe --runtime-view /protected/current-runtime.json --observations /protected/observations-v2.json
 ```
 
 These are source interface examples, not authorization to run on a VPS. Install
 requires an unpublished, materialized Auto Route and starts with its entire
-client inbound blocked. Reconcile checks every prepared full VLESS/XHTTP/TLS
-outbound through existing `testOutbound(mode=real)`, then selects only one
-admitted path. The backup outbounds already exist before failure. There is no
+client inbound blocked. Reconcile consumes the owning collector's complete
+qualified full-path observations, then selects only one admitted path. That
+collector must exercise each prepared VLESS/XHTTP/TLS outbound through the
+existing real data-path mechanism and bind executing instance/config before
+and after. The backup outbounds already exist before failure. There is no
 provider CREATE in this path. Legacy overrides/toggles cannot bypass a prepared
 plan. Existing SaaS admission must be integrated before public publication.
 
@@ -107,3 +109,34 @@ rotates those identities nor declares that limitation solved.
 Current-head hosted gates are required before merge. Live Node/VPN/Entry and
 PR8 Happ/INCY/fleet acceptance remain separate. Local source/native evidence
 cannot open production or finite-quota admission.
+
+## Process-bound observation v2 — integration in progress
+
+Stock engine evidence shows that panel HTTP success can precede replacement of
+the running Xray, even when executable version/hash and desired config match.
+Private observations therefore use schema2 with before/after process identity
+`{boot_id,pid,start_ticks}` and the qualified effective-config digest. Public
+channel/join descriptors remain version1. A schema1 private observation cannot
+establish prepared-route admission.
+
+The existing Agent collector must supply an independently CURRENT, SETTLED
+runtime view. Missing, ambiguous or pending transitions have no qualified view.
+Comparing a receipt to its own saved process metadata is insufficient. Compiler
+and health readers require the saved instance/readback to match that view and
+the exact supplied template. Process/readback changes reset path hysteresis;
+heartbeat/replay cannot extend collection-start freshness.
+
+The pure compiler/health/no-op checks and default-closed CLI boundary are
+implemented locally. A no-op routine tick updates only the atomic health file;
+an unchanged engine template is never POSTed just to refresh evidence. An actual
+POST retains its pending-effect guard even after HTTP success and cache readback.
+No pre-apply receipt is committed as post-apply health. A config-only change
+currently stops before POST pending coordinated metadata handling.
+
+PR2 confirmed that the production process/config collector does NOT yet exist;
+PID/start_ticks collection so far is a native-fixture mechanism. Observation
+production, executing-config qualification, pending-transition settlement and
+collector/Agent/SaaS integration remain actual dependencies. A mutable panel
+GetConfig/cache is not an authoritative executing-config view. The historical native fixture
+and its schema1 observations do not qualify this new process-bound contract.
+Do not use this working draft as an installed/runtime acceptance release.

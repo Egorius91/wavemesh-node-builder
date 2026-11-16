@@ -13,6 +13,7 @@ import re
 import sys
 import subprocess
 import time
+import uuid
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
@@ -32,6 +33,59 @@ def digest(value):
 def shape(value, keys, label):
     if not isinstance(value, dict) or set(value) != set(keys):
         raise ValueError(f"unsupported {label} shape")
+
+
+def validate_engine_instance(value):
+    """PID alone is reusable; the qualified collector supplies the boot too."""
+    shape(value, ("boot_id", "pid", "start_ticks"), "engine process instance")
+    boot = value["boot_id"]
+    if not isinstance(boot, str) or str(uuid.UUID(boot)) != boot:
+        raise ValueError("engine boot identity is not canonical")
+    if type(value["pid"]) is not int or value["pid"] <= 0:
+        raise ValueError("engine PID is not a positive integer")
+    ticks = value["start_ticks"]
+    if not isinstance(ticks, str) or not re.fullmatch(r"0|[1-9][0-9]*", ticks):
+        raise ValueError("engine start_ticks are not canonical")
+    return copy.deepcopy(value)
+
+
+def validate_runtime_view(value):
+    """An independently collected SETTLED view, never copied from saved state.
+
+    Pending/ambiguous transitions have no qualified view. The existing Agent
+    collector owns this input; a heartbeat does not create a path observation.
+    """
+    shape(value, ("engine_instance", "effective_config_sha256"), "current engine view")
+    validate_engine_instance(value["engine_instance"])
+    if not isinstance(value["effective_config_sha256"], str) or not HASH.fullmatch(value["effective_config_sha256"]):
+        raise ValueError("effective engine readback hash is required")
+    return copy.deepcopy(value)
+
+
+def state_is_current(state, binding, runtime_view, now, max_age):
+    try:
+        view = validate_runtime_view(runtime_view)
+        return (state.get("binding") == binding
+                and state.get("engine_instance") == view["engine_instance"]
+                and state.get("effective_config_sha256") == view["effective_config_sha256"]
+                and type(state.get("sample_at")) is int
+                and 0 <= now-state["sample_at"] <= max_age)
+    except (KeyError, TypeError, ValueError, AttributeError):
+        return False
+
+
+def template_needs_update(candidate, effective_template, runtime_view):
+    """A no-op tick never restarts the engine merely to refresh health.
+
+    The collector must qualify the effective input against the executing
+    instance. A panel template/cache alone does not satisfy this boundary.
+    """
+    view = validate_runtime_view(runtime_view)
+    if view["effective_config_sha256"] != digest(effective_template):
+        raise ValueError("template comparison lacks qualified effective readback")
+    xray_template.validate_log_policy(candidate)
+    xray_template.validate_eu_only(candidate)
+    return candidate != effective_template
 
 
 def channel_descriptor(engine):
@@ -122,22 +176,29 @@ def bound_plan(config, route_id, plan):
     return route, outbounds, binding
 
 
-def select_paths(plan, binding, previous, observations, now):
+def select_paths(plan, binding, previous, observations, now, runtime_view=None):
     """One distinct fresh complete-path sample per interval; unknown means block.
 
     Hysteresis delays recovery and ordinary failover. An all-paths-down sample
     blocks immediately; cooldown can never keep a forwarding path alive there.
     """
-    shape(observations, ("schema_version", "binding", "engine", "at", "paths"), "path observations")
-    if type(observations["schema_version"]) is not int or observations["schema_version"] != 1 or observations["binding"] != binding or observations["engine"] != plan["channel"]["engine"]:
+    view = validate_runtime_view(runtime_view)
+    shape(observations, ("schema_version", "binding", "engine", "at", "paths", "engine_instance_before", "engine_instance_after", "effective_config_sha256"), "path observations")
+    if type(observations["schema_version"]) is not int or observations["schema_version"] != 2 or observations["binding"] != binding or observations["engine"] != plan["channel"]["engine"]:
         raise ValueError("stale path observation binding")
+    before = validate_engine_instance(observations["engine_instance_before"])
+    after = validate_engine_instance(observations["engine_instance_after"])
+    if before != after or after != view["engine_instance"] or observations["effective_config_sha256"] != view["effective_config_sha256"]:
+        raise ValueError("engine process or effective configuration changed during/after collection")
     at = observations["at"]
-    if type(at) is not int or type(now) is not int or not 0 <= now-at <= plan["health"]["max_age_seconds"]:
+    if type(at) is not int or type(now) is not int or at < 0 or now < 0 or not 0 <= now-at <= plan["health"]["max_age_seconds"]:
         raise ValueError("path observations expired or from the future")
     expected = {p["id"] for p in plan["paths"]}
     if not isinstance(observations["paths"], dict) or set(observations["paths"]) != expected or any(type(v) is not bool for v in observations["paths"].values()):
         raise ValueError("complete boolean VPN-path observations are required")
-    previous = previous if previous.get("binding") == binding else {}
+    previous = previous if (previous.get("binding") == binding
+                            and previous.get("engine_instance") == after
+                            and previous.get("effective_config_sha256") == view["effective_config_sha256"]) else {}
     last = previous.get("sample_at")
     if last is not None and at-last < plan["health"]["sample_interval_seconds"]:
         raise ValueError("replayed or too frequent health sample")
@@ -164,10 +225,11 @@ def select_paths(plan, binding, previous, observations, now):
             selected = None
         if selected != current and selected is not None:
             switched_at = at
-    return {"binding": binding, "sample_at": at, "switched_at": switched_at, "selected": selected, "paths": counters}
+    return {"binding": binding, "sample_at": at, "switched_at": switched_at, "selected": selected, "paths": counters,
+            "engine_instance": after, "effective_config_sha256": view["effective_config_sha256"]}
 
 
-def compile_template(config, route_id, plan, template, state=None, now=None):
+def compile_template(config, route_id, plan, template, state=None, now=None, runtime_view=None):
     route, outbounds, binding = bound_plan(config, route_id, plan)
     result = copy.deepcopy(template)
     xray_template.ensure_block_outbound(result)
@@ -184,7 +246,9 @@ def compile_template(config, route_id, plan, template, state=None, now=None):
     # A direct rule selects only an admitted prepared path, and observes ALL
     # backups. Block is the initial state and is independent of probe timing.
     now = int(time.time()) if now is None else now
-    selected = state.get("selected") if state and state.get("binding") == binding and type(state.get("sample_at")) is int and 0 <= now-state["sample_at"] <= plan["health"]["max_age_seconds"] else None
+    if runtime_view is not None and validate_runtime_view(runtime_view)["effective_config_sha256"] != digest(template):
+        raise ValueError("current engine view does not bind the supplied effective template")
+    selected = state.get("selected") if state and state_is_current(state, binding, runtime_view, now, plan["health"]["max_age_seconds"]) else None
     if selected not in {p["id"] for p in plan["paths"]}:
         selected = None
     rule = next(r for r in result["routing"]["rules"] if r.get("ruleTag") == args[2])
@@ -210,7 +274,7 @@ def check_engine(plan, binary):
         raise ValueError("installed Xray version differs from the prepared plan")
 
 
-def stage(config, runtime, route_id, plan, template, observations=None, now=None):
+def stage(config, runtime, route_id, plan, template, observations=None, now=None, runtime_view=None):
     candidate = copy.deepcopy(config)
     route, _, _ = bound_plan(candidate, route_id, plan)
     if route.get("presentation", {}).get("published"):
@@ -221,9 +285,9 @@ def stage(config, runtime, route_id, plan, template, observations=None, now=None
     _, _, binding = bound_plan(candidate, route_id, plan)
     observed = copy.deepcopy(runtime or {})
     previous = observed.setdefault("prepared_routes", {}).get(route_id, {})
-    state = select_paths(plan, binding, previous, observations, now) if observations is not None else {"binding": binding, "selected": None}
+    state = select_paths(plan, binding, previous, observations, now, runtime_view) if observations is not None else {"binding": binding, "selected": None}
     observed["prepared_routes"][route_id] = state
-    result, _ = compile_template(candidate, route_id, plan, template, state, now)
+    result, _ = compile_template(candidate, route_id, plan, template, state, now, runtime_view)
     return candidate, observed, result, binding
 
 
@@ -235,6 +299,7 @@ def main():
     parser.add_argument("--plan")
     parser.add_argument("--template", required=True)
     parser.add_argument("--runtime")
+    parser.add_argument("--runtime-view", help="Independent settled process/effective-config view from the owning collector")
     parser.add_argument("--observations")
     parser.add_argument("--engine-binary")
     parser.add_argument("--output", required=True, help="Private transaction directory")
@@ -251,29 +316,52 @@ def main():
             raise ValueError("installed engine readback check is required")
         check_engine(plan, args.engine_binary)
         desired = load(directory/"prepared.xray.json")
-        if desired != load(args.template):
+        effective = load(args.template)
+        if desired != effective:
             raise ValueError("prepared route readback differs from the complete candidate")
         xray_template.validate_eu_only(desired)
+        view = validate_runtime_view(load(args.runtime_view) if args.runtime_view else None)
+        if view["effective_config_sha256"] != digest(effective):
+            raise ValueError("verification requires qualified executing configuration, not panel cache")
+        _, _, binding = bound_plan(config, args.route_id, plan)
+        state = load(directory/"prepared.runtime.json", {}).get("prepared_routes", {}).get(args.route_id, {})
+        now = int(time.time())
+        if state.get("selected") not in {p["id"] for p in plan["paths"]} or not state_is_current(state, binding, view, now, plan["health"]["max_age_seconds"]):
+            raise ValueError("current engine has no qualified fresh path observation")
+        expected, _ = compile_template(config, args.route_id, plan, effective, state, now, view)
+        if expected != effective:
+            raise ValueError("current path observation differs from executing route selection")
         return
     if not args.engine_binary:
         raise ValueError("installed engine check is required")
     check_engine(plan, args.engine_binary)
     if args.command == "probe-input":
+        runtime_view = validate_runtime_view(load(args.runtime_view) if args.runtime_view else None)
+        if runtime_view["effective_config_sha256"] != digest(load(args.template)):
+            raise ValueError("probe preparation requires qualified effective readback")
         _, outbounds, binding = bound_plan(config, args.route_id, plan)
         for path, outbound in zip(plan["paths"], outbounds):
             runtime_state.atomic(directory/f"probe-{path['id']}.json", outbound)
-        runtime_state.atomic(directory/"probe-input.json", {"schema_version": 1, "binding": binding, "engine": plan["channel"]["engine"], "at": int(time.time()), "paths": {p["id"]: False for p in plan["paths"]}})
+        # Intentionally incomplete: only the owning collector may supply a
+        # separately observed AFTER identity and completed path results.
+        runtime_state.atomic(directory/"probe-input.json", {"schema_version": 2, "binding": binding, "engine": plan["channel"]["engine"], "at": int(time.time()),
+                            "engine_instance_before": runtime_view["engine_instance"], "engine_instance_after": None,
+                            "effective_config_sha256": runtime_view["effective_config_sha256"], "paths": {p["id"]: False for p in plan["paths"]}})
         return
     now = int(time.time())
+    runtime_view = load(args.runtime_view) if args.runtime_view else None
     observations = load(args.observations) if args.observations else None
     if args.command == "reconcile" and observations is None:
         raise ValueError("reconcile requires complete fresh path observations")
-    candidate, runtime, template, binding = stage(config, load(args.runtime, {}), args.route_id, plan, load(args.template), observations, now)
+    effective_template = load(args.template)
+    candidate, runtime, template, binding = stage(config, load(args.runtime, {}), args.route_id, plan, effective_template, observations, now, runtime_view)
     runtime_state.atomic(directory/"prepared.config.json", candidate)
     runtime_state.atomic(directory/"prepared.runtime.json", runtime)
     runtime_state.atomic(directory/"prepared.xray.json", template)
     runtime_state.atomic(directory/"prepared.descriptor.json", public_descriptor(plan))
     runtime_state.atomic(directory/"prepared.binding.json", {"binding": binding, "capability": CAPABILITY})
+    if runtime_view is not None:
+        runtime_state.atomic(directory/"prepared.update.json", {"update_required": template_needs_update(template, effective_template, runtime_view)})
     # Parse the exact candidate with the same installed engine before mutation.
     subprocess.run([args.engine_binary, "run", "-test", "-config", str(directory/"prepared.xray.json")], stdin=subprocess.DEVNULL, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, timeout=15, check=True)
 

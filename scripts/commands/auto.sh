@@ -8,17 +8,21 @@ WM_PREPARED_TOOL="$WM_LIB_DIR/lib/prepared_channels.py"
 # One local mutation owner. Repeated health ticks belong to the existing Agent
 # integration; this command never starts a provider operation or edits rights.
 wm_auto_prepared() {
-  local action="${1:-}" auto_id="auto-europe" plan="" engine="/usr/local/x-ui/bin/xray-linux-amd64"
+  local action="${1:-}" auto_id="auto-europe" plan="" runtime_view="" observations="" engine="/usr/local/x-ui/bin/xray-linux-amd64"
   [[ "$action" == install || "$action" == reconcile ]] || wm_fail "Usage: wavemesh cascade auto prepared install --plan FILE | reconcile [--id ID]"
   shift
   while [[ $# -gt 0 ]]; do
     case "$1" in
       --id) auto_id="${2:-}"; shift 2 ;;
       --plan) plan="${2:-}"; shift 2 ;;
+      --runtime-view) runtime_view="${2:-}"; shift 2 ;;
+      --observations) observations="${2:-}"; shift 2 ;;
       *) wm_fail "Unknown prepared route option" ;;
     esac
   done
   [[ "$action" != install || -n "$plan" ]] || wm_fail "Prepared route install requires a private plan"
+  [[ -n "$runtime_view" ]] || wm_fail "Prepared routes require an independent settled process/effective-config collector view"
+  [[ "$action" != reconcile || -n "$observations" ]] || wm_fail "Prepared reconcile requires collector-qualified observationv2"
   wm_lock_mutation "auto-prepared-$action"; wm_load_config; wm_require_entry_role
   wm_transaction_begin "auto-prepared-$action"
   local transaction="$WM_ACTIVE_TRANSACTION" route_id="route-auto-${auto_id}" path_id probe_file result=0
@@ -29,24 +33,32 @@ sys.path.insert(0,sys.argv[2])
 from transaction_state import atomic_json
 atomic_json(Path(sys.argv[1])/'prepared.no-effect.json', {'status':'NO_CONFIG_MUTATION_DISPATCHED'})
 PY
-  local args=("$action" --config "$WM_CONFIG_JSON" --runtime "$WM_RUNTIME_JSON" --route-id "$route_id" --template "$transaction/xray.before.json" --engine-binary "$engine" --output "$transaction")
+  local args=("$action" --config "$WM_CONFIG_JSON" --runtime "$WM_RUNTIME_JSON" --runtime-view "$runtime_view" --route-id "$route_id" --template "$transaction/xray.before.json" --engine-binary "$engine" --output "$transaction")
   if [[ "$action" == install ]]; then
     args+=(--plan "$plan")
   else
-    python3 "$WM_PREPARED_TOOL" probe-input --config "$WM_CONFIG_JSON" --route-id "$route_id" --template "$transaction/xray.before.json" --engine-binary "$engine" --output "$transaction" || wm_fail "Prepared probe admission failed"
-    while IFS= read -r path_id; do
-      probe_file="$transaction/probe-${path_id}.json"; result=0
-      wm_xray_test_outbound "$probe_file" "$transaction/xray.before.json" >/dev/null 2>&1 && result=1
-      python3 - "$transaction/probe-input.json" "$path_id" "$result" <<'PY' || wm_fail "Could not record prepared path probe"
-import json,sys
-from pathlib import Path
-p=Path(sys.argv[1]); d=json.loads(p.read_text()); d['paths'][sys.argv[2]]=sys.argv[3]=='1'; p.write_text(json.dumps(d)+'\n')
-PY
-    done < <(python3 -c 'import json,sys; print("\n".join(json.load(open(sys.argv[1]))["paths"]))' "$transaction/probe-input.json")
-    # Keep the collection START timestamp. Slow probes cannot extend freshness.
-    args+=(--observations "$transaction/probe-input.json")
+    # The existing Agent collector must bind full-path samples to the ACTUAL
+    # executing instance before/after. The old template-only probe cannot mint
+    # that proof; missing production collection remains default closed.
+    args+=(--observations "$observations")
   fi
   python3 "$WM_PREPARED_TOOL" "${args[@]}" || wm_fail "Prepared route compilation/native validation failed"
+  if python3 - "$transaction/prepared.update.json" <<'PY'
+import json,sys
+sys.exit(0 if json.load(open(sys.argv[1]))['update_required'] is False else 1)
+PY
+  then
+    python3 - "$transaction/prepared.config.json" "$WM_CONFIG_JSON" <<'PY' || wm_fail "Prepared config-only change awaits coordinated metadata commit; no engine POST dispatched"
+import json,sys
+sys.exit(0 if json.load(open(sys.argv[1]))==json.load(open(sys.argv[2])) else 1)
+PY
+    # Only the atomic health file changes on a routine no-op tick. No panel
+    # POST, config rewrite, service restart or credential mutation is needed.
+    wm_atomic_install_json "$transaction/prepared.runtime.json" "$WM_RUNTIME_JSON"
+    wm_transaction_commit "$transaction"
+    wm_success "Prepared EU-only health refreshed without engine update"
+    return 0
+  fi
   python3 - "$transaction" "$WM_LIB_DIR/lib" <<'PY' || wm_fail "Could not retain prepared dispatch guard"
 import json,sys
 from pathlib import Path
@@ -54,17 +66,15 @@ sys.path.insert(0,sys.argv[2])
 from transaction_state import atomic_json
 from prepared_channels import digest
 directory=Path(sys.argv[1])
-atomic_json(directory/'prepared.apply.pending.json', {'status':'UNKNOWN_UNTIL_HTTP_SUCCESS','candidate_sha256':digest(json.loads((directory/'prepared.xray.json').read_text()))})
+atomic_json(directory/'prepared.apply.pending.json', {'status':'UNKNOWN_UNTIL_QUALIFIED_ENGINE_TRANSITION','candidate_sha256':digest(json.loads((directory/'prepared.xray.json').read_text()))})
 PY
   rm -f "$transaction/prepared.no-effect.json"
   wm_xray_apply_template "$transaction/prepared.xray.json" || wm_fail "Prepared route apply failed"
-  rm -f "$transaction/prepared.apply.pending.json"
   wm_xray_get_template "$transaction/prepared.readback.json" || wm_fail "Prepared route readback failed"
-  python3 "$WM_PREPARED_TOOL" verify --config "$transaction/prepared.config.json" --route-id "$route_id" --template "$transaction/prepared.readback.json" --engine-binary "$engine" --output "$transaction" || wm_fail "Prepared route validation failed"
-  wm_atomic_install_json "$transaction/prepared.config.json" "$WM_CONFIG_JSON"
-  wm_atomic_install_json "$transaction/prepared.runtime.json" "$WM_RUNTIME_JSON"
-  wm_export_config_env_from_json; wm_transaction_commit "$transaction"
-  wm_success "Prepared EU-only route reconciled"
+  # HTTP success plus mutable panel GetConfig is not a settled engine proof.
+  # Retain candidate/snapshot/pending debt for the owning qualifier. Never
+  # relabel pre-apply samples as observations of a replacement process.
+  wm_fail "Prepared update retained pending qualified engine transition; collector/settlement integration is not installed"
 }
 
 wm_auto_create() {

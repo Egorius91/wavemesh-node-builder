@@ -1,0 +1,29 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://wavemesh.local/schemas/prepared-observation-v2.schema.json",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["schema_version", "binding", "engine", "at", "paths", "engine_instance_before", "engine_instance_after", "effective_config_sha256"],
+  "properties": {
+    "schema_version": {"const": 2},
+    "binding": {"$ref": "#/$defs/hash"},
+    "engine": {"$ref": "prepared-channel-plan-v1.schema.json#/$defs/channel/properties/engine"},
+    "at": {"type": "integer", "minimum": 0},
+    "paths": {"type": "object", "minProperties": 2, "maxProperties": 4, "propertyNames": {"pattern": "^[a-z0-9][a-z0-9-]{1,47}$"}, "additionalProperties": {"type": "boolean"}},
+    "engine_instance_before": {"$ref": "#/$defs/instance"},
+    "engine_instance_after": {"$ref": "#/$defs/instance"},
+    "effective_config_sha256": {"$ref": "#/$defs/hash"}
+  },
+  "$defs": {
+    "hash": {"type": "string", "pattern": "^[a-f0-9]{64}$"},
+    "instance": {
+      "type": "object", "additionalProperties": false,
+      "required": ["boot_id", "pid", "start_ticks"],
+      "properties": {
+        "boot_id": {"type": "string", "pattern": "^[a-f0-9]{8}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{12}$"},
+        "pid": {"type": "integer", "minimum": 1},
+        "start_ticks": {"type": "string", "pattern": "^(0|[1-9][0-9]*)$"}
+      }
+    }
+  }
+}

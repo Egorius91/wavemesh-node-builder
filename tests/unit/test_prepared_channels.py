@@ -5,6 +5,7 @@ import json
 import sys
 import tempfile
 import unittest
+from unittest import mock
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[2]
@@ -40,11 +41,18 @@ class PreparedChannels(unittest.TestCase):
     def setUp(self):
         self.config, self.plan, self.template = fixture()
         self.config, self.runtime, self.initial, self.binding = channels.stage(self.config, {}, "route-auto-europe", self.plan, self.template, now=100)
+        self.view = {"engine_instance": {"boot_id": "00000000-0000-4000-8000-000000000001", "pid": 123, "start_ticks": "1000"}, "effective_config_sha256": channels.digest(self.initial)}
 
-    def sample(self, at, live=None, previous=None):
+    def observation(self, at, values, view=None):
+        view = self.view if view is None else view
+        return {"schema_version": 2, "binding": self.binding, "engine": self.plan["channel"]["engine"], "at": at, "paths": values,
+                "engine_instance_before": copy.deepcopy(view["engine_instance"]), "engine_instance_after": copy.deepcopy(view["engine_instance"]),
+                "effective_config_sha256": view["effective_config_sha256"]}
+
+    def sample(self, at, live=None, previous=None, view=None):
         values = {p["id"]: True for p in self.plan["paths"]} if live is None else live
-        observation = {"schema_version": 1, "binding": self.binding, "engine": self.plan["channel"]["engine"], "at": at, "paths": values}
-        return channels.select_paths(self.plan, self.binding, previous or {}, observation, at)
+        view = self.view if view is None else view
+        return channels.select_paths(self.plan, self.binding, previous or {}, self.observation(at, values, view), at, view)
 
     def rule(self, template):
         return next(r for r in template["routing"]["rules"] if r.get("ruleTag") == "wm-rule-auto-europe")
@@ -76,7 +84,7 @@ class PreparedChannels(unittest.TestCase):
         self.assertEqual(third["selected"], "upcloud-v4")
         fourth = self.sample(130, live, third)
         self.assertEqual(fourth["selected"], "upcloud-v6")
-        compiled, _ = channels.compile_template(self.config, "route-auto-europe", self.plan, self.initial, fourth, now=130)
+        compiled, _ = channels.compile_template(self.config, "route-auto-europe", self.plan, self.initial, fourth, now=130, runtime_view=self.view)
         self.assertEqual(self.rule(compiled)["outboundTag"], "wm-exit-path-upcloud-v6")
 
     def test_exit_failure_selects_other_provider(self):
@@ -150,20 +158,22 @@ class PreparedChannels(unittest.TestCase):
         self.assertEqual(binding, self.binding)
 
     def test_observation_freshness_and_complete_binding(self):
-        observation = {"schema_version": 1, "binding": self.binding, "engine": self.plan["channel"]["engine"], "at": 100, "paths": {p["id"]: True for p in self.plan["paths"]}}
+        observation = self.observation(100, {p["id"]: True for p in self.plan["paths"]})
         for at in (99, 141):
-            with self.assertRaises(ValueError): channels.select_paths(self.plan, self.binding, {}, observation, at)
+            with self.assertRaises(ValueError): channels.select_paths(self.plan, self.binding, {}, observation, at, self.view)
         for mutate in (lambda o: o.update(binding="f"*64), lambda o: o["paths"].pop("upcloud-v4"), lambda o: o["paths"].update({"upcloud-v4": 1}), lambda o: o.update(schema_version=True), lambda o: o.update(engine={"name": "unknown"})):
             invalid = copy.deepcopy(observation); mutate(invalid)
-            with self.assertRaises(ValueError): channels.select_paths(self.plan, self.binding, {}, invalid, 100)
+            with self.assertRaises(ValueError): channels.select_paths(self.plan, self.binding, {}, invalid, 100, self.view)
+        invalid = copy.deepcopy(observation); invalid["at"] = -1
+        with self.assertRaises(ValueError): channels.select_paths(self.plan, self.binding, {}, invalid, 0, self.view)
 
     def test_cooldown_cannot_be_bypassed_by_blocked_tick(self):
         plan = copy.deepcopy(self.plan); plan["health"]["cooldown_seconds"] = 60
         state = self.sample(110, previous=self.sample(100))
         live = {p["id"]: p["id"] != "upcloud-v4" for p in self.plan["paths"]}
         def tick(at, previous):
-            observation = {"schema_version": 1, "binding": self.binding, "engine": self.plan["channel"]["engine"], "at": at, "paths": live}
-            return channels.select_paths(plan, self.binding, previous, observation, at)
+            observation = self.observation(at, live)
+            return channels.select_paths(plan, self.binding, previous, observation, at, self.view)
         state = tick(120, state)
         state = tick(130, state)
         self.assertIsNone(state["selected"])
@@ -177,11 +187,115 @@ class PreparedChannels(unittest.TestCase):
         row = auto_health.evaluate(self.config, self.runtime, inbound, self.initial, now=100)[0]
         self.assertEqual(row["status"], "blocked")
         state = self.sample(110, previous=self.sample(100))
-        template, _ = channels.compile_template(self.config, "route-auto-europe", self.plan, self.initial, state, now=110)
+        template, _ = channels.compile_template(self.config, "route-auto-europe", self.plan, self.initial, state, now=110, runtime_view=self.view)
+        view = {**self.view, "effective_config_sha256": channels.digest(template)}
+        state = self.sample(120, previous=state, view=view)
+        self.assertIsNone(state["selected"])
+        state = self.sample(130, previous=state, view=view)
         runtime = {"prepared_routes": {"route-auto-europe": state}}
-        row = auto_health.evaluate(self.config, runtime, inbound, template, now=110)[0]
+        row = auto_health.evaluate(self.config, runtime, inbound, template, now=130, runtime_view=view)[0]
         self.assertEqual((row["status"], row["healthy_exits"], row["evidence_scope"]), ("healthy", 2, "local-entry-path-only"))
-        self.assertNotEqual(auto_health.evaluate(self.config, runtime, inbound, template, now=151)[0]["status"], "healthy")
+        self.assertNotEqual(auto_health.evaluate(self.config, runtime, inbound, template, now=171, runtime_view=view)[0]["status"], "healthy")
+
+    def test_new_process_cannot_reuse_selection_with_identical_engine_and_config(self):
+        state = self.sample(110, previous=self.sample(100))
+        replacement = copy.deepcopy(self.view)
+        replacement["engine_instance"]["pid"] += 1
+        result, _ = channels.compile_template(self.config, "route-auto-europe", self.plan, self.initial, state, now=120, runtime_view=replacement)
+        self.assertEqual(self.rule(result)["outboundTag"], xray.BLOCK_TAG)
+        recovered = self.sample(120, previous=state, view=replacement)
+        self.assertIsNone(recovered["selected"])
+        self.assertEqual(recovered["paths"]["upcloud-v4"]["consecutive_successes"], 1)
+        recovered = self.sample(130, previous=recovered, view=replacement)
+        self.assertEqual(recovered["selected"], "upcloud-v4")
+
+    def test_pid_reuse_and_reboot_invalidate_old_process(self):
+        state = self.sample(110, previous=self.sample(100))
+        for field, value in (("start_ticks", "1001"), ("boot_id", "00000000-0000-4000-8000-000000000002")):
+            view = copy.deepcopy(self.view); view["engine_instance"][field] = value
+            self.assertFalse(channels.state_is_current(state, self.binding, view, 110, 40))
+
+    def test_current_instance_must_be_independent_of_saved_receipt(self):
+        state = self.sample(110, previous=self.sample(100))
+        self.assertFalse(channels.state_is_current(state, self.binding, None, 110, 40))
+        result, _ = channels.compile_template(self.config, "route-auto-europe", self.plan, self.initial, state, now=110)
+        self.assertEqual(self.rule(result)["outboundTag"], xray.BLOCK_TAG)
+
+    def test_collection_races_effective_config_and_old_schema_refuse(self):
+        live = {p["id"]: True for p in self.plan["paths"]}
+        for mutate in (lambda o: o["engine_instance_after"].update(start_ticks="1001"),
+                       lambda o: o.update(effective_config_sha256="f"*64),
+                       lambda o: o.update(schema_version=1),
+                       lambda o: o.pop("engine_instance_before")):
+            observation = self.observation(100, live); mutate(observation)
+            with self.assertRaises(ValueError): channels.select_paths(self.plan, self.binding, {}, observation, 100, self.view)
+        with self.assertRaises(ValueError): channels.select_paths(self.plan, self.binding, {}, self.observation(100, live), 100, None)
+
+    def test_process_metadata_is_strict(self):
+        for field, value in (("pid", True), ("pid", 0), ("start_ticks", "01000"), ("start_ticks", 1000), ("boot_id", "unknown")):
+            instance = copy.deepcopy(self.view["engine_instance"]); instance[field] = value
+            with self.assertRaises(ValueError): channels.validate_engine_instance(instance)
+
+    def test_live_view_cannot_describe_another_effective_template(self):
+        view = copy.deepcopy(self.view); view["effective_config_sha256"] = "f"*64
+        with self.assertRaises(ValueError): channels.compile_template(self.config, "route-auto-europe", self.plan, self.initial, now=100, runtime_view=view)
+
+    def test_unchanged_template_needs_no_post_but_restart_still_invalidates_health(self):
+        self.assertFalse(channels.template_needs_update(self.initial, self.initial, self.view))
+        state = self.sample(110, previous=self.sample(100))
+        new_view = copy.deepcopy(self.view); new_view["engine_instance"]["start_ticks"] = "2000"
+        self.assertFalse(channels.template_needs_update(self.initial, self.initial, new_view))
+        self.assertFalse(channels.state_is_current(state, self.binding, new_view, 110, 40))
+        with self.assertRaises(ValueError): channels.template_needs_update(self.initial, self.initial, None)
+
+    def test_changed_desired_route_requires_update_and_qualified_readback(self):
+        state = self.sample(110, previous=self.sample(100))
+        selected, _ = channels.compile_template(self.config, "route-auto-europe", self.plan, self.initial, state, now=110, runtime_view=self.view)
+        self.assertTrue(channels.template_needs_update(selected, self.initial, self.view))
+        stale_view = copy.deepcopy(self.view); stale_view["effective_config_sha256"] = "f"*64
+        with self.assertRaises(ValueError): channels.template_needs_update(selected, self.initial, stale_view)
+
+    def test_probe_preparation_cannot_mint_a_completed_process_observation(self):
+        with tempfile.TemporaryDirectory() as name:
+            directory = Path(name)
+            for file, data in (("config.json", self.config), ("effective.json", self.initial), ("view.json", self.view)):
+                (directory/file).write_text(json.dumps(data))
+            argv = ["prepared_channels.py", "probe-input", "--config", str(directory/"config.json"), "--route-id", "route-auto-europe", "--template", str(directory/"effective.json"), "--runtime-view", str(directory/"view.json"), "--engine-binary", "synthetic-not-executed", "--output", str(directory)]
+            with mock.patch.object(sys, "argv", argv), mock.patch.object(channels, "check_engine"):
+                channels.main()
+            observation = json.loads((directory/"probe-input.json").read_text())
+            self.assertEqual(observation["schema_version"], 2)
+            self.assertIsNone(observation["engine_instance_after"])
+            with self.assertRaises(ValueError): channels.select_paths(self.plan, self.binding, {}, observation, observation["at"], self.view)
+
+    def verify_cli(self, state, effective, view):
+        with tempfile.TemporaryDirectory() as name:
+            directory = Path(name)
+            for file, data in (("config.json", self.config), ("effective.json", effective), ("prepared.xray.json", effective), ("prepared.runtime.json", {"prepared_routes": {"route-auto-europe": state}})):
+                (directory/file).write_text(json.dumps(data))
+            argv = ["prepared_channels.py", "verify", "--config", str(directory/"config.json"), "--route-id", "route-auto-europe", "--template", str(directory/"effective.json"), "--engine-binary", "synthetic-not-executed", "--output", str(directory)]
+            if view is not None:
+                (directory/"view.json").write_text(json.dumps(view)); argv += ["--runtime-view", str(directory/"view.json")]
+            with mock.patch.object(sys, "argv", argv), mock.patch.object(channels, "check_engine"), mock.patch.object(channels.time, "time", return_value=130):
+                channels.main()
+
+    def test_cache_equality_cannot_replace_current_process_or_route_proof(self):
+        state = self.sample(110, previous=self.sample(100))
+        with self.assertRaisesRegex(ValueError, "current engine view"):
+            self.verify_cli(state, self.initial, None)
+        with self.assertRaisesRegex(ValueError, "executing route selection"):
+            self.verify_cli(state, self.initial, self.view)
+
+    def test_verify_rejects_replacement_even_with_identical_template(self):
+        state = self.sample(110, previous=self.sample(100))
+        effective, _ = channels.compile_template(self.config, "route-auto-europe", self.plan, self.initial, state, now=110, runtime_view=self.view)
+        view = {**self.view, "effective_config_sha256": channels.digest(effective)}
+        state = self.sample(120, previous=state, view=view)
+        state = self.sample(130, previous=state, view=view)
+        self.verify_cli(state, effective, view)
+        replacement = copy.deepcopy(view); replacement["engine_instance"]["start_ticks"] = "9999"
+        with self.assertRaisesRegex(ValueError, "no qualified fresh path"):
+            self.verify_cli(state, effective, replacement)
 
     def test_unsafe_rollback_snapshot_cannot_restore_direct(self):
         with self.assertRaises(ValueError): xray.validate_eu_only(self.template, self.config)
