@@ -97,3 +97,29 @@ in source-manifest.json. No native reservation remains. This proves the bounded
 consumer, not public TLS, physical deny, full producer/realEntry, production trust
 or readiness. Subsequent source changes require applicability checks; another
 native phase requires coordination and fresh admission.
+
+
+ROOT793 source integration adds prepared_evaluation.evaluate(config, runtime,
+route_id, stored_template, observations), a private in-memory preview only. It
+requires one existing materialized unpublished prepared route with its stored
+plan and the fixed stock26.10.21/core pin. Fresh collect() is called inside the
+function; there is no caller-supplied execution view or cached-success fallback.
+Time is sampled after collection. Existing stage/currentness/continuity/no-op
+helpers compile complete observationv3 against the fresh full execution.
+
+The result contains private candidate config/runtime/template, binding,
+update_required and exact expected_execution generation/epoch. It always states
+candidate_only:true, applied:false, settled:false, deny_outcome:not_verified and
+capability:false. It creates no files, refreshes no health, clears no debt and
+dispatches no writer. Existing UNKNOWN/pending transaction files remain outside
+this evaluator and untouched. A no-op is not settlement. Do not persist the
+candidate runtime as accepted health or feed it to the current shell writer.
+
+Focused source integration proof:10 tests PASS0skip using the actual compiler
+and a synthetic collect fixture, including no-op/debt/input preservation, all-
+down candidate, stale equal-JSON epoch/ABA/new generation, process/hash/binding/
+freshness/incomplete-input refusals, fixed engine, collector refusal without
+fallback, side-effect traps and fresh exact CAS context. Compiler45/reader20/
+owner21+17/native7 remain scoped to their unchanged source pins; this evaluator
+has no native acceptance. Full producer/real Entry TLS/actual CAS-persistence-
+settlement/watchdog and physical flow gates remain open.

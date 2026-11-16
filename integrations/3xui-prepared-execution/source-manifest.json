@@ -1,7 +1,7 @@
 {
   "schema": 1,
-  "status": "SCOPED_SYNTHETIC_NATIVE_CONSUMER_PASS_FULL_PR4_OPEN",
-  "at_utc": "2026-11-16T18:23:06.960372+00:00",
+  "status": "SOURCE_READONLY_EVALUATION_PASS_SCOPED_NATIVE_READER_RETAINED_FULL_PR4_OPEN",
+  "at_utc": "2026-11-16T18:48:47.032934+00:00",
   "upstream": {
     "repository": "https://github.com/MHSanaei/3x-ui",
     "tag": "v3.11.0",
@@ -214,6 +214,44 @@
       "current_production_approval": null,
       "native_execution": false,
       "integration": "Library returns only private in-memory data; no installed caller, Agent or health transport."
+    },
+    "read_only_evaluation": {
+      "status": "SOURCE_INTEGRATION_PASS_NATIVE_NOT_RUN",
+      "ack": 793,
+      "proposal_sha256": "a1f54c059560c6bc493499f046a5bb83a60a4b81f317b1dd05b8cd315b48c208",
+      "base": "75906f4088284823ef0ee7331514eacffd81e356",
+      "source_sha256": {
+        "scripts/lib/prepared_evaluation.py": "9813c53ce49c5a719434b34dcba72c222be757d48ad32a26494b1994b5df656a",
+        "tests/unit/test_prepared_evaluation.py": "dce8fd201a66427e6d1283dd7fceb9ce2cdb4b597344771a1305a880178e131c"
+      },
+      "tests": {
+        "pass": 10,
+        "fail": 0,
+        "skip": 0,
+        "platform": "Windows Python 3.14",
+        "collector": "synthetic mock; actual compiler",
+        "evidence": "PR4-PHASE793-EVALUATION.log",
+        "evidence_sha256": "976dd9d89aef2c5203492ce051bbfbe849731683389daea31a1eb315567a377d"
+      },
+      "original_test_outcome": "Initial 9-case run: 8 PASS, 1 FAIL from a test assertion using block instead of the existing wm-eu-only-block constant. Test corrected to the existing constant; product unchanged; final focused 10-case run PASS.",
+      "reused_unchanged": {
+        "compiler_pass": 45,
+        "reader_pass": 20,
+        "owner_top_level_pass": 21,
+        "owner_subcase_pass": 17,
+        "native_reader_case_checks_pass": 7
+      },
+      "effects": {
+        "application": false,
+        "settlement": false,
+        "health_write": false,
+        "pending_debt_clear": false,
+        "production_approval": false,
+        "native_execution": false,
+        "publication": false,
+        "live_changes": false
+      },
+      "scope": "Private in-memory candidate only. Exact expected generation/epoch is future CAS context, not actual atomic apply or persistence proof."
     }
   },
   "remaining_gates": [
