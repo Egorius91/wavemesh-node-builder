@@ -77,5 +77,12 @@ authorized by this source checkpoint.
 Current source follow-up adds only the exact inert wm-api-rule label and a private
 read-only consumer. security:none remains unsupported; it is not converted to TLS.
 PRIVATE-CONSUMER.md specifies trust, fresh readback, canonical hash bounds, the
-source proof and outstanding actual Linux reader/full-build gates. There is no
+source/native proof and outstanding full-build/integration gates. There is no
 production producer approval or installed consumer/transaction integration.
+
+
+Corrected consumer native776 passes in an isolated synthetic fixture after the
+native epoch adapter correction. Exact current reader bytes and qualified/unknown
+Go-wire goldens are pinned. Private consumer output remains in memory; no
+production release approval or public/physical/installed readiness follows from
+this component proof. The independently closed native slot is released to ROOT.

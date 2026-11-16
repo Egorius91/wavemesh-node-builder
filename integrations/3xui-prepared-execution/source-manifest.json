@@ -1,7 +1,7 @@
 {
   "schema": 1,
-  "status": "FIXED_NATIVE_EPOCH_ADAPTER_SOURCE_PASS_NATIVE_RERUN_PENDING",
-  "at_utc": "2026-11-16T17:38:23.095993+00:00",
+  "status": "SCOPED_SYNTHETIC_NATIVE_CONSUMER_PASS_FULL_PR4_OPEN",
+  "at_utc": "2026-11-16T18:23:06.960372+00:00",
   "upstream": {
     "repository": "https://github.com/MHSanaei/3x-ui",
     "tag": "v3.11.0",
@@ -133,7 +133,7 @@
       "applicability": "Only lifecycle test changes Stat to ReadAt while retaining errors.Is(os.ErrClosed); product and all other tested bytes unchanged. Original FAIL retained; this is not one all-green grouped run."
     },
     "private_consumer": {
-      "status": "SOURCE_SYNTHETIC_PASS_NATIVE_RERUN_PENDING",
+      "status": "SOURCE_AND_SCOPED_SYNTHETIC_LINUX_NATIVE_PASS",
       "top_level_pass": 20,
       "fail": 0,
       "skip": 0,
@@ -156,8 +156,30 @@
         "sha256": "cf91b02ffa4d19c92c379613af31c6e406b52d0ad615c0d35c31c386d9382da8"
       },
       "production_approval": null,
-      "native_execution_current_fix": false,
-      "wire_change": false
+      "native_execution_current_fix": true,
+      "wire_change": false,
+      "native": {
+        "builder_source": "ba057cf8881f283950edc9806e12799a8fadef17",
+        "producer_source": "35c57fe48f5df242ea79592d2e17b2dcae926932",
+        "reader_sha256": "0ece06d78cfeb85c8940de462792740563cff48532da925aa0d8ab1fc15e8f14",
+        "producer_test_elf_sha256": "645b754a307acc963b674ce040bbe24a8fc7a6fd504c9d5be398e5d9c8016483",
+        "test_overlay_sha256": "b72a06714c9ab7ac46d294e391ef7a9837aead892cbe34a5345d286df6365c11",
+        "selected_case_checks": 7,
+        "all_pass": true,
+        "result": {
+          "file": "PR4-CONSUMER-NATIVE-RESULT.json",
+          "sha256": "f50df8b9208e96d366e639b372eea2f718df44149ca6a8a26be4a3a96c680ac1"
+        },
+        "receipt_sha256": "cdd5f49b6aa800a5fb8d512d927e75b21b6b3ca823fe6acc51f63fcd972ab560",
+        "independent_cleanup_receipt_sha256": "6a9953063def7358e9269dba73f02cc12ba019e49d38bf7dedf2bc153ef6610a",
+        "release": {
+          "file": "PR4-CONSUMER-NATIVE-RELEASE.json",
+          "sha256": "8ba742e59645ae29fa355632beeb0d6f0a99ad6df48cfef438a2da26b238b53f"
+        },
+        "trust_scope": "Isolated synthetic-loader injection only; no production approval file/label or installed integration.",
+        "physical_acceptance": false,
+        "full_producer_acceptance": false
+      }
     },
     "template_regression_red": {
       "file": "PR4-PHASE766-TEMPLATE-RED.jsonl",
@@ -195,7 +217,7 @@
     }
   },
   "remaining_gates": [
-    "Actual native consumer/proc/Unix/hash/permissions plus current tagged-control fixture, after resource/phase ACK",
+    "Installed transaction/caller integration under approved full producer release, not the synthetic ELF",
     "Full Linux producer/SQLite/frontend build and installed producer manifest",
     "Real stock template compatibility and collector consuming the fresh private snapshot",
     "Builder owner-CAS/settlement/persistence and watchdog integration",

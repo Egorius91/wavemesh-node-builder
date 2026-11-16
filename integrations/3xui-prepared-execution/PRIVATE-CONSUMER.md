@@ -1,4 +1,4 @@
-# Private snapshot consumer — source proof; Linux integration NOT VERIFIED
+# Private snapshot consumer — scoped synthetic native PASS; integration open
 
 scripts/lib/prepared_execution.py provides collect(), returning the existing
 private runtime-view3 and complete executing JSON in memory. It prints nothing,
@@ -45,10 +45,9 @@ invent a receipt chain or advance health counters. Fixed errors contain no raw
 configuration, credentials, paths or exception payloads.
 
 Source proof: reader20 tests PASS0skip with mocked Unix/proc facts,13 actual Go
-canonical vectors, and current producer owner21+17 race cases PASS. These are
-source/synthetic checks. Actual Linux consumer/peer/proc/descriptor integration
-and a full producer build remain NOT VERIFIED. Native757 custody/mutator proof
-is retained only within its tested source scope. A new native run needs the
+canonical vectors, and current producer owner21+17 race cases PASS. Those source checks are distinct from the actual Linux result below. A full
+producer build, installed caller and real Entry/service integration remain
+NOT VERIFIED. Native757 custody/mutator proof retains its tested source scope. A new native run needs the
 coordinator's actual resource release, phase ACK and fresh admission.
 
 The actual Builder Entry remains unsupported by managed qualification: Nginx
@@ -75,5 +74,26 @@ was changed and the compiler alias is refused on input. Unit snapshots now come
 from the actual Go ExecutionSnapshot serializer for both qualified and unqualified frames,
 with a dedicated alias regression. Unqualified frames are refused before requiring
 private config/hash payloads, which Go correctly omits.
-The failed attempt and independent cleanup are retained; current native rerun is
-pending. This supersedes the earlier hand-constructed unit header assumption.
+The failed attempt and independent cleanup are retained; the corrected native
+run below supersedes that failed adapter. This supersedes the earlier hand-constructed unit header assumption.
+
+
+Corrected native776: exact Builderba057cf / producer35c57fe4 with test-only Go
+harness and pinned stock core passed all7 selected case checks in an exclusively
+admitted restricted-offline Linux VM. This exercised real approval file kind,
+mode, UID, symlink and descriptor-closure guards; default trust closed; wrong
+producer pin before private request; actual Unix peer/root UID/process/start/
+parent/boot/image/sealedfd0/fd3/fd4/cold hash checks and two fresh complete frames;
+UNKNOWN refusal with the core alive; actual stop/descriptor closure and absence
+of cached success. JSON stayed in memory. The synthetic trust loader was injected
+only by the test driver; no production approval file or bypass mode was installed.
+
+Original exec834 failed on the native epoch adapter. Corrected exec890 is
+terminalPASS; independent exec918 found old/new producer/core PIDs gone, no
+owned processes/socket entries/helpers, and no production approval. VM1164 is
+independently CLOSED: PID/listeners gone, serial PowerDown, overlay check0errors,
+sealed profile hashes unchanged. Release8ba742e5 and exact immutable receipts are
+in source-manifest.json. No native reservation remains. This proves the bounded
+consumer, not public TLS, physical deny, full producer/realEntry, production trust
+or readiness. Subsequent source changes require applicability checks; another
+native phase requires coordination and fresh admission.

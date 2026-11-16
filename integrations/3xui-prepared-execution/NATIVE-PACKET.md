@@ -1,9 +1,11 @@
 # Scoped native custody proof вЂ” PASS; full PR4 remains open
 
 This retained proof pins producer `e3c7fc18928bfbe16de4e0ffa163935e166ca0e1`.
-The current manifest supersedes it with source-only API-label compatibility and
-the private reader. Those additions have no current native-reader acceptance;
-see PRIVATE-CONSUMER.md and the manifest for exact proof applicability.
+The current manifest separately records the later tagged-control/private-reader
+proof on exact Builderba057cf / producer35c57fe4. Its seven synthetic native case
+checks pass; PRIVATE-CONSUMER.md states the exact fixture trust and remaining
+full-build/installed/realEntry/physical-flow limits. The older757 proof below is
+retained within its original scope.
 Actual Linux exec1245 ran source `253ace5365c804f84746442bc9f15ed75f803a2b`,
 ELF SHA256 `db47f84136ec3200458fd24bdc16bdd274b79e0a1da2e1257c8978d592127852`,
 with unchanged stock Xray26.10.21 SHA256
