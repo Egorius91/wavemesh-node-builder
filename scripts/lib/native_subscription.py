@@ -9,6 +9,7 @@ import json
 import re
 from pathlib import Path
 import sys
+from urllib.parse import urlsplit
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 from route_presentation import route_is_public
 
@@ -148,14 +149,21 @@ def validate_content(content, domain, forbidden, expected_profiles=None):
     lowered = decoded.lower()
     if "--!" in decoded:
         raise ValueError("native subscription exposes a hidden inbound")
-    if f"@{domain.lower()}:443" not in lowered:
-        raise ValueError("native subscription does not publish the configured domain on port 443")
     for value in forbidden:
         value = str(value or "").strip()
         if value and value.lower() in lowered:
             raise ValueError("native subscription exposes an internal endpoint")
     for line in profiles:
-        host = line.split("@", 1)[-1].split(":", 1)[0].strip("[]")
+        try:
+            profile = urlsplit(line)
+            host = profile.hostname
+            port = profile.port
+        except ValueError:
+            raise ValueError("native subscription contains an invalid profile address") from None
+        if (host is None or host.lower() != domain.lower() or port != 443
+                or not profile.username or profile.password is not None
+                or any(ord(char) < 32 or ord(char) == 127 for char in line)):
+            raise ValueError("native subscription does not publish the configured domain on port 443")
         try:
             if ipaddress.ip_address(host).is_private:
                 raise ValueError("native subscription exposes a private address")
