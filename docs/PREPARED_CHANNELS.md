@@ -181,11 +181,24 @@ cannot be replayed through this negative producer. Legacy bearer health and
 access lifecycle transport retain their existing paths; prepared evidence does
 not downgrade to bearer.
 
-Before sending, the Agent saves the complete health envelope and Node/tenant
-scope in its existing private runtime file. A lost response retries that exact
-body, timestamp and identity after restart. Identical accepted state is not sent
-again to manufacture a newer collection time. Errors use fixed codes without
-raw private exception text. The observed Node version is not increased for PR4.
+Before sending, the Agent saves the complete health envelope, Node/tenant scope
+and actual idempotency key in its existing private runtime file. Both the
+`node.health.*` type suffix and `node-health-*` key bind Node, tenant, configured
+observed version and full-state hash. This also avoids collision with an older
+Agent's already accepted state-only observation at the same version. A lost
+response retries the exact saved body, timestamp and key after restart; a newer
+configuration never rewrites an unknown old envelope's identity. Identical
+accepted state deduplicates only within the same Node/tenant/version.
+
+The SaaS rejects an older observation version before duplicate readback. Only
+an authenticated409 `STALE_OBSERVED_VERSION`, when the actual configured version
+is strictly newer, may supersede that pending message. The Agent first saves
+one bounded resolved receipt, retaining the original envelope/key and the fact
+that its first dispatch may have been accepted. The next existing cycle can
+then collect a new current full envelope. Other errors or a same-version stale
+response retain pending debt; no server error can invent a configured version.
+A missing saved key remains closed. Errors use fixed codes without raw private
+exception text. The observed Node version is not increased for PR4.
 
 This implements negative reporting and transport recovery only. It is **not**
 the positive execution collector, transition settlement or dataplane watchdog.

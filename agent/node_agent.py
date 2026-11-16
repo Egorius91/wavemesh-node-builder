@@ -33,11 +33,12 @@ except ImportError:  # Old/staged packages keep ordinary Agent duties available.
     RuntimeFindingCycle = None  # type: ignore[assignment,misc]
 
 try:
-    from node_mtls_runtime import MtlsRuntimeConfig, MtlsRuntimeError, NodeMtlsRuntime
+    from node_mtls_runtime import MtlsApiError, MtlsRuntimeConfig, MtlsRuntimeError, NodeMtlsRuntime
 except ImportError:  # Preserve bearer-only compatibility during staged upgrades.
     MtlsRuntimeConfig = None  # type: ignore[assignment,misc]
     NodeMtlsRuntime = None  # type: ignore[assignment,misc]
     MtlsRuntimeError = RuntimeError  # type: ignore[assignment,misc]
+    MtlsApiError = None  # type: ignore[assignment,misc]
 
 AGENT_VERSION = "0.7.0-placement-v2"
 DEFAULT_ENV_PATH = Path("/etc/wavemesh-agent/agent.env")
@@ -799,10 +800,13 @@ class NodeAgent:
         if pending is not None and self.runtime.get("pending_health_observation_scope") != scope:
             raise AgentError("Health observation scope is unavailable")
         if pending is None:
-            if self.runtime.get("last_observation_hash") == state_hash:
+            if (self.runtime.get("last_observation_hash") == state_hash
+                    and self.runtime.get("last_observation_version") == self.config.observed_version
+                    and self.runtime.get("last_observation_scope") == scope):
                 return
+            identity = health_observation_identity(scope, self.config.observed_version, state_hash)
             pending = {
-                "type": f"node.health.{state_hash[:16]}",
+                "type": f"node.health.{identity[:16]}",
                 "schema_version": 1,
                 "observed_version": self.config.observed_version,
                 "state": state,
@@ -810,7 +814,13 @@ class NodeAgent:
             }
             self.runtime["pending_health_observation"] = pending
             self.runtime["pending_health_observation_scope"] = scope
-        validate_health_observation(pending)
+            self.runtime["pending_health_observation_key"] = f"node-health-{self.config.node_id}-{identity[:32]}"
+        validate_health_observation(pending, scope)
+        key = self.runtime.get("pending_health_observation_key")
+        if not isinstance(key, str) or not re.fullmatch(r"node-health-"+re.escape(self.config.node_id)+r"-[a-f0-9]{32}", key):
+            raise AgentError("Health observation identity is unavailable")
+        if pending["observed_version"] > self.config.observed_version:
+            raise AgentError("Health observation version is unavailable")
         if "prepared_eu_paths" in pending["state"] and not (
                 self.config.auth_mode == "mtls" and self.mtls_runtime is not None
                 and self.last_mtls_status.get("state") == "SHADOW_ACTIVE"):
@@ -819,16 +829,41 @@ class NodeAgent:
         # Persist before every attempt, including a retry after a local write
         # failure. A lost reply retains the exact original body and timestamp.
         write_json_file(self.config.runtime_path, self.runtime)
-        self.api_json(
-            "POST", f"internal/v1/nodes/{self.config.node_id}/observations", pending,
-            expected=(202,),
-            headers={"Idempotency-Key": f"node-health-{self.config.node_id}-{pending_hash[:32]}"},
-        )
-        self.runtime["last_observation_hash"] = pending_hash
-        self.runtime["last_observation_at"] = pending["observed_at"]
-        self.runtime.pop("pending_health_observation", None)
-        self.runtime.pop("pending_health_observation_scope", None)
-        write_json_file(self.config.runtime_path, self.runtime)
+        try:
+            self.api_json(
+                "POST", f"internal/v1/nodes/{self.config.node_id}/observations", pending,
+                expected=(202,), headers={"Idempotency-Key": key},
+            )
+        except Exception as exc:
+            authenticated_error = isinstance(exc, ApiError) or (MtlsApiError is not None and isinstance(exc, MtlsApiError))
+            if not (authenticated_error and exc.status == 409 and exc.code == "STALE_OBSERVED_VERSION"
+                    and exc.retryable is False and self.config.observed_version > pending["observed_version"]):
+                raise
+            resolved = dict(self.runtime)
+            # One bounded resolved receipt, not another queue. The first lost
+            # dispatch may have been accepted; the stale reply proves only that
+            # this retry was refused before effects at the old Node version.
+            resolved["last_superseded_health_observation"] = {
+                "envelope": pending, "scope": scope, "idempotency_key": key,
+                "configured_version": self.config.observed_version,
+                "response": {"status": 409, "code": "STALE_OBSERVED_VERSION"},
+                "prior_dispatch_outcome": "UNKNOWN_OR_ACCEPTED",
+                "resolved_at": format_timestamp(datetime.now(timezone.utc)),
+            }
+            for name in ("pending_health_observation", "pending_health_observation_scope", "pending_health_observation_key"):
+                resolved.pop(name, None)
+            write_json_file(self.config.runtime_path, resolved)
+            self.runtime = resolved
+            return  # The next existing periodic cycle collects current health.
+        accepted = dict(self.runtime)
+        accepted["last_observation_hash"] = pending_hash
+        accepted["last_observation_at"] = pending["observed_at"]
+        accepted["last_observation_version"] = pending["observed_version"]
+        accepted["last_observation_scope"] = scope
+        for name in ("pending_health_observation", "pending_health_observation_scope", "pending_health_observation_key"):
+            accepted.pop(name, None)
+        write_json_file(self.config.runtime_path, accepted)
+        self.runtime = accepted
         LOG.info(
             "Health observation accepted: node_status=%s healthy_exits=%s/%s",
             pending["state"].get("node_status"),
@@ -984,6 +1019,10 @@ def observation_digest(value: Any) -> str:
     return hashlib.sha256(json.dumps(value, sort_keys=True, separators=(",", ":"), ensure_ascii=False, allow_nan=False).encode("utf-8")).hexdigest()
 
 
+def health_observation_identity(scope: dict[str, str], version: int, state_hash: str) -> str:
+    return observation_digest({**scope, "observed_version": version, "state_sha256": state_hash})
+
+
 def has_prepared_routes(config: dict[str, Any]) -> bool:
     routes = config.get("routes")
     return isinstance(routes, list) and any(isinstance(route, dict) and route.get("kind") == "auto" and "prepared_plan" in route for route in routes)
@@ -1012,7 +1051,7 @@ def negative_prepared_route_state(config: dict[str, Any]) -> dict[str, Any] | No
     return {"prepared_eu_paths": {"schema_version": 1, "scope": "node_route_only", "routes": sorted(rows, key=lambda row: row["route_id"])}}
 
 
-def validate_health_observation(envelope: Any) -> None:
+def validate_health_observation(envelope: Any, scope: dict[str, str]) -> None:
     """Reject cached positives/private fields before any authenticated send."""
     if not isinstance(envelope, dict) or set(envelope) != {"type", "schema_version", "observed_version", "state", "observed_at"}:
         raise AgentError("Prepared observation envelope is unavailable")
@@ -1029,7 +1068,10 @@ def validate_health_observation(envelope: Any) -> None:
                         ("auto_routes", {"route_id", "enabled", "published", "status", "strategy", "healthy_exits", "total_exits"})):
         if not isinstance(state[key], list) or any(not isinstance(row, dict) or set(row) != fields for row in state[key]):
             raise AgentError("Health observation fields are unavailable")
-    if envelope["type"] != f"node.health.{observation_digest(state)[:16]}":
+    # Validate the saved body/scope, never the newer configured version. The
+    # actual HTTP key remains the original persisted key on every retry.
+    identity = health_observation_identity(scope, envelope["observed_version"], observation_digest(state))
+    if envelope["type"] != f"node.health.{identity[:16]}":
         raise AgentError("Health observation identity is unavailable")
     assert_redacted(envelope)
     if "prepared_eu_paths" not in state:
