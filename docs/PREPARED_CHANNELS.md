@@ -162,3 +162,37 @@ collector/Agent/SaaS integration remain actual dependencies. A mutable panel
 GetConfig/cache is not an authoritative executing-config view. The historical native fixture
 and its schema1 observations do not qualify this new process-bound contract.
 Do not use this working draft as an installed/runtime acceptance release.
+
+## Agent integration: current stock result is unqualified
+
+The existing Agent observation cycle adds `state.prepared_eu_paths` only through
+its current primary mTLS transport. It keeps the complete existing health state,
+`node.health.*` event type and `node-health-*` idempotency key. The SaaS consumer
+replaces the whole observed state, so a separate prepared-only POST would erase
+the previous health fields and is forbidden.
+
+For the traced stock interfaces the receipt is explicitly `unqualified`, with
+`readback=unavailable`, `deny_outcome=not_verified`, no executing instance/digest,
+no selected path and null sample timestamps/public profile. A configured
+prepared route always advertises `prepared_eu_paths_v1=false` in this stage.
+Only a canonical hash of the private desired plan is included; raw plans,
+Exit addresses and relay material never enter the observation. Cached positives
+cannot be replayed through this negative producer. Legacy bearer health and
+access lifecycle transport retain their existing paths; prepared evidence does
+not downgrade to bearer.
+
+Before sending, the Agent saves the complete health envelope and Node/tenant
+scope in its existing private runtime file. A lost response retries that exact
+body, timestamp and identity after restart. Identical accepted state is not sent
+again to manufacture a newer collection time. Errors use fixed codes without
+raw private exception text. The observed Node version is not increased for PR4.
+
+This implements negative reporting and transport recovery only. It is **not**
+the positive execution collector, transition settlement or dataplane watchdog.
+Stock 3x-ui `GetConfigJson` reconstructs desired state, while the pinned Xray
+`ListRule` returns only tags, not rule conditions. Positive implementation needs
+an explicitly agreed native execution guarantee; a controlled cold-generation
+and sole-writer option must also account for every stock/CLI/native writer and
+for the process reset caused by changing the selected route. No vendor fork,
+native mutator change, public-profile projection or financial fence change is
+introduced by this negative integration.
