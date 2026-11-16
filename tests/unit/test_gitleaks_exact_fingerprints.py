@@ -1,4 +1,4 @@
-"""Only the eleven independently triaged immutable false positives are ignored."""
+"""Only the twelve independently triaged immutable false positives are ignored."""
 from pathlib import Path
 import importlib.util
 import unittest
@@ -17,16 +17,18 @@ EXPECTED = (
     '3006b20a1b3b8806df704e6ff0788399165cc924:tests/unit/test_placement_fence.py:generic-api-key:28',
     '5897ff95bc04d5f579d3d9e222e75125a0f45665:tests/unit/test_placement_quiescence.py:generic-api-key:54',
     'c0de11e5362121d3d4972f083204faaeb5ce9b75:tests/unit/test_placement_legacy_binary.py:generic-api-key:36',
+    # Public pinned Xray binary SHA-256, independently checked against the archive.
+    '0a8d0e78e4d3bb9628fc4a672234417342853e71:tests/native/test_stock_quota_runtime.py:jfrog-identity-token:31',
 )
 
 
 def exact_exceptions(text):
     if tuple(text.splitlines()) != EXPECTED:
-        raise AssertionError('GITLEAKS_ONLY_ELEVEN_REVIEWED_IMMUTABLE_FINGERPRINTS')
+        raise AssertionError('GITLEAKS_ONLY_TWELVE_REVIEWED_IMMUTABLE_FINGERPRINTS')
 
 
 class GitleaksExactFingerprints(unittest.TestCase):
-    def test_exact_eleven_fingerprints_only(self):
+    def test_exact_twelve_fingerprints_only(self):
         exact_exceptions((ROOT/'.gitleaksignore').read_text())
 
     def test_broadened_extra_or_retargeted_exception_refused(self):
