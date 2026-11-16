@@ -1,6 +1,6 @@
 {
   "schema": 1,
-  "status": "PARTIAL_UNQUALIFIED_SOURCE_FROZEN_FOR_ROOT_REVIEW",
+  "status": "CURRENT_SOURCE_CHECKS_PASS_NATIVE_UNQUALIFIED_FROZEN_FOR_ROOT_REVIEW",
   "upstream": {
     "repository": "https://github.com/MHSanaei/3x-ui",
     "tag": "v3.11.0",
@@ -50,23 +50,50 @@
       "skip": 0,
       "evidence": "PR4-PRODUCER-SOURCE-RACE.jsonl",
       "evidence_sha256": "e80d3884e4125db046da7f929a5e606b8276a7cbf97c028921bba72f881704fe",
-      "scope": "five changed packages compile; owner logic and existing unmanaged runtime/service regression tests; no native Linux proof"
+      "scope": "five changed packages compile; owner logic and existing unmanaged runtime/service regression tests; no native Linux proof",
+      "reuse_applicability": "All 15 producer product/test file hashes unchanged; not rerun under PR2 phase712."
     },
     "compiler": {
-      "last_run_pass": 45,
-      "scope": "before final epoch-length bound; frozen source NOT RERUN due coordinator701"
+      "pass": 45,
+      "fail": 0,
+      "skip": 0,
+      "head_tested": "25f9e4ee0906a6422df6f8bf722f43b3dca0a7bf",
+      "evidence": "PR4-PHASE712-COMPILER.log",
+      "evidence_sha256": "04b38dda34316bc36b379791ea0d133b4ca4f6b196c4c43d5913c7002e854fa3",
+      "scope": "current frozen product/test bytes after final epoch-length guard",
+      "previous_scope": "before final epoch-length bound; frozen source NOT RERUN due coordinator701"
     },
     "linux_cross_compile": {
-      "latest_attempt": "FAIL: native test GetStatsRequest field Reset was not the protobuf field name",
-      "correction": "Reset_ applied before freeze",
-      "current_frozen_source": "NOT RETRIED / NOT VERIFIED under coordinator701"
+      "status": "PASS",
+      "source_head": "43c62314bdfdc236f6d2900c7f6d6af4a96cfbd7",
+      "target": "linux/amd64",
+      "CGO_ENABLED": 0,
+      "package": "./internal/xray including native test sources",
+      "toolchain": "go1.27.4 windows/amd64",
+      "flags": [
+        "-c",
+        "-trimpath",
+        "-p",
+        "2"
+      ],
+      "artifact_filename": "producer-stage1-43c62314-linux.test",
+      "artifact_sha256": "384c3df3bb0414548e286c07281725b61c9d3a425119ab9fc02dcb3cc38c143e",
+      "artifact_bytes": 47412047,
+      "evidence": "PR4-PHASE712-LINUX-COMPILE-RESULT.json",
+      "evidence_sha256": "33f3f356efc0f27da68aa1ca2d7865cdce24d58caacddb5ef4be87db4468172e",
+      "native_executed": false,
+      "preserved_previous_failure": {
+        "latest_attempt": "FAIL: native test GetStatsRequest field Reset was not the protobuf field name",
+        "correction": "Reset_ applied before freeze",
+        "current_frozen_source": "NOT RETRIED / NOT VERIFIED under coordinator701"
+      }
     },
     "native": "NOT RUN",
     "full_linux_producer_build": "NOT RUN",
     "physical_flow_deny": "NOT VERIFIED",
     "agent_positive_capability": false
   },
-  "next": "NATIVE-PACKET.md; source acceptance still pending root review and missing checks",
+  "next": "Root reviews immutable source/decisive assumptions. Native requires separate phase/resource ACK and actual release of latest recovery window; see NATIVE-PACKET.md.",
   "ownership": {
     "producer_private": "PR4",
     "compiler_transaction": "PR4 frozen for review",

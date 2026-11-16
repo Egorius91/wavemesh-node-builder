@@ -1,11 +1,14 @@
 # Exact-source native packet — NOT RUN
 
 The producer source commit, patch and file hashes are pinned in `source-manifest.json`.
-The companion Builder commit pins the private v3 compiler. Rebuild the Linux test
-binary from these exact bytes; an earlier `execution-linux.test` in a tool cache
-is not admitted. The latest cross-compile attempt caught a native-test protobuf
-field mismatch; it was corrected to `Reset_`, but no retry was performed before
-the coordinator's source freeze boundary. Current Linux linkage is NOT VERIFIED.
+The companion Builder commit pins the private v3 compiler. Phase712 cross-compiled
+and linked the unchanged current `./internal/xray` test package for Linux/amd64
+with Go1.27.4, CGO disabled, `-trimpath -p 2`: PASS. The corrected protobuf `Reset_`
+field is now compiled. The previous failed attempt remains in manifest/history.
+The exact 47,412,047-byte ELF64 artifact is pinned by SHA256 in the manifest and
+phase712 artifact receipt. It has NOT been executed; the complete Linux producer
+build with its database dependencies also remains NOT RUN. An earlier
+`execution-linux.test` in a tool cache is not admitted.
 
 Prerequisites: fresh coordinator phase/resource ACK; recovery's actual independently
 checked CLOSED/release; Windows reserve at least 2048 MiB; an exclusive own profile,
