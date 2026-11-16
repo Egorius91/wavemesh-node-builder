@@ -1,0 +1,2542 @@
+diff --git a/internal/web/job/check_client_ip_job.go b/internal/web/job/check_client_ip_job.go
+index eec1278efbdfb1e49bf669383d902e786f634432..6424d864b4599fc97de57ab27954cd2819f360f4 100644
+--- a/internal/web/job/check_client_ip_job.go
++++ b/internal/web/job/check_client_ip_job.go
+@@ -690,9 +690,11 @@ func (j *CheckClientIpJob) recordBannedSeen(email string, banned, published []mo
+ // handshakes are refused; the fail2ban ban is what ends live traffic.
+ func (j *CheckClientIpJob) disconnectClientTemporarily(inbound *model.Inbound, clientEmail string, clients []model.Client) {
+ 	var xrayAPI xray.XrayAPI
+-	apiPort := j.resolveXrayAPIPort()
+-
+-	err := xrayAPI.Init(apiPort)
++	endpoint := (&service.XrayService{}).GetXrayAPIEndpoint()
++	if endpoint.Address == "" && !xray.PreparedExecutionEnabled() {
++		endpoint = xray.TCPAPIEndpoint(j.resolveXrayAPIPort())
++	}
++	err := xrayAPI.InitEndpoint(endpoint)
+ 	if err != nil {
+ 		logger.Warningf("[LIMIT_IP] Failed to init Xray API for disconnection: %v", err)
+ 		return
+diff --git a/internal/web/runtime/local.go b/internal/web/runtime/local.go
+index f130921ce611d2d08f597d2f5edf3afa27d1328d..2a93ce7c7f14ecc53ef218f96012840bbcb46034 100644
+--- a/internal/web/runtime/local.go
++++ b/internal/web/runtime/local.go
+@@ -23,6 +23,7 @@ import (
+ 
+ type LocalDeps struct {
+ 	APIPort          func() int
++	APIEndpoint      func() xray.APIEndpoint
+ 	SetNeedRestart   func()
+ 	RequestReconcile func()
+ }
+@@ -42,11 +43,16 @@ func (l *Local) withAPI(fn func(api *xray.XrayAPI) error) error {
+ 	l.mu.Lock()
+ 	defer l.mu.Unlock()
+ 
+-	port := l.deps.APIPort()
+-	if port <= 0 {
++	endpoint := xray.APIEndpoint{}
++	if l.deps.APIEndpoint != nil {
++		endpoint = l.deps.APIEndpoint()
++	} else if l.deps.APIPort != nil {
++		endpoint = xray.TCPAPIEndpoint(l.deps.APIPort())
++	}
++	if endpoint.Address == "" {
+ 		return errors.New("local xray is not running")
+ 	}
+-	api, err := localAPIForPort(port)
++	api, err := localAPIForEndpoint(endpoint)
+ 	if err != nil {
+ 		return err
+ 	}
+@@ -57,7 +63,7 @@ func (l *Local) withAPI(fn func(api *xray.XrayAPI) error) error {
+ 	// A pooled channel keeps grpc-go's reconnect backoff after a core restart and fails fast for
+ 	// seconds; drop it and dial again, as a client per call did.
+ 	evictLocalAPIClient(api)
+-	api, err = localAPIForPort(port)
++	api, err = localAPIForEndpoint(endpoint)
+ 	if err != nil {
+ 		return err
+ 	}
+diff --git a/internal/web/runtime/local_api.go b/internal/web/runtime/local_api.go
+index 2a3c40d90a2fe4281ba559779373a9c1de3ccdf1..fb1558cb96a6eb6993749a4d0a7c617dea8b3e46 100644
+--- a/internal/web/runtime/local_api.go
++++ b/internal/web/runtime/local_api.go
+@@ -9,19 +9,23 @@ import (
+ // One pooled gRPC client serves local runtime operations; never use it for traffic stats, whose
+ // unlocked StatsLastValues a second reader would corrupt, so the traffic poll keeps its own client.
+ var (
+-	localAPIMu     sync.Mutex
+-	localAPIPort   int
+-	localAPIClient *xray.XrayAPI
++	localAPIMu       sync.Mutex
++	localAPIEndpoint xray.APIEndpoint
++	localAPIClient   *xray.XrayAPI
+ )
+ 
+ // localAPIForPort returns the pooled client for the API port, replacing (and closing) it when a core
+ // restart moved the port; callers must not close it.
+ func localAPIForPort(port int) (*xray.XrayAPI, error) {
++	return localAPIForEndpoint(xray.TCPAPIEndpoint(port))
++}
++
++func localAPIForEndpoint(endpoint xray.APIEndpoint) (*xray.XrayAPI, error) {
+ 	localAPIMu.Lock()
+ 	defer localAPIMu.Unlock()
+ 
+ 	if localAPIClient != nil {
+-		if localAPIPort == port {
++		if localAPIEndpoint == endpoint {
+ 			return localAPIClient, nil
+ 		}
+ 		localAPIClient.Close()
+@@ -29,11 +33,11 @@ func localAPIForPort(port int) (*xray.XrayAPI, error) {
+ 	}
+ 
+ 	api := &xray.XrayAPI{}
+-	if err := api.Init(port); err != nil {
++	if err := api.InitEndpoint(endpoint); err != nil {
+ 		return nil, err
+ 	}
+ 	localAPIClient = api
+-	localAPIPort = port
++	localAPIEndpoint = endpoint
+ 	return api, nil
+ }
+ 
+@@ -48,5 +52,5 @@ func evictLocalAPIClient(api *xray.XrayAPI) {
+ 	}
+ 	localAPIClient.Close()
+ 	localAPIClient = nil
+-	localAPIPort = 0
++	localAPIEndpoint = xray.APIEndpoint{}
+ }
+diff --git a/internal/web/service/node.go b/internal/web/service/node.go
+index 0b64420974a571c76cc6a788119ea8096e409382..6f96139b4374abf585d65b3422e09bac9bdaeda6 100644
+--- a/internal/web/service/node.go
++++ b/internal/web/service/node.go
+@@ -1188,8 +1188,8 @@ func openOutboundBridge(nodeID int, outboundTag string) *outboundBridge {
+ 	if proc == nil || !proc.IsRunning() {
+ 		return nil
+ 	}
+-	apiPort := proc.GetAPIPort()
+-	if apiPort <= 0 {
++	endpoint := proc.GetAPIEndpoint()
++	if endpoint.Address == "" {
+ 		return nil
+ 	}
+ 
+@@ -1235,7 +1235,7 @@ func openOutboundBridge(nodeID int, outboundTag string) *outboundBridge {
+ 	}
+ 
+ 	bridge := &outboundBridge{proc: proc, inboundTag: tag, proxyURL: fmt.Sprintf("socks5://127.0.0.1:%d", port)}
+-	if err := bridge.api.Init(apiPort); err != nil {
++	if err := bridge.api.InitEndpoint(endpoint); err != nil {
+ 		return nil
+ 	}
+ 	if err := bridge.api.AddInbound(inboundJSON); err != nil {
+diff --git a/internal/web/service/tuic_relay_apply.go b/internal/web/service/tuic_relay_apply.go
+index ecf63fc842b4051ee23ec6b1b33ad23f2a0d5fd8..35dd2c46b6ae759f15f1eaeabebd9c6e9c0714af 100644
+--- a/internal/web/service/tuic_relay_apply.go
++++ b/internal/web/service/tuic_relay_apply.go
+@@ -144,12 +144,16 @@ func unavailableTuicRepairs(cfg *xray.Config) []xray.InboundReplacement {
+ }
+ 
+ func repairUnavailableTuicRelays(cfg *xray.Config, apiPort int) error {
++	return repairUnavailableTuicRelaysEndpoint(cfg, xray.TCPAPIEndpoint(apiPort))
++}
++
++func repairUnavailableTuicRelaysEndpoint(cfg *xray.Config, endpoint xray.APIEndpoint) error {
+ 	repairs := unavailableTuicRepairs(cfg)
+ 	if len(repairs) == 0 {
+ 		return nil
+ 	}
+ 	api := &xray.XrayAPI{}
+-	if err := api.Init(apiPort); err != nil {
++	if err := api.InitEndpoint(endpoint); err != nil {
+ 		(&XrayService{}).SetToNeedReconcile()
+ 		return err
+ 	}
+diff --git a/internal/web/service/xray.go b/internal/web/service/xray.go
+index 596986c33dbd3aed0175ff8cac8836cd5ce48af9..6c941b941315671e6f5ff28023921094838867d5 100644
+--- a/internal/web/service/xray.go
++++ b/internal/web/service/xray.go
+@@ -1344,8 +1344,7 @@ func (s *XrayService) GetXrayTraffic() ([]*xray.Traffic, []*xray.ClientTraffic,
+ 		logger.Debug("Attempted to fetch Xray traffic, but Xray is not running:", err)
+ 		return nil, nil, err
+ 	}
+-	apiPort := process.GetAPIPort()
+-	if err := s.xrayAPI.Init(apiPort); err != nil {
++	if err := s.xrayAPI.InitEndpoint(process.GetAPIEndpoint()); err != nil {
+ 		logger.Debug("Failed to initialize Xray API:", err)
+ 		return nil, nil, err
+ 	}
+@@ -1374,7 +1373,7 @@ func (s *XrayService) GetOnlineUsers() ([]xray.OnlineUser, bool, error) {
+ 	if process.OnlineAPISupport() == xray.OnlineAPIUnsupported {
+ 		return nil, false, nil
+ 	}
+-	if err := s.xrayAPI.Init(process.GetAPIPort()); err != nil {
++	if err := s.xrayAPI.InitEndpoint(process.GetAPIEndpoint()); err != nil {
+ 		logger.Debug("Failed to initialize Xray API:", err)
+ 		return nil, false, err
+ 	}
+@@ -1420,7 +1419,7 @@ func (s *XrayService) GetBalancersStatus(tags []string) ([]BalancerStatus, error
+ 		}
+ 		return statuses, nil
+ 	}
+-	if err := s.xrayAPI.Init(process.GetAPIPort()); err != nil {
++	if err := s.xrayAPI.InitEndpoint(process.GetAPIEndpoint()); err != nil {
+ 		return nil, err
+ 	}
+ 	defer s.xrayAPI.Close()
+@@ -1452,7 +1451,7 @@ func (s *XrayService) OverrideBalancer(tag, target string) error {
+ 	if process == nil || !process.IsRunning() {
+ 		return ErrXrayNotRunning
+ 	}
+-	if err := s.xrayAPI.Init(process.GetAPIPort()); err != nil {
++	if err := s.xrayAPI.InitEndpoint(process.GetAPIEndpoint()); err != nil {
+ 		return err
+ 	}
+ 	defer s.xrayAPI.Close()
+@@ -1466,7 +1465,7 @@ func (s *XrayService) TestRoute(req xray.RouteTestRequest) (*xray.RouteTestResul
+ 	if process == nil || !process.IsRunning() {
+ 		return nil, ErrXrayNotRunning
+ 	}
+-	if err := s.xrayAPI.Init(process.GetAPIPort()); err != nil {
++	if err := s.xrayAPI.InitEndpoint(process.GetAPIEndpoint()); err != nil {
+ 		return nil, err
+ 	}
+ 	defer s.xrayAPI.Close()
+@@ -1497,7 +1496,7 @@ func (s *XrayService) RestartXray(isForce bool) error {
+ 		configUnchanged := process.GetConfig().Equals(xrayConfig)
+ 		if !isForce && configUnchanged && !isNeedXrayRestart.Load() {
+ 			logger.Debug("It does not need to restart Xray")
+-			return repairUnavailableTuicRelays(xrayConfig, process.GetAPIPort())
++			return repairUnavailableTuicRelaysEndpoint(xrayConfig, process.GetAPIEndpoint())
+ 		}
+ 		// A config the core cannot bind never replaces one that works: its failed
+ 		// start exits the core, and the watchdog would then loop on it forever.
+@@ -1575,13 +1574,14 @@ func (s *XrayService) tryHotApply(process *xray.Process, newCfg *xray.Config) (a
+ 		return false, nil
+ 	}
+ 	if diff.Empty() {
+-		if err := repairUnavailableTuicRelays(newCfg, process.GetAPIPort()); err != nil {
++		if err := repairUnavailableTuicRelaysEndpoint(newCfg, process.GetAPIEndpoint()); err != nil {
+ 			return false, err
+ 		}
+ 		process.SetConfig(newCfg)
+ 		persistHotConfig(process)
+ 		return true, nil
+ 	}
++	process.InvalidateExecution("service_hot_apply_unqualified")
+ 	// The core's RemoveUser drops the credential only, so a disabled or deleted
+ 	// client needs the restart this setting asks for.
+ 	if s.restartToDropClients(diff) {
+@@ -1592,8 +1592,8 @@ func (s *XrayService) tryHotApply(process *xray.Process, newCfg *xray.Config) (a
+ 	if tuicRequiresOrdinaryRemoval(oldCfg, diff.TuicRelayChanges) {
+ 		return false, nil
+ 	}
+-	apiPort := process.GetAPIPort()
+-	if apiPort <= 0 {
++	endpoint := process.GetAPIEndpoint()
++	if endpoint.Address == "" {
+ 		if len(diff.TuicRelayChanges) > 0 {
+ 			return false, errors.New("TUIC relay update requires the Xray HandlerService API")
+ 		}
+@@ -1602,7 +1602,7 @@ func (s *XrayService) tryHotApply(process *xray.Process, newCfg *xray.Config) (a
+ 	// A dedicated client: s.xrayAPI may be in use by traffic polling on other
+ 	// service instances and is reset around restarts.
+ 	hotAPI := xray.XrayAPI{}
+-	if err := hotAPI.Init(apiPort); err != nil {
++	if err := hotAPI.InitEndpoint(endpoint); err != nil {
+ 		logger.Debug("hot apply: failed to init xray api:", err)
+ 		if len(diff.TuicRelayChanges) > 0 {
+ 			return false, err
+@@ -2023,3 +2023,12 @@ func forceUserspaceWireGuardTun(raw json_util.RawMessage) json_util.RawMessage {
+ 	}
+ 	return rewritten
+ }
++
++// GetXrayAPIEndpoint preserves native Unix addressing across every normal caller.
++func (s *XrayService) GetXrayAPIEndpoint() xray.APIEndpoint {
++	p := currentXrayProcess()
++	if p == nil || !p.IsRunning() {
++		return xray.APIEndpoint{}
++	}
++	return p.GetAPIEndpoint()
++}
+diff --git a/internal/web/web.go b/internal/web/web.go
+index aaee5dbc6c88b47524d8202bc3aa4e06d23a2fe4..24c771340ee9ed725747c37bdc7af78f123869a3 100644
+--- a/internal/web/web.go
++++ b/internal/web/web.go
+@@ -556,7 +556,7 @@ func (s *Server) start(restartXray bool, startTgBot bool) (err error) {
+ 	// The closures bridge into XrayService (which owns the running xray
+ 	// process state) without forcing the runtime package to import service.
+ 	mgr := runtime.NewManager(runtime.LocalDeps{
+-		APIPort:          func() int { return s.xrayService.GetXrayAPIPort() },
++		APIEndpoint:      func() xray.APIEndpoint { return s.xrayService.GetXrayAPIEndpoint() },
+ 		SetNeedRestart:   func() { s.xrayService.SetToNeedRestart() },
+ 		RequestReconcile: func() { s.xrayService.SetToNeedReconcile() },
+ 	})
+diff --git a/internal/xray/api.go b/internal/xray/api.go
+index 0e0e68ddcd3bbf2fcba02cbe8cb403a16b4a346f..9718dc292c677da76be0afc7371fc5caa517bea3 100644
+--- a/internal/xray/api.go
++++ b/internal/xray/api.go
+@@ -6,6 +6,7 @@ package xray
+ import (
+ 	"context"
+ 	"encoding/json"
++	"errors"
+ 	"fmt"
+ 	"math"
+ 	"net"
+@@ -13,6 +14,7 @@ import (
+ 	"os"
+ 	"path/filepath"
+ 	"regexp"
++	"strconv"
+ 	"strings"
+ 	"time"
+ 
+@@ -59,6 +61,8 @@ type XrayAPI struct {
+ 	grpcClient           *grpc.ClientConn
+ 	isConnected          bool
+ 	StatsLastValues      map[string]int64
++	execution            *executionOwner
++	ownedExecutionCall   bool
+ }
+ 
+ func getRequiredUserString(user map[string]any, key string) (string, error) {
+@@ -95,8 +99,38 @@ func (x *XrayAPI) Init(apiPort int) error {
+ 		return fmt.Errorf("invalid Xray API port: %d", apiPort)
+ 	}
+ 
+-	addr := fmt.Sprintf("127.0.0.1:%d", apiPort)
+-	conn, err := grpc.NewClient(addr, grpc.WithTransportCredentials(insecure.NewCredentials()))
++	return x.InitEndpoint(APIEndpoint{Network: "tcp", Address: fmt.Sprintf("127.0.0.1:%d", apiPort)})
++}
++
++func (x *XrayAPI) InitEndpoint(endpoint APIEndpoint) error {
++	if endpoint.owner != nil && endpoint.Network != "unix" {
++		return errors.New("native owner requires its Unix endpoint")
++	}
++	if executionRequested() && endpoint.Network != "unix" {
++		return errors.New("managed native control requires its private Unix endpoint")
++	}
++	if endpoint.Address == "" {
++		return errors.New("Xray API endpoint unavailable")
++	}
++	options := []grpc.DialOption{grpc.WithTransportCredentials(insecure.NewCredentials())}
++	target := endpoint.Address
++	if endpoint.Network == "unix" {
++		if endpoint.owner == nil || endpoint.Address != executionCorePath {
++			return errors.New("unowned native endpoint")
++		}
++		options = append(options, grpc.WithContextDialer(func(ctx context.Context, _ string) (net.Conn, error) { return dialExecutionCore(ctx, endpoint) }), grpc.WithUnaryInterceptor(endpoint.owner.intercept))
++		target = "passthrough:///execution-core"
++	} else if endpoint.Network != "tcp" {
++		return errors.New("unsupported API endpoint")
++	} else {
++		host, port, err := net.SplitHostPort(endpoint.Address)
++		parsed, parseErr := strconv.Atoi(port)
++		if err != nil || parseErr != nil || host != "127.0.0.1" || parsed <= 0 || parsed > math.MaxUint16 {
++			return errors.New("invalid loopback API endpoint")
++		}
++	}
++	x.execution = endpoint.owner
++	conn, err := grpc.NewClient(target, options...)
+ 	if err != nil {
+ 		return fmt.Errorf("failed to connect to Xray API: %w", err)
+ 	}
+@@ -135,7 +169,7 @@ func (x *XrayAPI) Close() {
+ const handlerRPCTimeout = 10 * time.Second
+ 
+ // AddInbound adds a new inbound configuration to the Xray core via gRPC.
+-func (x *XrayAPI) AddInbound(inbound []byte) error {
++func (x *XrayAPI) addInboundRaw(inbound []byte) error {
+ 	if x.HandlerServiceClient == nil {
+ 		return common.NewError("xray HandlerServiceClient is not initialized")
+ 	}
+@@ -155,7 +189,7 @@ func (x *XrayAPI) AddInbound(inbound []byte) error {
+ 	}
+ 	inboundConfig := command.AddInboundRequest{Inbound: config}
+ 
+-	ctx, cancel := context.WithTimeout(context.Background(), handlerRPCTimeout)
++	ctx, cancel := context.WithTimeout(x.rpcContext(), handlerRPCTimeout)
+ 	defer cancel()
+ 	_, err = client.AddInbound(ctx, &inboundConfig)
+ 
+@@ -163,12 +197,12 @@ func (x *XrayAPI) AddInbound(inbound []byte) error {
+ }
+ 
+ // DelInbound removes an inbound configuration from the Xray core by tag.
+-func (x *XrayAPI) DelInbound(tag string) error {
++func (x *XrayAPI) delInboundRaw(tag string) error {
+ 	if x.HandlerServiceClient == nil {
+ 		return common.NewError("xray HandlerServiceClient is not initialized")
+ 	}
+ 	client := *x.HandlerServiceClient
+-	ctx, cancel := context.WithTimeout(context.Background(), handlerRPCTimeout)
++	ctx, cancel := context.WithTimeout(x.rpcContext(), handlerRPCTimeout)
+ 	defer cancel()
+ 	_, err := client.RemoveInbound(ctx, &command.RemoveInboundRequest{
+ 		Tag: tag,
+@@ -218,7 +252,7 @@ func validateWireguardRemoteDNS(settings *serial.TypedMessage) error {
+ }
+ 
+ // AddOutbound adds a new outbound configuration to the Xray core via gRPC.
+-func (x *XrayAPI) AddOutbound(outbound []byte) error {
++func (x *XrayAPI) addOutboundRaw(outbound []byte) error {
+ 	if x.HandlerServiceClient == nil {
+ 		return common.NewError("xray HandlerServiceClient is not initialized")
+ 	}
+@@ -238,7 +272,7 @@ func (x *XrayAPI) AddOutbound(outbound []byte) error {
+ 		return err
+ 	}
+ 
+-	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
++	ctx, cancel := context.WithTimeout(x.rpcContext(), 10*time.Second)
+ 	defer cancel()
+ 
+ 	_, err = client.AddOutbound(ctx, &command.AddOutboundRequest{Outbound: config})
+@@ -246,13 +280,13 @@ func (x *XrayAPI) AddOutbound(outbound []byte) error {
+ }
+ 
+ // DelOutbound removes an outbound configuration from the Xray core by tag.
+-func (x *XrayAPI) DelOutbound(tag string) error {
++func (x *XrayAPI) delOutboundRaw(tag string) error {
+ 	if x.HandlerServiceClient == nil {
+ 		return common.NewError("xray HandlerServiceClient is not initialized")
+ 	}
+ 	client := *x.HandlerServiceClient
+ 
+-	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
++	ctx, cancel := context.WithTimeout(x.rpcContext(), 10*time.Second)
+ 	defer cancel()
+ 
+ 	_, err := client.RemoveOutbound(ctx, &command.RemoveOutboundRequest{Tag: tag})
+@@ -263,7 +297,7 @@ func (x *XrayAPI) DelOutbound(tag string) error {
+ // Xray core with the given routing section (the JSON value of the top-level
+ // "routing" key) via the RoutingService gRPC API. Note that this cannot change
+ // routing.domainStrategy/domainMatcher — those are fixed at process start.
+-func (x *XrayAPI) ApplyRoutingConfig(routing []byte) error {
++func (x *XrayAPI) applyRoutingConfigRaw(routing []byte) error {
+ 	if x.RoutingServiceClient == nil {
+ 		return common.NewError("xray RoutingServiceClient is not initialized")
+ 	}
+@@ -274,7 +308,7 @@ func (x *XrayAPI) ApplyRoutingConfig(routing []byte) error {
+ 		return err
+ 	}
+ 
+-	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
++	ctx, cancel := context.WithTimeout(x.rpcContext(), 30*time.Second)
+ 	defer cancel()
+ 
+ 	_, err = (*x.RoutingServiceClient).AddRule(ctx, &routerService.AddRuleRequest{
+@@ -317,7 +351,7 @@ func (x *XrayAPI) GetBalancerInfo(tag string) (*BalancerInfo, error) {
+ 		return nil, common.NewError("xray RoutingServiceClient is not initialized")
+ 	}
+ 
+-	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
++	ctx, cancel := context.WithTimeout(x.rpcContext(), 10*time.Second)
+ 	defer cancel()
+ 
+ 	resp, err := (*x.RoutingServiceClient).GetBalancerInfo(ctx, &routerService.GetBalancerInfoRequest{Tag: tag})
+@@ -339,12 +373,12 @@ func (x *XrayAPI) GetBalancerInfo(tag string) (*BalancerInfo, error) {
+ 
+ // SetBalancerTarget forces a balancer to always pick the given outbound tag.
+ // An empty target clears the override and hands control back to the strategy.
+-func (x *XrayAPI) SetBalancerTarget(tag, target string) error {
++func (x *XrayAPI) setBalancerTargetRaw(tag, target string) error {
+ 	if x.RoutingServiceClient == nil {
+ 		return common.NewError("xray RoutingServiceClient is not initialized")
+ 	}
+ 
+-	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
++	ctx, cancel := context.WithTimeout(x.rpcContext(), 10*time.Second)
+ 	defer cancel()
+ 
+ 	_, err := (*x.RoutingServiceClient).OverrideBalancerTarget(ctx, &routerService.OverrideBalancerTargetRequest{
+@@ -411,7 +445,7 @@ func (x *XrayAPI) TestRoute(req RouteTestRequest) (*RouteTestResult, error) {
+ 		}
+ 	}
+ 
+-	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
++	ctx, cancel := context.WithTimeout(x.rpcContext(), 10*time.Second)
+ 	defer cancel()
+ 
+ 	resp, err := (*x.RoutingServiceClient).TestRoute(ctx, &routerService.TestRouteRequest{
+@@ -803,7 +837,7 @@ func masqueUserPassword(user map[string]any) (string, error) {
+ // any existing holder of the email: that is the one inbound whose validator
+ // does not reject a duplicate email, and a later removal would then drop just
+ // one of the two registrations, leaving a disabled client able to connect.
+-func (x *XrayAPI) AddUser(Protocol string, inboundTag string, user map[string]any) error {
++func (x *XrayAPI) addUserRaw(Protocol string, inboundTag string, user map[string]any) error {
+ 	userEmail, err := getRequiredUserString(user, "email")
+ 	if err != nil {
+ 		return err
+@@ -823,10 +857,10 @@ func (x *XrayAPI) AddUser(Protocol string, inboundTag string, user map[string]an
+ 	client := *x.HandlerServiceClient
+ 
+ 	if account.Type == legacyShadowsocksAccountType {
+-		_ = x.RemoveUser(inboundTag, userEmail)
++		_ = x.removeUserRaw(inboundTag, userEmail)
+ 	}
+ 
+-	ctx, cancel := context.WithTimeout(context.Background(), handlerRPCTimeout)
++	ctx, cancel := context.WithTimeout(x.rpcContext(), handlerRPCTimeout)
+ 	defer cancel()
+ 	_, err = client.AlterInbound(ctx, &command.AlterInboundRequest{
+ 		Tag: inboundTag,
+@@ -841,13 +875,13 @@ func (x *XrayAPI) AddUser(Protocol string, inboundTag string, user map[string]an
+ }
+ 
+ // RemoveUser removes a user from an inbound in the Xray core by email.
+-func (x *XrayAPI) RemoveUser(inboundTag, email string) error {
++func (x *XrayAPI) removeUserRaw(inboundTag, email string) error {
+ 	if x.HandlerServiceClient == nil {
+ 		return common.NewError("xray HandlerServiceClient is not initialized")
+ 	}
+ 	client := *x.HandlerServiceClient
+ 
+-	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
++	ctx, cancel := context.WithTimeout(x.rpcContext(), 5*time.Second)
+ 	defer cancel()
+ 
+ 	op := &command.RemoveUserOperation{Email: email}
+@@ -876,7 +910,7 @@ func (x *XrayAPI) GetTraffic() ([]*Traffic, []*ClientTraffic, error) {
+ 		return nil, nil, common.NewError("xray api is not initialized")
+ 	}
+ 
+-	ctx, cancel := context.WithTimeout(context.Background(), time.Second*10)
++	ctx, cancel := context.WithTimeout(x.rpcContext(), time.Second*10)
+ 	defer cancel()
+ 
+ 	if x.StatsServiceClient == nil {
+@@ -951,7 +985,7 @@ func (x *XrayAPI) GetOnlineUsers() ([]OnlineUser, error) {
+ 		return nil, common.NewError("xray StatsServiceClient is not initialized")
+ 	}
+ 
+-	ctx, cancel := context.WithTimeout(context.Background(), time.Second*10)
++	ctx, cancel := context.WithTimeout(x.rpcContext(), time.Second*10)
+ 	defer cancel()
+ 
+ 	resp, err := (*x.StatsServiceClient).GetUsersStats(ctx, &statsService.GetUsersStatsRequest{})
+diff --git a/internal/xray/execution.go b/internal/xray/execution.go
+new file mode 100644
+index 0000000000000000000000000000000000000000..e62a910c380e68ebf596c0a9f6dd5c8e1e80e23d
+--- /dev/null
++++ b/internal/xray/execution.go
+@@ -0,0 +1,768 @@
++package xray
++
++import (
++	"bytes"
++	"context"
++	"crypto/sha256"
++	"encoding/hex"
++	"encoding/json"
++	"errors"
++	"fmt"
++	"io"
++	"strconv"
++	"strings"
++	"sync"
++	"sync/atomic"
++
++	"google.golang.org/grpc"
++)
++
++const executionSchema = 3
++const stockCoreSHA256 = "a27e3f95ab6ce270956d0cecd32eda4686a811afc71c64a6a734a3dede14883e"
++const producerUpstream = "c621ba9014a6aa21fd7c9ecf45655e44e24ebf13"
++
++var ErrExecutionConflict = errors.New("execution generation or epoch conflict")
++var ErrExecutionSelector = errors.New("unsupported execution selector transition")
++
++type ExecutionIdentity struct {
++	Generation         string `json:"generation"`
++	BootID             string `json:"boot_id"`
++	PID                int    `json:"pid"`
++	StartTicks         string `json:"start_ticks"`
++	CoreSHA256         string `json:"core_sha256"`
++	ProducerPID        int    `json:"producer_pid"`
++	ProducerStartTicks string `json:"producer_start_ticks"`
++	ProducerSHA256     string `json:"producer_sha256"`
++	ProducerUpstream   string `json:"producer_upstream"`
++	ConsumedSHA256     string `json:"consumed_sha256"`
++}
++
++type ExecutionExpected struct {
++	Generation string `json:"generation"`
++	Epoch      string `json:"epoch"`
++}
++
++type SelectorTransition struct {
++	Generation       string `json:"generation"`
++	FromEpoch        string `json:"from_epoch"`
++	ToEpoch          string `json:"to_epoch"`
++	BeforeSHA256     string `json:"before_sha256"`
++	AfterSHA256      string `json:"after_sha256"`
++	NormalizedSHA256 string `json:"normalized_sha256"`
++	RuleTag          string `json:"rule_tag"`
++}
++
++type ExecutionSnapshot struct {
++	SchemaVersion   int                 `json:"schema_version"`
++	Challenge       string              `json:"challenge"`
++	Qualified       bool                `json:"qualified"`
++	Reason          string              `json:"reason"`
++	Identity        ExecutionIdentity   `json:"identity"`
++	Epoch           string              `json:"epoch"`
++	EffectiveSHA256 string              `json:"effective_config_sha256,omitempty"`
++	ExecutionSHA256 string              `json:"execution_sha256,omitempty"`
++	Config          json.RawMessage     `json:"effective_config,omitempty"`
++	Overrides       map[string]string   `json:"balancer_overrides,omitempty"`
++	Transition      *SelectorTransition `json:"selector_transition,omitempty"`
++}
++
++type executionOwner struct {
++	mu             sync.Mutex
++	peerPID        atomic.Int64
++	peerStartTicks atomic.Value
++	identity       ExecutionIdentity
++	epoch          uint64
++	qualified      bool
++	reason         string
++	config         map[string]any
++	overrides      map[string]string
++	transition     *SelectorTransition
++	checkIdentity  func() error
++}
++
++func executionJSON(v any) []byte {
++	var b bytes.Buffer
++	e := json.NewEncoder(&b)
++	e.SetEscapeHTML(false)
++	if err := e.Encode(v); err != nil {
++		return nil
++	}
++	return bytes.TrimSuffix(b.Bytes(), []byte{'\n'})
++}
++
++func executionDigest(v any) string {
++	h := sha256.Sum256(executionJSON(v))
++	return hex.EncodeToString(h[:])
++}
++
++func executionDocument(data []byte) (map[string]any, error) {
++	var v map[string]any
++	d := json.NewDecoder(bytes.NewReader(data))
++	d.UseNumber()
++	if err := d.Decode(&v); err != nil || v == nil {
++		return nil, errors.New("invalid execution document")
++	}
++	return v, nil
++}
++
++func newExecutionOwner(data []byte, id ExecutionIdentity, check func() error) *executionOwner {
++	v, _ := executionDocument(data)
++	return &executionOwner{identity: id, config: v, overrides: map[string]string{}, reason: "cold_start_unqualified", checkIdentity: check}
++}
++
++func (o *executionOwner) invalidate(reason string) {
++	o.mu.Lock()
++	defer o.mu.Unlock()
++	o.invalidateLocked(reason)
++}
++
++func (o *executionOwner) invalidateLocked(reason string) {
++	if o.epoch < ^uint64(0) {
++		o.epoch++
++	} else {
++		reason = "epoch_exhausted"
++	}
++	o.qualified = false
++	o.reason = reason
++	o.transition = nil
++}
++
++func (o *executionOwner) identityValidLocked() bool {
++	if o.checkIdentity != nil && o.checkIdentity() != nil {
++		o.invalidateLocked("process_identity_changed")
++		return false
++	}
++	return true
++}
++
++func (o *executionOwner) snapshot(challenge string) ExecutionSnapshot {
++	o.mu.Lock()
++	defer o.mu.Unlock()
++	o.identityValidLocked()
++	s := ExecutionSnapshot{SchemaVersion: executionSchema, Challenge: challenge, Qualified: o.qualified, Reason: o.reason, Identity: o.identity, Epoch: strconv.FormatUint(o.epoch, 10)}
++	if o.qualified {
++		s.Config = executionJSON(o.config)
++		s.EffectiveSHA256 = executionDigest(o.config)
++		s.ExecutionSHA256 = executionDigest(map[string]any{"effective_config": o.config, "balancer_overrides": o.overrides})
++		s.Overrides = make(map[string]string, len(o.overrides))
++		for k, v := range o.overrides {
++			s.Overrides[k] = v
++		}
++		if o.transition != nil {
++			r := *o.transition
++			s.Transition = &r
++		}
++	}
++	return s
++}
++
++func (o *executionOwner) mutate(kind string, payload map[string]any, expected *ExecutionExpected, call func() error) error {
++	o.mu.Lock()
++	defer o.mu.Unlock()
++	valid := o.identityValidLocked()
++	if !valid {
++		return ErrExecutionConflict
++	}
++	if o.epoch == ^uint64(0) {
++		o.qualified = false
++		o.reason = "epoch_exhausted"
++		o.transition = nil
++	}
++	if expected != nil && (!valid || !o.qualified || expected.Generation != o.identity.Generation || expected.Epoch != strconv.FormatUint(o.epoch, 10)) {
++		return ErrExecutionConflict
++	}
++	if expected != nil {
++		routing, ok := payload["routing"].(map[string]any)
++		old, ok2 := o.config["routing"].(map[string]any)
++		if kind != "ApplyRoutingConfig" || !ok || !ok2 {
++			return ErrExecutionSelector
++		}
++		if executionDigest(old) == executionDigest(routing) {
++			return nil
++		}
++		if tag, _ := selectorOnlyTransition(old, routing, o.config); tag == "" {
++			return ErrExecutionSelector
++		}
++	}
++	wasQualified := o.qualified
++	beforeEpoch, beforeDigest := o.epoch, executionDigest(o.config)
++	o.invalidateLocked("native_outcome_unknown")
++	if err := call(); err != nil {
++		return err
++	}
++	if !wasQualified {
++		return nil
++	}
++	next, err := executionDocument(executionJSON(o.config))
++	if err != nil {
++		o.reason = "unsupported_native_effect"
++		return nil
++	}
++	rule, normalized, err := applyExecutionEffect(next, o.overrides, kind, payload)
++	if err != nil {
++		o.reason = "unsupported_native_effect"
++		return nil
++	}
++	if err := validateExecutionInputs(next); err != nil {
++		o.reason = "unsupported_execution_input"
++		return nil
++	}
++	if !o.identityValidLocked() {
++		return nil
++	}
++	o.config, o.qualified, o.reason = next, true, "custody_attested"
++	if rule != "" {
++		o.transition = &SelectorTransition{Generation: o.identity.Generation, FromEpoch: strconv.FormatUint(beforeEpoch, 10), ToEpoch: strconv.FormatUint(o.epoch, 10), BeforeSHA256: beforeDigest, AfterSHA256: executionDigest(next), NormalizedSHA256: normalized, RuleTag: rule}
++	}
++	return nil
++}
++
++func taggedObjects(document map[string]any, key string) ([]any, error) {
++	v, ok := document[key].([]any)
++	if !ok {
++		return nil, fmt.Errorf("missing %s", key)
++	}
++	return v, nil
++}
++
++func uniqueTag(items []any, tag string) (int, error) {
++	idx := -1
++	for i, v := range items {
++		m, ok := v.(map[string]any)
++		if !ok {
++			return -1, errors.New("invalid tagged object")
++		}
++		if m["tag"] == tag {
++			if idx >= 0 {
++				return -1, errors.New("duplicate tag")
++			}
++			idx = i
++		}
++	}
++	return idx, nil
++}
++
++func applyExecutionEffect(doc map[string]any, overrides map[string]string, kind string, payload map[string]any) (string, string, error) {
++	unsupported := errors.New("unsupported native effect")
++	switch kind {
++	case "AddInbound", "AddOutbound", "DelInbound", "DelOutbound":
++		key := "inbounds"
++		if strings.HasSuffix(kind, "Outbound") {
++			key = "outbounds"
++		}
++		items, err := taggedObjects(doc, key)
++		if err != nil {
++			return "", "", err
++		}
++		var object map[string]any
++		if strings.HasPrefix(kind, "Add") {
++			object, _ = payload["object"].(map[string]any)
++			if object == nil {
++				return "", "", unsupported
++			}
++		}
++		tag, _ := payload["tag"].(string)
++		if object != nil {
++			tag, _ = object["tag"].(string)
++		}
++		if tag == "" || tag == "api" {
++			return "", "", unsupported
++		}
++		i, err := uniqueTag(items, tag)
++		if err != nil {
++			return "", "", err
++		}
++		if object != nil {
++			if i >= 0 {
++				return "", "", unsupported
++			}
++			items = append(items, object)
++		} else {
++			if i < 0 {
++				return "", "", unsupported
++			}
++			items = append(items[:i], items[i+1:]...)
++		}
++		doc[key] = items
++	case "AddUser", "RemoveUser":
++		items, err := taggedObjects(doc, "inbounds")
++		if err != nil {
++			return "", "", err
++		}
++		tag, _ := payload["tag"].(string)
++		i, err := uniqueTag(items, tag)
++		if err != nil || i < 0 {
++			return "", "", unsupported
++		}
++		ib := items[i].(map[string]any)
++		if ib["protocol"] != "vless" || (kind == "AddUser" && payload["protocol"] != "vless") {
++			return "", "", unsupported
++		}
++		settings, ok := ib["settings"].(map[string]any)
++		if !ok {
++			return "", "", unsupported
++		}
++		clients, ok := settings["clients"].([]any)
++		if !ok {
++			return "", "", unsupported
++		}
++		email, _ := payload["email"].(string)
++		user, _ := payload["user"].(map[string]any)
++		if kind == "AddUser" {
++			if user == nil {
++				return "", "", unsupported
++			}
++			email, _ = user["email"].(string)
++			for k := range user {
++				if k != "email" && k != "id" && k != "flow" {
++					return "", "", unsupported
++				}
++			}
++			if _, ok := user["id"].(string); !ok {
++				return "", "", unsupported
++			}
++		}
++		if email == "" {
++			return "", "", unsupported
++		}
++		found := -1
++		for j, c := range clients {
++			m, ok := c.(map[string]any)
++			if !ok {
++				return "", "", unsupported
++			}
++			if m["email"] == email {
++				if found >= 0 {
++					return "", "", unsupported
++				}
++				found = j
++			}
++		}
++		if kind == "AddUser" {
++			if found >= 0 {
++				return "", "", unsupported
++			}
++			clients = append(clients, user)
++		} else {
++			if found < 0 {
++				return "", "", unsupported
++			}
++			clients = append(clients[:found], clients[found+1:]...)
++		}
++		settings["clients"] = clients
++	case "SetBalancerTarget":
++		tag, ok := payload["tag"].(string)
++		target, ok2 := payload["target"].(string)
++		if !ok || !ok2 {
++			return "", "", unsupported
++		}
++		routing, ok := doc["routing"].(map[string]any)
++		if !ok {
++			return "", "", unsupported
++		}
++		balancers, ok := routing["balancers"].([]any)
++		if !ok {
++			return "", "", unsupported
++		}
++		i, err := uniqueTag(balancers, tag)
++		if err != nil || i < 0 {
++			return "", "", unsupported
++		}
++		if target == "" {
++			delete(overrides, tag)
++		} else {
++			overrides[tag] = target
++		}
++	case "ApplyRoutingConfig":
++		next, ok := payload["routing"].(map[string]any)
++		old, ok2 := doc["routing"].(map[string]any)
++		if !ok || !ok2 {
++			return "", "", unsupported
++		}
++		for _, key := range []string{"domainStrategy", "domainMatcher", "script"} {
++			if executionDigest(old[key]) != executionDigest(next[key]) {
++				return "", "", unsupported
++			}
++		}
++		// Routing reload resets balancers; unknown override semantics cannot be resealed.
++		if len(overrides) != 0 {
++			return "", "", unsupported
++		}
++		tag, normalized := selectorOnlyTransition(old, next, doc)
++		doc["routing"] = next
++		return tag, normalized, nil
++	default:
++		return "", "", unsupported
++	}
++	return "", "", nil
++}
++
++func selectorOnlyTransition(old, next, doc map[string]any) (string, string) {
++	a, _ := executionDocument(executionJSON(old))
++	b, _ := executionDocument(executionJSON(next))
++	x, ok := a["rules"].([]any)
++	y, ok2 := b["rules"].([]any)
++	if !ok || !ok2 || len(x) != len(y) {
++		return "", ""
++	}
++	changed := ""
++	for i, v := range x {
++		if executionDigest(v) == executionDigest(y[i]) {
++			continue
++		}
++		r, ok := v.(map[string]any)
++		s, ok2 := y[i].(map[string]any)
++		if !ok || !ok2 || changed != "" || len(r) != 4 || len(s) != 4 {
++			return "", ""
++		}
++		tag, _ := r["ruleTag"].(string)
++		if !strings.HasPrefix(tag, "wm-rule-") || r["type"] != "field" || s["type"] != "field" {
++			return "", ""
++		}
++		in, ok := r["inboundTag"].([]any)
++		if !ok || len(in) != 1 {
++			return "", ""
++		}
++		inbound, ok := in[0].(string)
++		if !ok || !strings.HasPrefix(inbound, "wm-route-") {
++			return "", ""
++		}
++		for _, rule := range []map[string]any{r, s} {
++			target, ok := rule["outboundTag"].(string)
++			if !ok || (target != "wm-eu-only-block" && !strings.HasPrefix(target, "wm-exit-path-")) {
++				return "", ""
++			}
++			outbounds, err := taggedObjects(doc, "outbounds")
++			if err != nil {
++				return "", ""
++			}
++			idx, err := uniqueTag(outbounds, target)
++			if err != nil || idx < 0 {
++				return "", ""
++			}
++		}
++		if _, ok := r["outboundTag"].(string); !ok {
++			return "", ""
++		}
++		if _, ok := s["outboundTag"].(string); !ok {
++			return "", ""
++		}
++		r["outboundTag"], s["outboundTag"] = "wm-eu-only-block", "wm-eu-only-block"
++		if executionDigest(r) != executionDigest(s) {
++			return "", ""
++		}
++		changed = tag
++	}
++	if changed == "" || executionDigest(a) != executionDigest(b) {
++		return "", ""
++	}
++	normalized, _ := executionDocument(executionJSON(doc))
++	normalized["routing"] = a
++	return changed, executionDigest(normalized)
++}
++
++type executionCallKey struct{}
++
++func (o *executionOwner) intercept(ctx context.Context, method string, req, reply any, cc *grpc.ClientConn, invoke grpc.UnaryInvoker, opts ...grpc.CallOption) error {
++	if ctx.Value(executionCallKey{}) == o || executionReadMethod(method) {
++		return invoke(ctx, method, req, reply, cc, opts...)
++	}
++	return o.mutate("UnaccountedRPC", nil, nil, func() error { return invoke(ctx, method, req, reply, cc, opts...) })
++}
++
++func executionReadMethod(method string) bool {
++	switch method {
++	case "/xray.app.stats.command.StatsService/GetStats", "/xray.app.stats.command.StatsService/QueryStats", "/xray.app.stats.command.StatsService/GetSysStats", "/xray.app.stats.command.StatsService/GetStatsOnline", "/xray.app.stats.command.StatsService/GetStatsOnlineIpList", "/xray.app.stats.command.StatsService/GetUsersStats", "/xray.app.stats.command.StatsService/GetAllOnlineUsers", "/xray.app.router.command.RoutingService/GetBalancerInfo", "/xray.app.router.command.RoutingService/TestRoute", "/xray.app.router.command.RoutingService/ListRule", "/xray.app.proxyman.command.HandlerService/ListInbounds", "/xray.app.proxyman.command.HandlerService/ListOutbounds":
++		return true
++	}
++	return false
++}
++
++func validateExecutionInputs(doc map[string]any) error {
++	// Referenced files, scripts and environment expansion escape immutable-input custody.
++	var visit func(any) error
++	visit = func(v any) error {
++		switch x := v.(type) {
++		case map[string]any:
++			for k, y := range x {
++				if k == "listen" && x["tag"] == "api" && y == executionCorePath+",0600" {
++					continue
++				}
++				lower := strings.ToLower(k)
++				if strings.Contains(lower, "file") || lower == "script" || lower == "env" || lower == "geodata" || lower == "reverse" || lower == "transport" || lower == "noises" {
++					if y != nil {
++						return errors.New("unsupported external execution input")
++					}
++				}
++				if err := visit(y); err != nil {
++					return err
++				}
++			}
++		case []any:
++			for _, y := range x {
++				if err := visit(y); err != nil {
++					return err
++				}
++			}
++		case string:
++			if strings.Contains(x, "/run/wavemesh-xray") || strings.ContainsAny(x, "\u2028\u2029") || strings.Contains(x, "${") || strings.HasPrefix(x, "ext:") || strings.HasPrefix(x, "geoip:") || strings.HasPrefix(x, "geosite:") {
++				return errors.New("unsupported external execution input")
++			}
++		case json.Number:
++			if len(x) > 20 || x == "-0" || strings.ContainsAny(string(x), ".eE") {
++				return errors.New("unsupported fractional execution input")
++			}
++		}
++		return nil
++	}
++	if err := visit(doc); err != nil {
++		return err
++	}
++	ibs, err := taggedObjects(doc, "inbounds")
++	if err != nil {
++		return err
++	}
++	for _, v := range ibs {
++		ib, ok := v.(map[string]any)
++		if !ok {
++			return errors.New("unsupported inbound")
++		}
++		if ib["tag"] == "api" {
++			if ib["protocol"] != "dokodemo-door" && ib["protocol"] != "tunnel" {
++				return errors.New("unsupported API inbound")
++			}
++			continue
++		}
++		stream, ok := ib["streamSettings"].(map[string]any)
++		if ib["protocol"] != "vless" || !ok || stream["network"] != "xhttp" || stream["security"] != "tls" {
++			return errors.New("unsupported managed ingress")
++		}
++		xhttp, ok := stream["xhttpSettings"].(map[string]any)
++		if !ok || xhttp["mode"] != "stream-one" {
++			return errors.New("unsupported managed transport")
++		}
++	}
++	return validateNativeControlBoundary(doc)
++}
++
++func validateNativeControlBoundary(doc map[string]any) error {
++	bad := errors.New("unsupported native control boundary")
++	api, ok := doc["api"].(map[string]any)
++	if !ok || len(api) != 2 || api["tag"] != "api" {
++		return bad
++	}
++	services, ok := api["services"].([]any)
++	if !ok {
++		return bad
++	}
++	seenServices := map[string]bool{}
++	for _, v := range services {
++		s, ok := v.(string)
++		if !ok || seenServices[s] {
++			return bad
++		}
++		switch s {
++		case "HandlerService", "RoutingService", "StatsService", "LoggerService":
++		default:
++			return bad
++		}
++		seenServices[s] = true
++	}
++	if !seenServices["HandlerService"] || !seenServices["RoutingService"] || !seenServices["StatsService"] {
++		return bad
++	}
++	for _, key := range []string{"inbounds", "outbounds"} {
++		objects, err := taggedObjects(doc, key)
++		if err != nil {
++			return bad
++		}
++		seen := map[string]bool{}
++		for _, v := range objects {
++			m, ok := v.(map[string]any)
++			if !ok {
++				return bad
++			}
++			tag, ok := m["tag"].(string)
++			if !ok || tag == "" || seen[tag] {
++				return bad
++			}
++			seen[tag] = true
++			if key == "outbounds" && tag == "api" {
++				return bad
++			}
++			if tag != "api" && referencesNativeControl(m) {
++				return bad
++			}
++		}
++		if key == "inbounds" && !seen["api"] {
++			return bad
++		}
++	}
++	routing, ok := doc["routing"].(map[string]any)
++	if !ok {
++		return bad
++	}
++	rules, ok := routing["rules"].([]any)
++	if !ok {
++		return bad
++	}
++	apiRules := 0
++	for _, v := range rules {
++		r, ok := v.(map[string]any)
++		if !ok {
++			return bad
++		}
++		if r["outboundTag"] == "api" {
++			in, ok := r["inboundTag"].([]any)
++			if !ok || len(in) != 1 || in[0] != "api" || r["type"] != "field" || len(r) != 3 {
++				return bad
++			}
++			apiRules++
++		}
++	}
++	if apiRules != 1 {
++		return bad
++	}
++	if balancers, ok := routing["balancers"].([]any); ok {
++		for _, v := range balancers {
++			b, ok := v.(map[string]any)
++			if !ok {
++				return bad
++			}
++			if referencesNativeControl(b) {
++				return bad
++			}
++			selectors, ok := b["selector"].([]any)
++			if !ok {
++				return bad
++			}
++			for _, v := range selectors {
++				prefix, ok := v.(string)
++				if !ok || strings.HasPrefix("api", prefix) {
++					return bad
++				}
++			}
++		}
++	}
++	return nil
++}
++
++func referencesNativeControl(value any) bool {
++	switch v := value.(type) {
++	case map[string]any:
++		for key, item := range v {
++			if item == "api" && (key == "tag" || key == "outboundTag" || key == "dialerProxy" || key == "fallbackTag") {
++				return true
++			}
++			if referencesNativeControl(item) {
++				return true
++			}
++		}
++	case []any:
++		for _, item := range v {
++			if referencesNativeControl(item) {
++				return true
++			}
++		}
++	}
++	return false
++}
++
++func initializePreparedDeny(doc map[string]any) error {
++	routing, ok := doc["routing"].(map[string]any)
++	if !ok {
++		return errors.New("routing missing")
++	}
++	rules, ok := routing["rules"].([]any)
++	if !ok {
++		return errors.New("routing rules missing")
++	}
++	for _, v := range rules {
++		r, ok := v.(map[string]any)
++		if !ok {
++			return errors.New("invalid routing rule")
++		}
++		tag, _ := r["ruleTag"].(string)
++		target, _ := r["outboundTag"].(string)
++		if !strings.HasPrefix(tag, "wm-rule-") || (target != "wm-eu-only-block" && !strings.HasPrefix(target, "wm-exit-path-")) {
++			continue
++		}
++		in, ok := r["inboundTag"].([]any)
++		if !ok || len(in) != 1 || r["type"] != "field" || len(r) != 4 {
++			return errors.New("prepared rule is not unconditional")
++		}
++		inbound, ok := in[0].(string)
++		if !ok || !strings.HasPrefix(inbound, "wm-route-") {
++			return errors.New("prepared rule inbound is unsupported")
++		}
++		outbounds, err := taggedObjects(doc, "outbounds")
++		if err != nil {
++			return err
++		}
++		idx, err := uniqueTag(outbounds, "wm-eu-only-block")
++		if err != nil || idx < 0 || outbounds[idx].(map[string]any)["protocol"] != "blackhole" {
++			return errors.New("prepared deny outbound missing")
++		}
++		r["outboundTag"] = "wm-eu-only-block"
++	}
++	return nil
++}
++
++func (p *process) invalidateExecution(reason string) {
++	p.mu.RLock()
++	o := p.execution
++	p.mu.RUnlock()
++	if o != nil {
++		o.invalidate(reason)
++	}
++}
++func (p *Process) InvalidateExecution(reason string) { p.invalidateExecution(reason) }
++
++func parseExecutionChallenge(line []byte) (string, error) {
++	bad := errors.New("invalid private snapshot request")
++	if len(line) > 256 {
++		return "", bad
++	}
++	d := json.NewDecoder(bytes.NewReader(line))
++	token, err := d.Token()
++	if err != nil || token != json.Delim('{') {
++		return "", bad
++	}
++	seen := map[string]bool{}
++	challenge := ""
++	version := 0
++	for d.More() {
++		token, err = d.Token()
++		if err != nil {
++			return "", bad
++		}
++		key, ok := token.(string)
++		if !ok || seen[key] {
++			return "", bad
++		}
++		seen[key] = true
++		switch key {
++		case "schema_version":
++			err = d.Decode(&version)
++		case "challenge":
++			err = d.Decode(&challenge)
++		default:
++			return "", bad
++		}
++		if err != nil {
++			return "", bad
++		}
++	}
++	if _, err = d.Token(); err != nil || len(seen) != 2 || version != executionSchema || len(challenge) != 64 {
++		return "", bad
++	}
++	decoded, err := hex.DecodeString(challenge)
++	if err != nil || len(decoded) != 32 || hex.EncodeToString(decoded) != challenge {
++		return "", bad
++	}
++	var extra any
++	if d.Decode(&extra) != io.EOF {
++		return "", bad
++	}
++	return challenge, nil
++}
+diff --git a/internal/xray/execution_api.go b/internal/xray/execution_api.go
+new file mode 100644
+index 0000000000000000000000000000000000000000..b418fdacbce57ef07ade12484b046738910c43e1
+--- /dev/null
++++ b/internal/xray/execution_api.go
+@@ -0,0 +1,94 @@
++package xray
++
++import (
++	"context"
++	"encoding/json"
++	"fmt"
++)
++
++type APIEndpoint struct {
++	Network string
++	Address string
++	owner   *executionOwner
++}
++
++func PreparedExecutionEnabled() bool { return executionRequested() }
++
++func TCPAPIEndpoint(port int) APIEndpoint {
++	if port <= 0 || port > 65535 {
++		return APIEndpoint{}
++	}
++	return APIEndpoint{Network: "tcp", Address: fmt.Sprintf("127.0.0.1:%d", port)}
++}
++
++func (p *Process) GetAPIEndpoint() APIEndpoint {
++	p.mu.RLock()
++	defer p.mu.RUnlock()
++	if p.execution != nil {
++		return APIEndpoint{Network: "unix", Address: executionCorePath, owner: p.execution}
++	}
++	return TCPAPIEndpoint(p.apiPort)
++}
++
++func (x *XrayAPI) rpcContext() context.Context {
++	ctx := context.Background()
++	if x.ownedExecutionCall {
++		return context.WithValue(ctx, executionCallKey{}, x.execution)
++	}
++	return ctx
++}
++
++func (x *XrayAPI) withExecutionMutation(kind string, payload map[string]any, expected *ExecutionExpected, call func(*XrayAPI) error) error {
++	if x.execution == nil {
++		if expected != nil {
++			return ErrExecutionConflict
++		}
++		return call(x)
++	}
++	local := *x
++	local.ownedExecutionCall = true
++	return x.execution.mutate(kind, payload, expected, func() error { return call(&local) })
++}
++
++func objectPayload(data []byte) map[string]any {
++	object, _ := executionDocument(data)
++	return map[string]any{"object": object}
++}
++
++func (x *XrayAPI) AddInbound(data []byte) error {
++	data = append([]byte(nil), data...)
++	return x.withExecutionMutation("AddInbound", objectPayload(data), nil, func(c *XrayAPI) error { return c.addInboundRaw(data) })
++}
++func (x *XrayAPI) DelInbound(tag string) error {
++	return x.withExecutionMutation("DelInbound", map[string]any{"tag": tag}, nil, func(c *XrayAPI) error { return c.delInboundRaw(tag) })
++}
++func (x *XrayAPI) AddOutbound(data []byte) error {
++	data = append([]byte(nil), data...)
++	return x.withExecutionMutation("AddOutbound", objectPayload(data), nil, func(c *XrayAPI) error { return c.addOutboundRaw(data) })
++}
++func (x *XrayAPI) DelOutbound(tag string) error {
++	return x.withExecutionMutation("DelOutbound", map[string]any{"tag": tag}, nil, func(c *XrayAPI) error { return c.delOutboundRaw(tag) })
++}
++func (x *XrayAPI) ApplyRoutingConfig(data []byte) error { return x.applyRoutingExpected(data, nil) }
++
++// CompareAndApplyRouting is owner-local; no public mutating endpoint exposes it.
++func (x *XrayAPI) CompareAndApplyRouting(data []byte, expected ExecutionExpected) error {
++	return x.applyRoutingExpected(data, &expected)
++}
++func (x *XrayAPI) applyRoutingExpected(data []byte, expected *ExecutionExpected) error {
++	data = append([]byte(nil), data...)
++	routing, _ := executionDocument(data)
++	return x.withExecutionMutation("ApplyRoutingConfig", map[string]any{"routing": routing}, expected, func(c *XrayAPI) error { return c.applyRoutingConfigRaw(data) })
++}
++func (x *XrayAPI) SetBalancerTarget(tag, target string) error {
++	return x.withExecutionMutation("SetBalancerTarget", map[string]any{"tag": tag, "target": target}, nil, func(c *XrayAPI) error { return c.setBalancerTargetRaw(tag, target) })
++}
++func (x *XrayAPI) AddUser(protocol, tag string, user map[string]any) error {
++	// Snapshot caller-owned maps before a native call can mutate execution.
++	data, _ := json.Marshal(user)
++	frozen, _ := executionDocument(data)
++	return x.withExecutionMutation("AddUser", map[string]any{"tag": tag, "protocol": protocol, "user": frozen}, nil, func(c *XrayAPI) error { return c.addUserRaw(protocol, tag, frozen) })
++}
++func (x *XrayAPI) RemoveUser(tag, email string) error {
++	return x.withExecutionMutation("RemoveUser", map[string]any{"tag": tag, "email": email}, nil, func(c *XrayAPI) error { return c.removeUserRaw(tag, email) })
++}
+diff --git a/internal/xray/execution_linux.go b/internal/xray/execution_linux.go
+new file mode 100644
+index 0000000000000000000000000000000000000000..a8e1dec19d45e57c9d3127144db6127e42e9e98d
+--- /dev/null
++++ b/internal/xray/execution_linux.go
+@@ -0,0 +1,361 @@
++//go:build linux
++
++package xray
++
++import (
++	"bufio"
++	"context"
++	"crypto/sha256"
++	"encoding/hex"
++	"encoding/json"
++	"errors"
++	"fmt"
++	"io"
++	"net"
++	"os"
++	"os/exec"
++	"strings"
++	"syscall"
++	"time"
++
++	"github.com/google/uuid"
++	statsService "github.com/xtls/xray-core/app/stats/command"
++	"golang.org/x/sys/unix"
++	"google.golang.org/grpc"
++)
++
++const executionDirectory = "/run/wavemesh-xray"
++const executionCorePath = executionDirectory + "/core.sock"
++const executionSnapshotPath = executionDirectory + "/snapshot.sock"
++
++func hashFile(path string) (string, error) {
++	f, err := os.Open(path)
++	if err != nil {
++		return "", err
++	}
++	defer f.Close()
++	h := sha256.New()
++	if _, err = io.Copy(h, f); err != nil {
++		return "", err
++	}
++	return hex.EncodeToString(h.Sum(nil)), nil
++}
++
++func sealedInput(name string, data []byte) (*os.File, error) {
++	fd, err := unix.MemfdCreate(name, unix.MFD_CLOEXEC|unix.MFD_ALLOW_SEALING)
++	if err != nil {
++		return nil, err
++	}
++	f := os.NewFile(uintptr(fd), name)
++	if _, err = f.Write(data); err != nil {
++		f.Close()
++		return nil, err
++	}
++	if _, err = f.Seek(0, io.SeekStart); err != nil {
++		f.Close()
++		return nil, err
++	}
++	seals := unix.F_SEAL_WRITE | unix.F_SEAL_GROW | unix.F_SEAL_SHRINK | unix.F_SEAL_SEAL
++	if _, err = unix.FcntlInt(f.Fd(), unix.F_ADD_SEALS, seals); err != nil {
++		f.Close()
++		return nil, err
++	}
++	got, err := unix.FcntlInt(f.Fd(), unix.F_GET_SEALS, 0)
++	if err != nil || got != seals {
++		f.Close()
++		return nil, errors.New("sealed input unavailable")
++	}
++	return f, nil
++}
++
++func procStartTicks(pid int) (string, error) {
++	data, err := os.ReadFile(fmt.Sprintf("/proc/%d/stat", pid))
++	if err != nil {
++		return "", err
++	}
++	i := strings.LastIndexByte(string(data), ')')
++	if i < 0 {
++		return "", errors.New("invalid process stat")
++	}
++	fields := strings.Fields(string(data[i+1:]))
++	if len(fields) < 20 {
++		return "", errors.New("short process stat")
++	}
++	if fields[0] == "Z" || fields[0] == "X" {
++		return "", errors.New("process exited")
++	}
++	return fields[19], nil
++}
++
++func privateExecutionDirectory() error {
++	if os.Geteuid() != 0 {
++		return errors.New("managed execution requires existing root service custody")
++	}
++	if err := os.Mkdir(executionDirectory, 0700); err != nil && !os.IsExist(err) {
++		return err
++	}
++	st, err := os.Lstat(executionDirectory)
++	if err != nil {
++		return err
++	}
++	var u unix.Stat_t
++	if err = unix.Lstat(executionDirectory, &u); err != nil {
++		return err
++	}
++	if !st.IsDir() || st.Mode()&os.ModeSymlink != 0 || st.Mode().Perm() != 0700 || u.Uid != 0 {
++		return errors.New("unsafe execution directory")
++	}
++	return nil
++}
++
++func (p *process) startManagedExecution() (err error) {
++	if p.configPath != "" {
++		return errors.New("managed attestation is unavailable on test processes")
++	}
++	if err = privateExecutionDirectory(); err != nil {
++		return err
++	}
++	for _, path := range []string{executionCorePath, executionSnapshotPath} {
++		if _, e := os.Lstat(path); !os.IsNotExist(e) {
++			return errors.New("execution socket path already occupied")
++		}
++	}
++	p.mu.RLock()
++	data, err := json.Marshal(p.config)
++	p.mu.RUnlock()
++	if err != nil {
++		return err
++	}
++	doc, err := executionDocument(data)
++	if err != nil {
++		return err
++	}
++	if err = validateExecutionInputs(doc); err != nil {
++		return err
++	}
++	if err = initializePreparedDeny(doc); err != nil {
++		return err
++	}
++	ibs, _ := doc["inbounds"].([]any)
++	apiFound := false
++	for _, v := range ibs {
++		ib := v.(map[string]any)
++		if ib["tag"] == "api" {
++			if apiFound {
++				return errors.New("duplicate native control inbound")
++			}
++			apiFound = true
++			ib["listen"] = executionCorePath + ",0600"
++			delete(ib, "port")
++		}
++	}
++	if !apiFound {
++		return errors.New("native control inbound missing")
++	}
++	consumed := executionJSON(doc)
++	if len(consumed) > 4<<20 {
++		return errors.New("execution configuration exceeds private snapshot bound")
++	}
++	configFD, err := sealedInput("wavemesh-consumed-config", consumed)
++	if err != nil {
++		return err
++	}
++	defer configFD.Close()
++	coreBytes, err := os.ReadFile(GetBinaryPath())
++	if err != nil {
++		return err
++	}
++	h := sha256.Sum256(coreBytes)
++	if hex.EncodeToString(h[:]) != stockCoreSHA256 {
++		return errors.New("stock core hash mismatch")
++	}
++	coreFD, err := sealedInput("wavemesh-stock-core", coreBytes)
++	if err != nil {
++		return err
++	}
++	defer coreFD.Close()
++	if err = coreFD.Chmod(0500); err != nil {
++		return err
++	}
++	boot, err := os.ReadFile("/proc/sys/kernel/random/boot_id")
++	if err != nil {
++		return err
++	}
++	producerHash, err := hashFile("/proc/self/exe")
++	if err != nil {
++		return err
++	}
++	producerTicks, err := procStartTicks(os.Getpid())
++	if err != nil {
++		return err
++	}
++	consumedHash := sha256.Sum256(consumed)
++	id := ExecutionIdentity{Generation: uuid.NewString(), BootID: strings.TrimSpace(string(boot)), CoreSHA256: stockCoreSHA256, ProducerPID: os.Getpid(), ProducerStartTicks: producerTicks, ProducerSHA256: producerHash, ProducerUpstream: producerUpstream, ConsumedSHA256: hex.EncodeToString(consumedHash[:])}
++	o := newExecutionOwner(consumed, id, nil)
++	p.mu.Lock()
++	p.execution = o
++	p.apiPort = 0
++	p.mu.Unlock()
++	defer func() {
++		if err != nil {
++			o.invalidate("cold_start_failed")
++			_ = p.stop()
++		}
++	}()
++	cmd := exec.CommandContext(context.Background(), "/proc/self/fd/4", "run", "-format", "json", "-c", "/proc/self/fd/3")
++	cmd.SysProcAttr = &syscall.SysProcAttr{Pdeathsig: syscall.SIGKILL}
++	cmd.ExtraFiles = []*os.File{configFD, coreFD}
++	cmd.Stdout = p.logWriter
++	cmd.Stderr = p.logWriter
++	if err = p.startCommand(cmd); err != nil {
++		return err
++	}
++	id.PID = cmd.Process.Pid
++	o.peerPID.Store(int64(id.PID))
++	id.StartTicks, err = procStartTicks(id.PID)
++	if err != nil {
++		return err
++	}
++	o.peerStartTicks.Store(id.StartTicks)
++	actualHash, err := hashFile(fmt.Sprintf("/proc/%d/exe", id.PID))
++	if err != nil || actualHash != stockCoreSHA256 {
++		return errors.New("executing core identity mismatch")
++	}
++	o.mu.Lock()
++	o.identity = id
++	o.checkIdentity = func() error {
++		if !p.IsRunning() {
++			return errors.New("core stopped")
++		}
++		ticks, e := procStartTicks(id.PID)
++		if e != nil || ticks != id.StartTicks {
++			return errors.New("core identity changed")
++		}
++		h, e := hashFile(fmt.Sprintf("/proc/%d/exe", id.PID))
++		if e != nil || h != id.CoreSHA256 {
++			return errors.New("core executable changed")
++		}
++		return nil
++	}
++	o.mu.Unlock()
++	api := &XrayAPI{}
++	if err = api.InitEndpoint(APIEndpoint{Network: "unix", Address: executionCorePath, owner: o}); err != nil {
++		return err
++	}
++	defer api.Close()
++	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
++	defer cancel()
++	_, err = (*api.StatsServiceClient).GetSysStats(ctx, &statsService.SysStatsRequest{}, grpc.WaitForReady(true))
++	if err != nil {
++		return errors.New("native startup readiness unavailable")
++	}
++	if err = verifyPrivateSocket(executionCorePath); err != nil {
++		return err
++	}
++	listener, err := net.ListenUnix("unix", &net.UnixAddr{Name: executionSnapshotPath, Net: "unix"})
++	if err != nil {
++		return err
++	}
++	if err = os.Chmod(executionSnapshotPath, 0600); err != nil {
++		listener.Close()
++		return err
++	}
++	p.mu.Lock()
++	p.executionListener = listener
++	p.version = "26.10.21"
++	p.mu.Unlock()
++	o.mu.Lock()
++	if o.epoch == 0 && o.identityValidLocked() {
++		o.qualified = true
++		o.reason = "custody_attested"
++	}
++	o.mu.Unlock()
++	go o.serveExecutionSnapshots(listener)
++	return nil
++}
++
++func verifyPrivateSocket(path string) error {
++	var st unix.Stat_t
++	if err := unix.Lstat(path, &st); err != nil {
++		return err
++	}
++	if st.Mode&unix.S_IFMT != unix.S_IFSOCK || st.Uid != 0 || st.Mode&0777 != 0600 {
++		return errors.New("unowned native socket")
++	}
++	return nil
++}
++
++func unixPeer(c *net.UnixConn) (*unix.Ucred, error) {
++	raw, err := c.SyscallConn()
++	if err != nil {
++		return nil, err
++	}
++	var cred *unix.Ucred
++	var inner error
++	err = raw.Control(func(fd uintptr) { cred, inner = unix.GetsockoptUcred(int(fd), unix.SOL_SOCKET, unix.SO_PEERCRED) })
++	if err != nil {
++		return nil, err
++	}
++	return cred, inner
++}
++
++func dialExecutionCore(ctx context.Context, endpoint APIEndpoint) (net.Conn, error) {
++	var d net.Dialer
++	c, err := d.DialContext(ctx, "unix", endpoint.Address)
++	if err != nil {
++		return nil, err
++	}
++	u, ok := c.(*net.UnixConn)
++	if !ok {
++		c.Close()
++		return nil, errors.New("native socket type mismatch")
++	}
++	cred, err := unixPeer(u)
++	if err != nil || cred.Uid != 0 || int64(cred.Pid) != endpoint.owner.peerPID.Load() {
++		c.Close()
++		return nil, errors.New("native peer identity mismatch")
++	}
++	expected, ok := endpoint.owner.peerStartTicks.Load().(string)
++	ticks, err := procStartTicks(int(cred.Pid))
++	if !ok || err != nil || ticks != expected {
++		c.Close()
++		return nil, errors.New("native peer process instance mismatch")
++	}
++	return c, nil
++}
++
++func (o *executionOwner) serveExecutionSnapshots(listener *net.UnixListener) {
++	for {
++		c, err := listener.AcceptUnix()
++		if err != nil {
++			return
++		}
++		o.handleExecutionSnapshot(c)
++		c.Close()
++	}
++}
++
++func (o *executionOwner) handleExecutionSnapshot(c *net.UnixConn) {
++	_ = c.SetDeadline(time.Now().Add(time.Second))
++	cred, err := unixPeer(c)
++	if err != nil || cred.Uid != 0 || cred.Pid <= 0 {
++		return
++	}
++	reader := bufio.NewReader(io.LimitReader(c, 257))
++	line, err := reader.ReadBytes('\n')
++	if err != nil || len(line) > 256 {
++		return
++	}
++	challenge, err := parseExecutionChallenge(line)
++	if err != nil {
++		return
++	}
++	s := o.snapshot(challenge)
++	data := executionJSON(s)
++	if len(data) > 4<<20 {
++		return
++	}
++	_, _ = c.Write(append(data, '\n'))
++}
++
++func executionRequested() bool { return os.Getenv("XUI_PREPARED_ATTESTATION") == "1" }
+diff --git a/internal/xray/execution_native_linux_test.go b/internal/xray/execution_native_linux_test.go
+new file mode 100644
+index 0000000000000000000000000000000000000000..341279aca21c6d9feb3a489403ccfe6e4dc60c5a
+--- /dev/null
++++ b/internal/xray/execution_native_linux_test.go
+@@ -0,0 +1,341 @@
++//go:build linux
++
++package xray
++
++import (
++	"bufio"
++	"bytes"
++	"context"
++	"crypto/ecdsa"
++	"crypto/elliptic"
++	"crypto/rand"
++	"crypto/sha256"
++	"crypto/x509"
++	"crypto/x509/pkix"
++	"encoding/hex"
++	"encoding/json"
++	"encoding/pem"
++	"errors"
++	"io"
++	"math/big"
++	"net"
++	"os"
++	"os/exec"
++	"path/filepath"
++	"strconv"
++	"strings"
++	"syscall"
++	"testing"
++	"time"
++
++	statsService "github.com/xtls/xray-core/app/stats/command"
++	"golang.org/x/sys/unix"
++)
++
++func nativeSnapshot(t *testing.T) ExecutionSnapshot {
++	t.Helper()
++	c, err := net.DialUnix("unix", nil, &net.UnixAddr{Name: executionSnapshotPath, Net: "unix"})
++	if err != nil {
++		t.Fatal("private snapshot dial failed")
++	}
++	defer c.Close()
++	cred, err := unixPeer(c)
++	if err != nil || cred.Uid != 0 || int(cred.Pid) != os.Getpid() {
++		t.Fatal("producer peer credentials mismatch")
++	}
++	nonce := make([]byte, 32)
++	if _, err = rand.Read(nonce); err != nil {
++		t.Fatal("challenge entropy unavailable")
++	}
++	challenge := hex.EncodeToString(nonce)
++	_ = c.SetDeadline(time.Now().Add(3 * time.Second))
++	_, err = c.Write(append(executionJSON(map[string]any{"schema_version": 3, "challenge": challenge}), '\n'))
++	if err != nil {
++		t.Fatal("private snapshot request failed")
++	}
++	line, err := bufio.NewReader(io.LimitReader(c, 4<<20)).ReadBytes('\n')
++	if err != nil {
++		t.Fatal("private snapshot response failed")
++	}
++	var s ExecutionSnapshot
++	d := json.NewDecoder(bytes.NewReader(line))
++	d.DisallowUnknownFields()
++	if d.Decode(&s) != nil || s.Challenge != challenge || s.SchemaVersion != 3 {
++		t.Fatal("snapshot response challenge or schema mismatch")
++	}
++	return s
++}
++
++func nativePort(t *testing.T) int {
++	t.Helper()
++	l, err := net.Listen("tcp", "127.0.0.1:0")
++	if err != nil {
++		t.Fatal("fixture port unavailable")
++	}
++	p := l.Addr().(*net.TCPAddr).Port
++	l.Close()
++	return p
++}
++
++func nativeTLS(t *testing.T) map[string]any {
++	t.Helper()
++	key, err := ecdsa.GenerateKey(elliptic.P256(), rand.Reader)
++	if err != nil {
++		t.Fatal("fixture key generation failed")
++	}
++	cert := &x509.Certificate{SerialNumber: big.NewInt(1), Subject: pkix.Name{CommonName: "prepared.invalid"}, DNSNames: []string{"prepared.invalid"}, NotBefore: time.Now().Add(-time.Minute), NotAfter: time.Now().Add(time.Hour), KeyUsage: x509.KeyUsageDigitalSignature, ExtKeyUsage: []x509.ExtKeyUsage{x509.ExtKeyUsageServerAuth}}
++	der, err := x509.CreateCertificate(rand.Reader, cert, cert, &key.PublicKey, key)
++	if err != nil {
++		t.Fatal("fixture certificate generation failed")
++	}
++	secret, err := x509.MarshalPKCS8PrivateKey(key)
++	if err != nil {
++		t.Fatal("fixture key encoding failed")
++	}
++	return map[string]any{"certificates": []any{map[string]any{"certificate": strings.Split(strings.TrimSpace(string(pem.EncodeToMemory(&pem.Block{Type: "CERTIFICATE", Bytes: der}))), "\n"), "key": strings.Split(strings.TrimSpace(string(pem.EncodeToMemory(&pem.Block{Type: "PRIVATE KEY", Bytes: secret}))), "\n"), "oneTimeLoading": true}}}
++}
++
++func nativeFixtureConfig(t *testing.T) (*Config, int) {
++	t.Helper()
++	o := executionFixture(t)
++	doc := o.config
++	apiPort := nativePort(t)
++	ibs := doc["inbounds"].([]any)
++	ibs[0].(map[string]any)["port"] = apiPort
++	entry := ibs[1].(map[string]any)
++	entry["port"] = nativePort(t)
++	entry["listen"] = "127.0.0.1"
++	stream := entry["streamSettings"].(map[string]any)
++	stream["tlsSettings"] = nativeTLS(t)
++	stream["xhttpSettings"].(map[string]any)["path"] = "/native-unit"
++	outbounds := doc["outbounds"].([]any)
++	path := outbounds[1].(map[string]any)
++	path["settings"] = map[string]any{"vnext": []any{map[string]any{"address": "127.0.0.1", "port": nativePort(t), "users": []any{map[string]any{"id": "00000000-0000-4000-8000-000000000004", "encryption": "none"}}}}}
++	path["streamSettings"] = map[string]any{"network": "xhttp", "security": "tls", "tlsSettings": map[string]any{"serverName": "prepared.invalid"}, "xhttpSettings": map[string]any{"path": "/native-unit", "mode": "stream-one"}}
++	doc["log"] = map[string]any{"access": "none", "error": "none", "loglevel": "none"}
++	doc["stats"] = map[string]any{}
++	doc["policy"] = map[string]any{"system": map[string]any{"statsInboundUplink": true, "statsInboundDownlink": true}}
++	routing := doc["routing"].(map[string]any)
++	routing["rules"] = append(routing["rules"].([]any), map[string]any{"type": "field", "inboundTag": []any{"sentinel-inbound"}, "outboundTag": "sentinel"})
++	var cfg Config
++	if json.Unmarshal(executionJSON(doc), &cfg) != nil {
++		t.Fatal("fixture config encoding failed")
++	}
++	return &cfg, apiPort
++}
++
++func TestExecutionNativeUnprivilegedHelper(t *testing.T) {
++	if os.Getenv("PR4_UNPRIVILEGED_HELPER") != "1" {
++		t.Skip("invoked only by the isolated native custody test")
++	}
++	if os.Geteuid() != 65534 {
++		t.Fatal("helper did not drop Unix identity")
++	}
++	for _, path := range []string{executionCorePath, executionSnapshotPath} {
++		c, err := net.Dial("unix", path)
++		if c != nil {
++			c.Close()
++		}
++		if !errors.Is(err, syscall.EACCES) {
++			t.Fatal("unprivileged native access was not denied by filesystem custody")
++		}
++	}
++}
++
++func TestExecutionNativeImmutableInputUDSAllMutatorsAndLostOutcome(t *testing.T) {
++	binary := os.Getenv("XRAY_E2E_BINARY")
++	if binary == "" {
++		t.Skip("requires exact stock core and an exclusively admitted Linux fixture")
++	}
++	if os.Geteuid() != 0 {
++		t.Fatal("native custody fixture requires its admitted root guest")
++	}
++	for _, path := range []string{executionCorePath, executionSnapshotPath} {
++		if _, err := os.Lstat(path); !os.IsNotExist(err) {
++			t.Fatal("native fixture path is already occupied")
++		}
++	}
++	bytesCore, err := os.ReadFile(binary)
++	if err != nil {
++		t.Fatal("stock core unavailable")
++	}
++	h := sha256.Sum256(bytesCore)
++	if hex.EncodeToString(h[:]) != stockCoreSHA256 {
++		t.Fatal("stock core hash mismatch")
++	}
++	binDir := t.TempDir()
++	if os.WriteFile(filepath.Join(binDir, GetBinaryName()), bytesCore, 0755) != nil {
++		t.Fatal("private core copy failed")
++	}
++	t.Setenv("XUI_BIN_FOLDER", binDir)
++	t.Setenv("XUI_LOG_FOLDER", t.TempDir())
++	t.Setenv("XUI_PREPARED_ATTESTATION", "1")
++	cfg, unusedTCP := nativeFixtureConfig(t)
++	p := NewProcess(cfg)
++	if err = p.Start(); err != nil {
++		t.Fatalf("managed cold launch failed (%T)", err)
++	}
++	t.Cleanup(func() {
++		if p.IsRunning() {
++			if e := p.Stop(); e != nil {
++				t.Error("owned core cleanup failed")
++			}
++		}
++	})
++	s := nativeSnapshot(t)
++	if !s.Qualified || s.Identity.CoreSHA256 != stockCoreSHA256 || s.Identity.PID <= 0 || s.Identity.ProducerPID != os.Getpid() || s.Epoch != "0" {
++		t.Fatal("cold generation is not custody attested")
++	}
++	for _, path := range []string{executionCorePath, executionSnapshotPath} {
++		var st unix.Stat_t
++		if unix.Lstat(path, &st) != nil || st.Uid != 0 || st.Mode&0777 != 0600 {
++			t.Fatal("private socket permissions mismatch")
++		}
++	}
++	var parent unix.Stat_t
++	if unix.Lstat(executionDirectory, &parent) != nil || parent.Uid != 0 || parent.Mode&0777 != 0700 {
++		t.Fatal("private parent permissions mismatch")
++	}
++	if c, e := net.DialTimeout("tcp", net.JoinHostPort("127.0.0.1", strconv.Itoa(unusedTCP)), 100*time.Millisecond); e == nil {
++		c.Close()
++		t.Fatal("managed control leaked to TCP")
++	}
++	consumedPath := filepath.Join("/proc", strconv.Itoa(s.Identity.PID), "fd", "3")
++	f, e := os.OpenFile(consumedPath, os.O_RDWR, 0)
++	if e != nil {
++		t.Fatal("consumed sealed descriptor unavailable")
++	}
++	seals, e := unix.FcntlInt(f.Fd(), unix.F_GET_SEALS, 0)
++	if e != nil || seals&(unix.F_SEAL_WRITE|unix.F_SEAL_GROW|unix.F_SEAL_SHRINK|unix.F_SEAL_SEAL) != (unix.F_SEAL_WRITE|unix.F_SEAL_GROW|unix.F_SEAL_SHRINK|unix.F_SEAL_SEAL) {
++		f.Close()
++		t.Fatal("consumed input lacks immutable seals")
++	}
++	if _, e = f.WriteAt([]byte("x"), 0); !errors.Is(e, syscall.EPERM) {
++		f.Close()
++		t.Fatal("consumed bytes remained writable")
++	}
++	f.Close()
++	if actual, e := hashFile(consumedPath); e != nil || actual != s.Identity.ConsumedSHA256 {
++		t.Fatal("consumed generation hash mismatch")
++	}
++	self, e := os.ReadFile(os.Args[0])
++	if e != nil {
++		t.Fatal("unprivileged helper unavailable")
++	}
++	helper, e := os.CreateTemp("/tmp", "pr4-unprivileged-*")
++	if e != nil {
++		t.Fatal("helper path unavailable")
++	}
++	helperPath := helper.Name()
++	t.Cleanup(func() { os.Remove(helperPath) })
++	_, e = helper.Write(self)
++	helper.Close()
++	if e != nil || os.Chmod(helperPath, 0755) != nil {
++		t.Fatal("helper preparation failed")
++	}
++	command := exec.Command(helperPath, "-test.run=^TestExecutionNativeUnprivilegedHelper$", "-test.count=1")
++	command.Env = []string{"PR4_UNPRIVILEGED_HELPER=1"}
++	command.SysProcAttr = &syscall.SysProcAttr{Credential: &syscall.Credential{Uid: 65534, Gid: 65534}}
++	if _, e = command.CombinedOutput(); e != nil {
++		t.Fatal("unprivileged direct writer exclusion failed")
++	}
++	api := &XrayAPI{}
++	if api.InitEndpoint(p.GetAPIEndpoint()) != nil {
++		t.Fatal("producer native dial failed")
++	}
++	defer api.Close()
++	user := map[string]any{"id": "00000000-0000-4000-8000-000000000005", "email": "new@example.invalid"}
++	if api.AddUser("vless", "wm-route-unit", user) != nil || api.RemoveUser("wm-route-unit", "new@example.invalid") != nil {
++		t.Fatal("native user mutation failed")
++	}
++	var beforeDoc map[string]any
++	if json.Unmarshal(nativeSnapshot(t).Config, &beforeDoc) != nil {
++		t.Fatal("native execution document missing")
++	}
++	extra := beforeDoc["inbounds"].([]any)[1].(map[string]any)
++	extra["tag"] = "extra-native"
++	extra["port"] = nativePort(t)
++	if api.AddInbound(executionJSON(extra)) != nil || api.DelInbound("extra-native") != nil {
++		t.Fatal("native inbound mutation failed")
++	}
++	if api.AddOutbound([]byte(`{"tag":"extra-native","protocol":"blackhole"}`)) != nil || api.DelOutbound("extra-native") != nil {
++		t.Fatal("native outbound mutation failed")
++	}
++	if api.SetBalancerTarget("unit-balancer", "wm-exit-path-unit") != nil {
++		t.Fatal("native override failed")
++	}
++	if nativeSnapshot(t).Overrides["unit-balancer"] != "wm-exit-path-unit" {
++		t.Fatal("native override was omitted")
++	}
++	if api.SetBalancerTarget("unit-balancer", "") != nil {
++		t.Fatal("native override clear failed")
++	}
++	for range 16 {
++		ctx, cancel := context.WithTimeout(context.Background(), time.Second)
++		_, e = (*api.StatsServiceClient).GetSysStats(ctx, &statsService.SysStatsRequest{})
++		cancel()
++		if e != nil {
++			t.Fatal("native stats reader failed")
++		}
++	}
++	readCounter := func() int64 {
++		ctx, cancel := context.WithTimeout(context.Background(), time.Second)
++		defer cancel()
++		r, e := (*api.StatsServiceClient).GetStats(ctx, &statsService.GetStatsRequest{Name: "inbound>>>api>>>traffic>>>uplink", Reset_: false})
++		if e != nil || r.Stat == nil {
++			t.Fatal("native monotonic counter unavailable")
++		}
++		return r.Stat.Value
++	}
++	beforeCounter := readCounter()
++	before := nativeSnapshot(t)
++	routing := fixtureRouting(p.execution, "wm-exit-path-unit")
++	if api.CompareAndApplyRouting(executionJSON(routing), ExecutionExpected{Generation: before.Identity.Generation, Epoch: before.Epoch}) != nil {
++		t.Fatal("native selector CAS failed")
++	}
++	after := nativeSnapshot(t)
++	if !after.Qualified || after.Transition == nil || after.Identity.Generation != before.Identity.Generation {
++		t.Fatal("native selector continuity was not proved")
++	}
++	if beforeCounter <= 0 || readCounter() < beforeCounter {
++		t.Fatal("selector changed or reset native counters")
++	}
++	for _, inbound := range []string{"wm-route-unit", "sentinel-inbound"} {
++		result, e := api.TestRoute(RouteTestRequest{InboundTag: inbound, IP: "1.1.1.1", Port: 443})
++		expected := "wm-exit-path-unit"
++		if inbound == "sentinel-inbound" {
++			expected = "sentinel"
++		}
++		if e != nil || result.OutboundTag != expected {
++			t.Fatal("native target or sentinel routing changed")
++		}
++	}
++	if e = api.CompareAndApplyRouting(executionJSON(fixtureRouting(p.execution, "wm-eu-only-block")), ExecutionExpected{Generation: before.Identity.Generation, Epoch: before.Epoch}); !errors.Is(e, ErrExecutionConflict) {
++		t.Fatal("stale CAS reached native routing")
++	}
++	duplicate, _ := json.Marshal(cfg.InboundConfigs[1])
++	if api.AddInbound(duplicate) == nil {
++		t.Fatal("duplicate native inbound unexpectedly succeeded")
++	}
++	unknown := nativeSnapshot(t)
++	if unknown.Qualified || unknown.Config != nil || unknown.EffectiveSHA256 != "" {
++		t.Fatal("lost or failed effect retained qualified execution")
++	}
++	p.SetConfig(cfg)
++	if nativeSnapshot(t).Qualified {
++		t.Fatal("desired shadow resealed execution")
++	}
++	oldGeneration := s.Identity.Generation
++	if p.Stop() != nil || p.IsRunning() {
++		t.Fatal("first core did not close")
++	}
++	api.Close()
++	p = NewProcess(cfg)
++	if p.Start() != nil {
++		t.Fatal("safe new cold generation failed")
++	}
++	fresh := nativeSnapshot(t)
++	if !fresh.Qualified || fresh.Identity.Generation == oldGeneration || fresh.Epoch != "0" {
++		t.Fatal("new cold generation reused old history")
++	}
++}
+diff --git a/internal/xray/execution_other.go b/internal/xray/execution_other.go
+new file mode 100644
+index 0000000000000000000000000000000000000000..4e86f679c2ebd71916bde176274eb54f27538b36
+--- /dev/null
++++ b/internal/xray/execution_other.go
+@@ -0,0 +1,20 @@
++//go:build !linux
++
++package xray
++
++import (
++	"context"
++	"errors"
++	"net"
++	"os"
++)
++
++const executionCorePath = "/run/wavemesh-xray/core.sock"
++
++func executionRequested() bool { return os.Getenv("XUI_PREPARED_ATTESTATION") == "1" }
++func (p *process) startManagedExecution() error {
++	return errors.New("managed execution requires Linux native qualification")
++}
++func dialExecutionCore(context.Context, APIEndpoint) (net.Conn, error) {
++	return nil, errors.New("native execution socket unavailable")
++}
+diff --git a/internal/xray/execution_test.go b/internal/xray/execution_test.go
+new file mode 100644
+index 0000000000000000000000000000000000000000..2f0f8db8de4df95c57ced447241bc1b0d6b1de57
+--- /dev/null
++++ b/internal/xray/execution_test.go
+@@ -0,0 +1,313 @@
++package xray
++
++import (
++	"encoding/json"
++	"errors"
++	"path/filepath"
++	"strings"
++	"testing"
++	"time"
++)
++
++func executionFixture(t *testing.T) *executionOwner {
++	t.Helper()
++	data := []byte(`{"api":{"tag":"api","services":["HandlerService","RoutingService","StatsService"]},"inbounds":[{"tag":"api","protocol":"tunnel","listen":"127.0.0.1","port":62789,"settings":{"rewriteAddress":"127.0.0.1"}},{"tag":"wm-route-unit","protocol":"vless","port":12345,"settings":{"clients":[{"email":"old@example.invalid","id":"00000000-0000-4000-8000-000000000001"}]},"streamSettings":{"network":"xhttp","security":"tls","xhttpSettings":{"mode":"stream-one"}}}],"outbounds":[{"tag":"wm-eu-only-block","protocol":"blackhole"},{"tag":"wm-exit-path-unit","protocol":"vless"},{"tag":"sentinel","protocol":"freedom"}],"routing":{"rules":[{"type":"field","inboundTag":["api"],"outboundTag":"api"},{"type":"field","inboundTag":["wm-route-unit"],"ruleTag":"wm-rule-unit","outboundTag":"wm-eu-only-block"}],"balancers":[{"tag":"unit-balancer","selector":["wm-exit-path-"]}]}}`)
++	o := newExecutionOwner(data, ExecutionIdentity{Generation: "00000000-0000-4000-8000-000000000002"}, nil)
++	if err := validateExecutionInputs(o.config); err != nil {
++		t.Fatalf("fixture admission: %v", err)
++	}
++	o.qualified = true
++	o.reason = "custody_attested"
++	return o
++}
++
++func fixtureRouting(o *executionOwner, target string) map[string]any {
++	doc, _ := executionDocument(executionJSON(o.config))
++	routing := doc["routing"].(map[string]any)
++	routing["rules"].([]any)[1].(map[string]any)["outboundTag"] = target
++	return routing
++}
++
++func TestExecutionEveryShippedMutatorInvalidatesBeforeEffectsAndAccountsSuccess(t *testing.T) {
++	cases := []struct {
++		name    string
++		payload func(*executionOwner) map[string]any
++		check   func(*testing.T, ExecutionSnapshot)
++	}{
++		{"AddInbound", func(o *executionOwner) map[string]any {
++			doc, _ := executionDocument(executionJSON(o.config))
++			ib := doc["inbounds"].([]any)[1].(map[string]any)
++			ib["tag"] = "extra"
++			return map[string]any{"object": ib}
++		}, func(t *testing.T, s ExecutionSnapshot) {
++			doc, _ := executionDocument(s.Config)
++			if len(doc["inbounds"].([]any)) != 3 {
++				t.Fatal("successful inbound not represented")
++			}
++		}},
++		{"DelInbound", func(*executionOwner) map[string]any { return map[string]any{"tag": "wm-route-unit"} }, func(t *testing.T, s ExecutionSnapshot) {
++			doc, _ := executionDocument(s.Config)
++			if len(doc["inbounds"].([]any)) != 1 {
++				t.Fatal("removed inbound retained")
++			}
++		}},
++		{"AddOutbound", func(*executionOwner) map[string]any {
++			return map[string]any{"object": map[string]any{"tag": "extra", "protocol": "blackhole"}}
++		}, func(t *testing.T, s ExecutionSnapshot) {
++			doc, _ := executionDocument(s.Config)
++			if len(doc["outbounds"].([]any)) != 4 {
++				t.Fatal("successful outbound not represented")
++			}
++		}},
++		{"DelOutbound", func(*executionOwner) map[string]any { return map[string]any{"tag": "sentinel"} }, func(t *testing.T, s ExecutionSnapshot) {
++			doc, _ := executionDocument(s.Config)
++			if len(doc["outbounds"].([]any)) != 2 {
++				t.Fatal("removed outbound retained")
++			}
++		}},
++		{"ApplyRoutingConfig", func(o *executionOwner) map[string]any {
++			return map[string]any{"routing": fixtureRouting(o, "wm-exit-path-unit")}
++		}, func(t *testing.T, s ExecutionSnapshot) {
++			if s.Transition == nil || s.Transition.FromEpoch != "0" || s.Transition.ToEpoch != "1" || s.Transition.RuleTag != "wm-rule-unit" {
++				t.Fatalf("selector receipt missing: %+v", s.Transition)
++			}
++		}},
++		{"SetBalancerTarget", func(*executionOwner) map[string]any {
++			return map[string]any{"tag": "unit-balancer", "target": "wm-exit-path-unit"}
++		}, func(t *testing.T, s ExecutionSnapshot) {
++			if s.Overrides["unit-balancer"] != "wm-exit-path-unit" {
++				t.Fatal("runtime override missing")
++			}
++		}},
++		{"AddUser", func(*executionOwner) map[string]any {
++			return map[string]any{"tag": "wm-route-unit", "protocol": "vless", "user": map[string]any{"email": "new@example.invalid", "id": "00000000-0000-4000-8000-000000000003"}}
++		}, func(t *testing.T, s ExecutionSnapshot) {
++			doc, _ := executionDocument(s.Config)
++			ib := doc["inbounds"].([]any)[1].(map[string]any)
++			if len(ib["settings"].(map[string]any)["clients"].([]any)) != 2 {
++				t.Fatal("added credential missing")
++			}
++		}},
++		{"RemoveUser", func(*executionOwner) map[string]any {
++			return map[string]any{"tag": "wm-route-unit", "email": "old@example.invalid"}
++		}, func(t *testing.T, s ExecutionSnapshot) {
++			doc, _ := executionDocument(s.Config)
++			ib := doc["inbounds"].([]any)[1].(map[string]any)
++			if len(ib["settings"].(map[string]any)["clients"].([]any)) != 0 {
++				t.Fatal("removed credential retained")
++			}
++		}},
++	}
++	for _, tc := range cases {
++		t.Run(tc.name, func(t *testing.T) {
++			o := executionFixture(t)
++			beforeExecutionHash := o.snapshot("before").ExecutionSHA256
++			err := o.mutate(tc.name, tc.payload(o), nil, func() error {
++				if o.qualified || o.epoch != 1 || o.reason != "native_outcome_unknown" {
++					t.Fatal("native effect began before UNKNOWN")
++				}
++				return nil
++			})
++			if err != nil {
++				t.Fatalf("native call: %v", err)
++			}
++			s := o.snapshot("after")
++			if !s.Qualified || s.Reason != "custody_attested" || s.Epoch != "1" || len(s.Config) == 0 || s.ExecutionSHA256 == beforeExecutionHash {
++				t.Fatalf("successful effect not fully attested: %+v", s)
++			}
++			tc.check(t, s)
++		})
++	}
++}
++
++func TestExecutionABARejectsAnOldExpectedEpochDespiteEqualFinalJSON(t *testing.T) {
++	o := executionFixture(t)
++	initial := o.snapshot("initial")
++	for _, target := range []string{"wm-exit-path-unit", "wm-eu-only-block"} {
++		err := o.mutate("ApplyRoutingConfig", map[string]any{"routing": fixtureRouting(o, target)}, &ExecutionExpected{Generation: o.identity.Generation, Epoch: o.snapshot("current").Epoch}, func() error { return nil })
++		if err != nil {
++			t.Fatalf("selector transition: %v", err)
++		}
++	}
++	s := o.snapshot("returned")
++	if !s.Qualified || s.EffectiveSHA256 != initial.EffectiveSHA256 || s.Epoch != "2" {
++		t.Fatalf("ABA fixture: %+v", s)
++	}
++	called := false
++	err := o.mutate("ApplyRoutingConfig", map[string]any{"routing": fixtureRouting(o, "wm-exit-path-unit")}, &ExecutionExpected{Generation: o.identity.Generation, Epoch: initial.Epoch}, func() error { called = true; return nil })
++	if !errors.Is(err, ErrExecutionConflict) || called {
++		t.Fatalf("old epoch reached native effects: %v called=%v", err, called)
++	}
++}
++
++func TestExecutionSnapshotCannotExposeAQualifiedPrefixOfLostMutation(t *testing.T) {
++	o := executionFixture(t)
++	entered, release := make(chan struct{}), make(chan struct{})
++	mutationDone := make(chan error, 1)
++	go func() {
++		mutationDone <- o.mutate("DelInbound", map[string]any{"tag": "wm-route-unit"}, nil, func() error { close(entered); <-release; return errors.New("lost native response") })
++	}()
++	<-entered
++	result := make(chan ExecutionSnapshot, 1)
++	attempted := make(chan struct{})
++	go func() { close(attempted); result <- o.snapshot("concurrent") }()
++	<-attempted
++	select {
++	case s := <-result:
++		close(release)
++		t.Fatalf("snapshot interleaved with mutation: %+v", s)
++	case <-time.After(20 * time.Millisecond):
++	}
++	close(release)
++	if err := <-mutationDone; err == nil || err.Error() != "lost native response" {
++		t.Fatalf("mutation outcome %v", err)
++	}
++	s := <-result
++	if s.Qualified || s.Config != nil || s.EffectiveSHA256 != "" || s.ExecutionSHA256 != "" || s.Epoch != "1" {
++		t.Fatalf("qualified stale prefix: %+v", s)
++	}
++}
++
++func TestExecutionUnsupportedEffectsAndPersistenceFailureStayUnknown(t *testing.T) {
++	for _, kind := range []string{"RemoveRule", "AlterOutbound", "UnsupportedUser", "Persistence"} {
++		t.Run(kind, func(t *testing.T) {
++			o := executionFixture(t)
++			if kind == "Persistence" {
++				p := NewTestProcess(&Config{}, filepath.Join(t.TempDir(), "missing", "config.json"))
++				p.execution = o
++				if err := p.PersistConfig(); err == nil {
++					t.Fatal("missing parent unexpectedly persisted")
++				}
++			} else {
++				if err := o.mutate(kind, nil, nil, func() error { return nil }); err != nil {
++					t.Fatalf("native outcome changed: %v", err)
++				}
++			}
++			p := NewProcess(&Config{})
++			p.execution = o
++			p.SetConfig(&Config{})
++			if s := o.snapshot("after-shadow"); s.Qualified || s.Config != nil {
++				t.Fatalf("shadow resealed UNKNOWN: %+v", s)
++			}
++		})
++	}
++}
++
++func TestExecutionCoreIdentityReplacementRemovesTheOldView(t *testing.T) {
++	o := executionFixture(t)
++	o.checkIdentity = func() error { return errors.New("PID reused") }
++	s := o.snapshot("fresh")
++	if s.Qualified || s.Config != nil || s.Reason != "process_identity_changed" || s.Epoch != "1" {
++		t.Fatalf("old instance remained qualified: %+v", s)
++	}
++	called := false
++	err := o.mutate("DelInbound", map[string]any{"tag": "wm-route-unit"}, nil, func() error { called = true; return nil })
++	if !errors.Is(err, ErrExecutionConflict) || called {
++		t.Fatalf("stale owner reached another process: %v called=%v", err, called)
++	}
++}
++
++func TestExecutionColdGenerationStartsPreparedSelectorsBlockedAndKeepsSentinels(t *testing.T) {
++	o := executionFixture(t)
++	o.config["routing"] = fixtureRouting(o, "wm-exit-path-unit")
++	before := executionJSON(o.config["outbounds"])
++	if err := initializePreparedDeny(o.config); err != nil {
++		t.Fatalf("cold deny: %v", err)
++	}
++	rules := o.config["routing"].(map[string]any)["rules"].([]any)
++	if rules[1].(map[string]any)["outboundTag"] != "wm-eu-only-block" || string(before) != string(executionJSON(o.config["outbounds"])) || rules[0].(map[string]any)["outboundTag"] != "api" {
++		t.Fatal("cold launch forwarded or changed a sentinel")
++	}
++}
++
++func TestExecutionCASRefusesNonSelectorChangesAndUnownedClients(t *testing.T) {
++	o := executionFixture(t)
++	routing := fixtureRouting(o, "wm-exit-path-unit")
++	routing["domainStrategy"] = "UseIP"
++	called := false
++	err := o.mutate("ApplyRoutingConfig", map[string]any{"routing": routing}, &ExecutionExpected{Generation: o.identity.Generation, Epoch: "0"}, func() error { called = true; return nil })
++	if !errors.Is(err, ErrExecutionSelector) || called || o.epoch != 0 {
++		t.Fatalf("CAS admitted other config changes: %v called=%v epoch=%d", err, called, o.epoch)
++	}
++	api := &XrayAPI{}
++	if err = api.CompareAndApplyRouting([]byte(`{"rules":[]}`), ExecutionExpected{Generation: "old", Epoch: "0"}); !errors.Is(err, ErrExecutionConflict) {
++		t.Fatalf("unowned CAS outcome %v", err)
++	}
++}
++
++func TestExecutionSnapshotRequestRejectsAmbiguousOrUnboundedInputs(t *testing.T) {
++	nonce := strings.Repeat("a", 64)
++	good := `{"schema_version":3,"challenge":"` + nonce + `"}`
++	if got, err := parseExecutionChallenge([]byte(good)); err != nil || got != nonce {
++		t.Fatalf("fresh request: %q %v", got, err)
++	}
++	for _, raw := range []string{`{"schema_version":3,"schema_version":3,"challenge":"` + nonce + `"}`, strings.Replace(good, "3", "true", 1), strings.Replace(good, nonce, strings.ToUpper(nonce), 1), good + `{}`, `{"schema_version":3,"challenge":"` + nonce + `","path":"/tmp/other"}`, strings.Repeat(" ", 257) + good} {
++		if _, err := parseExecutionChallenge([]byte(raw)); err == nil || err.Error() != "invalid private snapshot request" {
++			t.Fatalf("ambiguous request admitted: %v", err)
++		}
++	}
++}
++
++func TestExecutionBoundaryRejectsNativeAPIEscapeAndMutableDependencies(t *testing.T) {
++	for _, mutation := range []func(map[string]any){
++		func(d map[string]any) { d["api"].(map[string]any)["listen"] = "127.0.0.1:62789" },
++		func(d map[string]any) {
++			d["routing"].(map[string]any)["rules"].([]any)[0].(map[string]any)["inboundTag"] = []any{"wm-route-unit"}
++		},
++		func(d map[string]any) {
++			d["routing"].(map[string]any)["balancers"].([]any)[0].(map[string]any)["selector"] = []any{"a"}
++		},
++		func(d map[string]any) { d["inbounds"].([]any)[1].(map[string]any)["certificateFile"] = "/mutable/cert" },
++		func(d map[string]any) {
++			d["routing"].(map[string]any)["rules"].([]any)[1].(map[string]any)["ip"] = []any{"geoip:private"}
++		},
++	} {
++		o := executionFixture(t)
++		mutation(o.config)
++		if err := validateExecutionInputs(o.config); err == nil {
++			t.Fatal("native custody escape admitted")
++		}
++	}
++}
++
++func TestExecutionSnapshotDoesNotAliasAStoredQualifiedView(t *testing.T) {
++	o := executionFixture(t)
++	s := o.snapshot("one")
++	var doc map[string]any
++	if err := json.Unmarshal(s.Config, &doc); err != nil {
++		t.Fatal(err)
++	}
++	doc["outbounds"] = nil
++	s.Config = executionJSON(doc)
++	s.Identity.Generation = "forged"
++	s.Overrides["unit-balancer"] = "sentinel"
++	fresh := o.snapshot("two")
++	if !fresh.Qualified || fresh.Identity.Generation == "forged" || len(fresh.Overrides) != 0 || fresh.EffectiveSHA256 != executionDigest(o.config) {
++		t.Fatal("caller mutated owner execution through snapshot")
++	}
++}
++
++func TestExecutionLostMutationCannotBeResealedByShadow(t *testing.T) {
++	o := newExecutionOwner([]byte(`{"inbounds":[],"outbounds":[],"routing":{"rules":[]}}`), ExecutionIdentity{Generation: "fixture"}, nil)
++	o.qualified = true
++	errLost := errors.New("lost reply after effects")
++	err := o.mutate("DelInbound", map[string]any{"tag": "client"}, nil, func() error { return errLost })
++	if !errors.Is(err, errLost) {
++		t.Fatalf("lost outcome = %v", err)
++	}
++	s := o.snapshot("0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef")
++	if s.Qualified || s.Config != nil || s.Epoch != "1" || s.Reason != "native_outcome_unknown" {
++		t.Fatalf("stale execution escaped: %+v", s)
++	}
++}
++
++func TestExecutionCASRejectsStaleEpochBeforeNativeEffects(t *testing.T) {
++	o := newExecutionOwner([]byte(`{"inbounds":[],"outbounds":[],"routing":{"rules":[]}}`), ExecutionIdentity{Generation: "fixture"}, nil)
++	o.qualified = true
++	o.epoch = 2
++	called := false
++	err := o.mutate("ApplyRoutingConfig", nil, &ExecutionExpected{Generation: "fixture", Epoch: "0"}, func() error { called = true; return nil })
++	if !errors.Is(err, ErrExecutionConflict) || called || o.epoch != 2 || !o.qualified {
++		t.Fatalf("stale CAS had effects: err=%v called=%v epoch=%d qualified=%v", err, called, o.epoch, o.qualified)
++	}
++}
+diff --git a/internal/xray/process.go b/internal/xray/process.go
+index a9d8c9ce0c7c239eb983c45c15ced5eb7244c02b..04444af871a484eb8ed7a331ac13016715efa2d4 100644
+--- a/internal/xray/process.go
++++ b/internal/xray/process.go
+@@ -6,6 +6,7 @@ import (
+ 	"encoding/json"
+ 	"errors"
+ 	"fmt"
++	"net"
+ 	"os"
+ 	"os/exec"
+ 	"path/filepath"
+@@ -132,9 +133,12 @@ type process struct {
+ 	// GetAPIPort/Stop from other goroutines (status endpoint, check-xray-running
+ 	// and traffic jobs). Snapshot under the lock, then do any blocking syscall
+ 	// (Wait/Signal/Kill) on the local copy without holding it.
+-	mu   sync.RWMutex
+-	cmd  *exec.Cmd
+-	done chan struct{}
++	execution         *executionOwner
++	lifecycle         sync.Mutex
++	executionListener *net.UnixListener
++	mu                sync.RWMutex
++	cmd               *exec.Cmd
++	done              chan struct{}
+ 
+ 	version string
+ 	apiPort int
+@@ -334,7 +338,11 @@ func (p *Process) PersistConfig() error {
+ 	if path == "" {
+ 		path = GetConfigPath()
+ 	}
+-	return writeFileAtomic(path, data, 0o600)
++	err = writeFileAtomic(path, data, 0o600)
++	if err != nil {
++		p.invalidateExecution("persistence_failed")
++	}
++	return err
+ }
+ 
+ // GetOnlineClients returns the union of locally-online clients and
+@@ -613,9 +621,14 @@ func (p *process) refreshVersion() {
+ 
+ // Start launches the Xray process with the current configuration.
+ func (p *process) Start() (err error) {
++	p.lifecycle.Lock()
++	defer p.lifecycle.Unlock()
+ 	if p.IsRunning() {
+ 		return errors.New("xray is already running")
+ 	}
++	if executionRequested() && p.configPath == "" {
++		return p.startManagedExecution()
++	}
+ 
+ 	defer func() {
+ 		if err != nil {
+@@ -739,6 +752,7 @@ func (p *process) waitForCommand(cmd *exec.Cmd, done chan struct{}) {
+ 	defer close(done)
+ 
+ 	err := cmd.Wait()
++	p.invalidateExecution("process_exited")
+ 	p.logWriter.Flush()
+ 	if err == nil || p.intentionalStop.Load() {
+ 		return
+@@ -762,6 +776,20 @@ func (p *process) waitForCommand(cmd *exec.Cmd, done chan struct{}) {
+ 
+ // Stop terminates the running Xray process.
+ func (p *process) Stop() error {
++	p.lifecycle.Lock()
++	defer p.lifecycle.Unlock()
++	return p.stop()
++}
++
++func (p *process) stop() error {
++	p.invalidateExecution("process_stopping")
++	p.mu.Lock()
++	listener := p.executionListener
++	p.executionListener = nil
++	p.mu.Unlock()
++	if listener != nil {
++		_ = listener.Close()
++	}
+ 	if !p.IsRunning() {
+ 		return ErrXrayNotRunning
+ 	}

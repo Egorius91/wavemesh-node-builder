@@ -55,11 +55,62 @@ def validate_runtime_view(value):
     Pending/ambiguous transitions have no qualified view. The existing Agent
     collector owns this input; a heartbeat does not create a path observation.
     """
-    shape(value, ("engine_instance", "effective_config_sha256"), "current engine view")
+    shape(value, ("schema_version", "engine_instance", "effective_config_sha256", "native_generation", "mutation_epoch", "selector_transitions"), "current engine view")
+    if type(value["schema_version"]) is not int or value["schema_version"] != 3:
+        raise ValueError("private execution view v3 is required")
     validate_engine_instance(value["engine_instance"])
+    validate_native_generation(value["native_generation"])
+    validate_mutation_epoch(value["mutation_epoch"])
     if not isinstance(value["effective_config_sha256"], str) or not HASH.fullmatch(value["effective_config_sha256"]):
         raise ValueError("effective engine readback hash is required")
+    transitions = value["selector_transitions"]
+    if not isinstance(transitions, list) or len(transitions) > 32:
+        raise ValueError("bounded native selector transition receipts are required")
+    for receipt in transitions:
+        shape(receipt, ("generation", "from_epoch", "to_epoch", "before_sha256", "after_sha256", "normalized_sha256", "rule_tag"), "native selector transition")
+        validate_native_generation(receipt["generation"])
+        start, end = validate_mutation_epoch(receipt["from_epoch"]), validate_mutation_epoch(receipt["to_epoch"])
+        if end != start + 1 or not isinstance(receipt["rule_tag"], str) or not receipt["rule_tag"].startswith("wm-rule-"):
+            raise ValueError("unsupported selector epoch transition")
+        for key in ("before_sha256", "after_sha256", "normalized_sha256"):
+            if not isinstance(receipt[key], str) or not HASH.fullmatch(receipt[key]):
+                raise ValueError("native selector transition hash is required")
     return copy.deepcopy(value)
+
+
+def validate_native_generation(value):
+    if not isinstance(value, str) or str(uuid.UUID(value)) != value:
+        raise ValueError("native generation is not canonical")
+    return value
+
+
+def validate_mutation_epoch(value):
+    if not isinstance(value, str) or len(value) > 20 or not re.fullmatch(r"0|[1-9][0-9]*", value) or int(value) > 2**64-1:
+        raise ValueError("native mutation epoch is not canonical")
+    return int(value)
+
+
+def native_history_is_contiguous(previous, view, fingerprint, rule_tag):
+    """Saved Builder receipts may bridge only proved selector-only epochs."""
+    if previous.get("native_generation") != view["native_generation"]:
+        return False
+    try:
+        epoch = validate_mutation_epoch(previous.get("mutation_epoch"))
+        current = validate_mutation_epoch(view["mutation_epoch"])
+    except ValueError:
+        return False
+    old_digest = previous.get("effective_config_sha256")
+    if epoch == current:
+        return old_digest == view["effective_config_sha256"]
+    if epoch > current or not rule_tag:
+        return False
+    for receipt in view["selector_transitions"]:
+        if (receipt["generation"] != view["native_generation"] or receipt["rule_tag"] != rule_tag
+                or receipt["from_epoch"] != str(epoch) or receipt["before_sha256"] != old_digest
+                or receipt["normalized_sha256"] != fingerprint):
+            return False
+        epoch, old_digest = int(receipt["to_epoch"]), receipt["after_sha256"]
+    return epoch == current and old_digest == view["effective_config_sha256"]
 
 
 def state_is_current(state, binding, runtime_view, now, max_age):
@@ -67,6 +118,8 @@ def state_is_current(state, binding, runtime_view, now, max_age):
         view = validate_runtime_view(runtime_view)
         return (state.get("binding") == binding
                 and state.get("engine_instance") == view["engine_instance"]
+                and state.get("native_generation") == view["native_generation"]
+                and state.get("mutation_epoch") == view["mutation_epoch"]
                 and state.get("effective_config_sha256") == view["effective_config_sha256"]
                 and type(state.get("sample_at")) is int
                 and 0 <= now-state["sample_at"] <= max_age)
@@ -234,16 +287,25 @@ def bound_plan(config, route_id, plan):
     return route, outbounds, binding
 
 
-def select_paths(plan, binding, previous, observations, now, runtime_view=None, health_config_sha256=None):
+def select_paths(plan, binding, previous, observations, now, runtime_view=None, health_config_sha256=None, selector_rule_tag=None):
     """One distinct fresh complete-path sample per interval; unknown means block.
 
     Hysteresis delays recovery and ordinary failover. An all-paths-down sample
     blocks immediately; cooldown can never keep a forwarding path alive there.
     """
     view = validate_runtime_view(runtime_view)
-    shape(observations, ("schema_version", "binding", "engine", "at", "paths", "engine_instance_before", "engine_instance_after", "effective_config_sha256"), "path observations")
-    if type(observations["schema_version"]) is not int or observations["schema_version"] != 2 or observations["binding"] != binding or observations["engine"] != plan["channel"]["engine"]:
+    shape(observations, ("schema_version", "binding", "engine", "at", "paths", "engine_instance_before", "engine_instance_after", "effective_config_sha256", "native_generation_before", "native_generation_after", "mutation_epoch_before", "mutation_epoch_after"), "path observations")
+    if type(observations["schema_version"]) is not int or observations["schema_version"] != 3 or observations["binding"] != binding or observations["engine"] != plan["channel"]["engine"]:
         raise ValueError("stale path observation binding")
+    for key in ("native_generation_before", "native_generation_after"):
+        validate_native_generation(observations[key])
+    for key in ("mutation_epoch_before", "mutation_epoch_after"):
+        validate_mutation_epoch(observations[key])
+    if (observations["native_generation_before"] != observations["native_generation_after"]
+            or observations["native_generation_after"] != view["native_generation"]
+            or observations["mutation_epoch_before"] != observations["mutation_epoch_after"]
+            or observations["mutation_epoch_after"] != view["mutation_epoch"]):
+        raise ValueError("native generation or mutation epoch changed during/after collection")
     before = validate_engine_instance(observations["engine_instance_before"])
     after = validate_engine_instance(observations["engine_instance_after"])
     if before != after or after != view["engine_instance"] or observations["effective_config_sha256"] != view["effective_config_sha256"]:
@@ -259,6 +321,7 @@ def select_paths(plan, binding, previous, observations, now, runtime_view=None, 
     continuity = health_config_sha256 or view["effective_config_sha256"]
     previous = previous if (previous.get("binding") == binding
                             and previous.get("engine_instance") == after
+                            and native_history_is_contiguous(previous, view, continuity, selector_rule_tag)
                             and previous.get("health_config_sha256", previous.get("effective_config_sha256")) == continuity) else {}
     last = previous.get("sample_at")
     if last is not None and at-last < plan["health"]["sample_interval_seconds"]:
@@ -287,7 +350,8 @@ def select_paths(plan, binding, previous, observations, now, runtime_view=None, 
         if selected != current and selected is not None:
             switched_at = at
     return {"binding": binding, "sample_at": at, "switched_at": switched_at, "selected": selected, "paths": counters,
-            "engine_instance": after, "effective_config_sha256": view["effective_config_sha256"], "health_config_sha256": continuity}
+            "engine_instance": after, "effective_config_sha256": view["effective_config_sha256"], "health_config_sha256": continuity,
+            "native_generation": view["native_generation"], "mutation_epoch": view["mutation_epoch"]}
 
 
 def compile_template(config, route_id, plan, template, state=None, now=None, runtime_view=None, effective_config=None):
@@ -347,7 +411,7 @@ def stage(config, runtime, route_id, plan, template, observations=None, now=None
     observed = copy.deepcopy(runtime or {})
     previous = observed.setdefault("prepared_routes", {}).get(route_id, {})
     fingerprint = health_config_fingerprint(candidate, route_id, plan, effective_config, runtime_view) if observations is not None else None
-    state = select_paths(plan, binding, previous, observations, now, runtime_view, fingerprint) if observations is not None else {"binding": binding, "selected": None}
+    state = select_paths(plan, binding, previous, observations, now, runtime_view, fingerprint, route["routing"]["rule_tag"]) if observations is not None else {"binding": binding, "selected": None}
     observed["prepared_routes"][route_id] = state
     result, _ = compile_template(candidate, route_id, plan, template, state, now, runtime_view, effective_config)
     return candidate, observed, result, binding
@@ -406,8 +470,10 @@ def main():
             runtime_state.atomic(directory/f"probe-{path['id']}.json", outbound)
         # Intentionally incomplete: only the owning collector may supply a
         # separately observed AFTER identity and completed path results.
-        runtime_state.atomic(directory/"probe-input.json", {"schema_version": 2, "binding": binding, "engine": plan["channel"]["engine"], "at": int(time.time()),
+        runtime_state.atomic(directory/"probe-input.json", {"schema_version": 3, "binding": binding, "engine": plan["channel"]["engine"], "at": int(time.time()),
                             "engine_instance_before": runtime_view["engine_instance"], "engine_instance_after": None,
+                            "native_generation_before": runtime_view["native_generation"], "native_generation_after": None,
+                            "mutation_epoch_before": runtime_view["mutation_epoch"], "mutation_epoch_after": None,
                             "effective_config_sha256": runtime_view["effective_config_sha256"], "paths": {p["id"]: False for p in plan["paths"]}})
         return
     now = int(time.time())
@@ -424,7 +490,8 @@ def main():
     runtime_state.atomic(directory/"prepared.descriptor.json", public_descriptor(plan))
     runtime_state.atomic(directory/"prepared.binding.json", {"binding": binding, "capability": CAPABILITY})
     if runtime_view is not None:
-        runtime_state.atomic(directory/"prepared.update.json", {"update_required": template_needs_update(template, stored_template, runtime_view, effective, route=route)})
+        runtime_state.atomic(directory/"prepared.update.json", {"update_required": template_needs_update(template, stored_template, runtime_view, effective, route=route),
+                            "expected_execution": {"generation": runtime_view["native_generation"], "epoch": runtime_view["mutation_epoch"]}})
     # Parse the exact candidate with the same installed engine before mutation.
     subprocess.run([args.engine_binary, "run", "-test", "-config", str(directory/"prepared.xray.json")], stdin=subprocess.DEVNULL, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, timeout=15, check=True)
 

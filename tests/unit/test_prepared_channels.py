@@ -41,11 +41,11 @@ class PreparedChannels(unittest.TestCase):
     def setUp(self):
         self.config, self.plan, self.template = fixture()
         self.config, self.runtime, self.initial, self.binding = channels.stage(self.config, {}, "route-auto-europe", self.plan, self.template, now=100)
-        self.view = {"engine_instance": {"boot_id": "00000000-0000-4000-8000-000000000001", "pid": 123, "start_ticks": "1000"}, "effective_config_sha256": channels.digest(self.initial)}
+        self.view = {"schema_version": 3, "native_generation": "00000000-0000-4000-8000-000000000002", "mutation_epoch": "0", "selector_transitions": [], "engine_instance": {"boot_id": "00000000-0000-4000-8000-000000000001", "pid": 123, "start_ticks": "1000"}, "effective_config_sha256": channels.digest(self.initial)}
 
     def observation(self, at, values, view=None):
         view = self.view if view is None else view
-        return {"schema_version": 2, "binding": self.binding, "engine": self.plan["channel"]["engine"], "at": at, "paths": values,
+        return {"schema_version": 3, "native_generation_before": view["native_generation"], "native_generation_after": view["native_generation"], "mutation_epoch_before": view["mutation_epoch"], "mutation_epoch_after": view["mutation_epoch"], "binding": self.binding, "engine": self.plan["channel"]["engine"], "at": at, "paths": values,
                 "engine_instance_before": copy.deepcopy(view["engine_instance"]), "engine_instance_after": copy.deepcopy(view["engine_instance"]),
                 "effective_config_sha256": view["effective_config_sha256"]}
 
@@ -54,8 +54,58 @@ class PreparedChannels(unittest.TestCase):
         view = self.view if view is None else view
         return channels.select_paths(self.plan, self.binding, previous or {}, self.observation(at, values, view), at, view)
 
+    def applied_selector_view(self, before, after, view):
+        if before == after:
+            return {**view, "selector_transitions": []}
+        epoch = str(int(view["mutation_epoch"]) + 1)
+        receipt = {"generation": view["native_generation"], "from_epoch": view["mutation_epoch"], "to_epoch": epoch,
+                   "before_sha256": channels.digest(before), "after_sha256": channels.digest(after),
+                   "normalized_sha256": channels.health_config_fingerprint(self.config, "route-auto-europe", self.plan, before, view),
+                   "rule_tag": "wm-rule-auto-europe"}
+        return {**view, "mutation_epoch": epoch, "effective_config_sha256": channels.digest(after), "selector_transitions": [receipt]}
+
     def rule(self, template):
         return next(r for r in template["routing"]["rules"] if r.get("ruleTag") == "wm-rule-auto-europe")
+
+
+    def test_native_epoch_rejects_sample_spanning_aba_or_older_than_current(self):
+        sample = self.observation(100, {p["id"]: True for p in self.plan["paths"]})
+        self.assertIsNone(channels.select_paths(self.plan, self.binding, {}, sample, 100, self.view)["selected"])
+        for changed_sample, current in (({**sample, "mutation_epoch_after": "2"}, {**self.view, "mutation_epoch": "2"}),
+                                        (sample, {**self.view, "mutation_epoch": "2"}),
+                                        ({**sample, "native_generation_after": "00000000-0000-4000-8000-000000000003"}, self.view)):
+            with self.assertRaisesRegex(ValueError, "generation|epoch"):
+                channels.select_paths(self.plan, self.binding, {}, changed_sample, 100, current)
+
+    def test_unexplained_epoch_gap_resets_history_even_when_json_returns_to_a(self):
+        previous = self.sample(100)
+        current = {**self.view, "mutation_epoch": "2"}
+        state = self.sample(110, previous=previous, view=current)
+        self.assertIsNone(state["selected"])
+        self.assertEqual(state["paths"]["upcloud-v4"]["consecutive_successes"], 1)
+
+    def test_missing_or_forged_selector_receipt_cannot_bridge_an_epoch(self):
+        state = self.sample(100)
+        fingerprint = channels.health_config_fingerprint(self.config, "route-auto-europe", self.plan, self.initial, self.view)
+        state["health_config_sha256"] = fingerprint
+        selected = copy.deepcopy(self.initial); self.rule(selected)["outboundTag"] = "wm-exit-path-upcloud-v4"
+        view = self.applied_selector_view(self.initial, selected, self.view)
+        receipt = view["selector_transitions"][0]
+        observations = self.observation(110, {p["id"]: True for p in self.plan["paths"]}, view)
+        good = channels.select_paths(self.plan, self.binding, state, observations, 110, view, fingerprint, "wm-rule-auto-europe")
+        self.assertEqual(good["selected"], "upcloud-v4")
+        for receipts in ([], [{**receipt, "before_sha256": "f"*64}], [{**receipt, "normalized_sha256": "f"*64}],
+                         [{**receipt, "rule_tag": "wm-rule-other"}], [{**receipt, "from_epoch": "1", "to_epoch": "2"}], [receipt, receipt]):
+            with self.subTest(receipts=receipts):
+                result = channels.select_paths(self.plan, self.binding, state, observations, 110, {**view, "selector_transitions": receipts}, fingerprint, "wm-rule-auto-europe")
+                self.assertIsNone(result["selected"])
+                self.assertEqual(result["paths"]["upcloud-v4"]["consecutive_successes"], 1)
+
+    def test_private_v2_and_noncanonical_or_boolean_epochs_are_rejected(self):
+        for mutation in ({"schema_version": 2}, {"mutation_epoch": True}, {"mutation_epoch": "01"}, {"mutation_epoch": "18446744073709551616"}):
+            with self.assertRaises(ValueError): channels.validate_runtime_view({**self.view, **mutation})
+        sample = self.observation(100, {p["id"]: True for p in self.plan["paths"]})
+        with self.assertRaises(ValueError): channels.select_paths(self.plan, self.binding, {}, {**sample, "schema_version": 2}, 100, self.view)
 
     def test_initial_ipv4_ipv6_dns_block_and_sentinel_preserved(self):
         self.assertEqual(self.rule(self.initial), {"type": "field", "inboundTag": ["wm-route-auto-europe"], "outboundTag": xray.BLOCK_TAG, "ruleTag": "wm-rule-auto-europe"})
@@ -264,7 +314,7 @@ class PreparedChannels(unittest.TestCase):
             with mock.patch.object(sys, "argv", argv), mock.patch.object(channels, "check_engine"):
                 channels.main()
             observation = json.loads((directory/"probe-input.json").read_text())
-            self.assertEqual(observation["schema_version"], 2)
+            self.assertEqual(observation["schema_version"], 3)
             self.assertIsNone(observation["engine_instance_after"])
             with self.assertRaises(ValueError): channels.select_paths(self.plan, self.binding, {}, observation, observation["at"], self.view)
 
@@ -318,8 +368,8 @@ class PreparedChannels(unittest.TestCase):
         actual["inbounds"].append({"tag": "generated-inbound", "protocol": "vless", "settings": {"clients": []}})
         stored, config, runtime = self.initial, self.config, self.runtime
         selections = []
+        view = {**self.view, "effective_config_sha256": channels.digest(actual)}
         for at in (100, 110, 120, 130, 140):
-            view = {**self.view, "effective_config_sha256": channels.digest(actual)}
             obs = self.observation(at, {p["id"]: True for p in self.plan["paths"]}, view)
             config, runtime, candidate, _ = channels.stage(config, runtime, "route-auto-europe", self.plan, stored, obs, at, view, actual)
             state = runtime["prepared_routes"]["route-auto-europe"]
@@ -330,6 +380,7 @@ class PreparedChannels(unittest.TestCase):
             self.assertEqual(candidate.get("inbounds"), stored.get("inbounds"))
             # Model successful same-process hot apply; this test neither
             # implements nor qualifies the production settlement owner.
+            view = self.applied_selector_view(actual, projected, view)
             stored, actual = candidate, projected
         self.assertEqual(selections, [None, *["upcloud-v4"]*4])
         self.assertEqual(state["paths"]["upcloud-v4"]["consecutive_successes"], 5)
@@ -415,14 +466,15 @@ class PreparedChannels(unittest.TestCase):
     def test_settled_selection_failover_and_all_down_stay_closed(self):
         config, runtime, stored, actual = self.config, self.runtime, self.initial, self.initial
         selections = []
+        view = {**self.view, "effective_config_sha256": channels.digest(actual)}
         for at in (100, 110, 120, 130, 140, 150):
             live = {p["id"]: at < 140 and (at < 120 or p["id"] != "upcloud-v4") for p in self.plan["paths"]}
-            view = {**self.view, "effective_config_sha256": channels.digest(actual)}
             config, runtime, candidate, _ = channels.stage(config, runtime, "route-auto-europe", self.plan, stored, self.observation(at, live, view), at, view, actual)
             state = runtime["prepared_routes"]["route-auto-europe"]
             selections.append(state["selected"])
-            actual, _ = channels.compile_template(config, "route-auto-europe", self.plan, actual, state, at, view, actual)
-            stored = candidate
+            projected, _ = channels.compile_template(config, "route-auto-europe", self.plan, actual, state, at, view, actual)
+            view = self.applied_selector_view(actual, projected, view)
+            actual, stored = projected, candidate
             if at >= 140:
                 self.assertEqual(self.rule(actual)["outboundTag"], xray.BLOCK_TAG)
                 self.assertTrue(xray.validate_eu_only(actual, config))
