@@ -243,12 +243,14 @@ def _recheck(observed):
 
 
 def _snapshot(value, nonce, peer, approval):
-    _shape(value, ("schema_version", "challenge", "qualified", "reason", "identity", "epoch",
-                   "effective_config_sha256", "execution_sha256", "effective_config"), ("balancer_overrides", "selector_transition"))
+    _shape(value, ("schema_version", "challenge", "qualified", "reason", "identity", "epoch"),
+           ("effective_config_sha256", "execution_sha256", "effective_config", "balancer_overrides", "selector_transition"))
     if type(value["schema_version"]) is not int or value["schema_version"] != 3 or value["challenge"] != nonce:
         _fail("SNAPSHOT_CHALLENGE")
     if value["qualified"] is not True or value["reason"] != "custody_attested":
         _fail("EXECUTION_UNQUALIFIED")
+    if not {"effective_config_sha256", "execution_sha256", "effective_config"} <= set(value):
+        _fail("SNAPSHOT_SHAPE")
     identity = value["identity"]
     _shape(identity, ("generation", "boot_id", "pid", "start_ticks", "core_sha256", "producer_pid",
                       "producer_start_ticks", "producer_sha256", "producer_upstream", "consumed_sha256"))

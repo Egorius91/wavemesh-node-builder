@@ -134,21 +134,22 @@
     },
     "private_consumer": {
       "status": "SOURCE_SYNTHETIC_PASS_NATIVE_RERUN_PENDING",
-      "top_level_pass": 19,
+      "top_level_pass": 20,
       "fail": 0,
       "skip": 0,
       "evidence": {
-        "file": "PR4-PHASE776FIX-READER.log",
-        "sha256": "a3e8ee848bdcbe5d5eaca83de7e68caa597eaae176cfb80724dce6d4ab6f83f7"
+        "file": "PR4-PHASE776FIX2-READER.log",
+        "sha256": "808b52bd615e82558d5e9e61a2854497096d9efe3d8f20bc20219f57668c6c68"
       },
       "go_vectors": {
         "total": 13,
         "supported_match": 4,
         "explicit_refusal": 9,
         "actual_native_snapshot_dto": true,
-        "fixture_sha256": "9320a78a0fdf47257895b706fe2bc3b4974b0d55ea5994fc02c5b9d936ede5f4",
-        "overlay_source_sha256": "f23310748d167001c770c8173bf5fea8ca62cdf6ebb6824a9e6c67939d0922d9",
-        "evidence_sha256": "3e2db1d2f13bdbe3f9868eca51585dca86cd0160d416769546658231f7dc33f6"
+        "fixture_sha256": "de1a7bdb8b57af0d0ceeffc24969a36136fe10e1aeca2ed99cea4b5944f98d3b",
+        "overlay_source_sha256": "054c768c0b1bd0aa317c0ca8b287f63a187a63dc9a10701afc92f5d2542330fc",
+        "evidence_sha256": "2166291b1f2e4333cac3095439baffa4b6146ab1266371c47d20b2fe893d2693",
+        "actual_native_unqualified_snapshot_dto": true
       },
       "original_native_failed_attempt": {
         "file": "PR4-CONSUMER-FAILED-834.json",
@@ -207,8 +208,8 @@
   "publication": false,
   "live_changes": false,
   "private_consumer_source_sha256": {
-    "scripts/lib/prepared_execution.py": "40655130633a1cf8bb3e20230124b473a2c93bb83482a75278edebc367903428",
-    "tests/unit/test_prepared_execution.py": "1c57f4317f0ecbac691260ca7570153c6cc38f01ab156185748346c037692fdd",
-    "tests/fixtures/prepared-execution-go-json-vectors.json": "9320a78a0fdf47257895b706fe2bc3b4974b0d55ea5994fc02c5b9d936ede5f4"
+    "scripts/lib/prepared_execution.py": "0ece06d78cfeb85c8940de462792740563cff48532da925aa0d8ab1fc15e8f14",
+    "tests/unit/test_prepared_execution.py": "f41719aa451e7e568d5e715257628452a8284a1d7e0fa26cbefeac9741abf16d",
+    "tests/fixtures/prepared-execution-go-json-vectors.json": "de1a7bdb8b57af0d0ceeffc24969a36136fe10e1aeca2ed99cea4b5944f98d3b"
   }
 }

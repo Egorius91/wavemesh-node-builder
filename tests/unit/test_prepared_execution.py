@@ -91,6 +91,16 @@ class PreparedExecution(unittest.TestCase):
                     execution._snapshot({**snapshot(), **change}, NONCE, 10, approval())
                 self.assertNotIn("DO_NOT_LEAK", str(result.exception))
 
+    def test_actual_go_unqualified_frame_has_no_config_and_cannot_reuse_a_view(self):
+        fixture = json.loads((ROOT / "tests/fixtures/prepared-execution-go-json-vectors.json").read_text(encoding="utf-8"))
+        value = execution._decode(base64.b64decode(fixture["native_unqualified_snapshot_base64"]))
+        self.assertIs(value["qualified"], False)
+        self.assertEqual(value["epoch"], "1")
+        for field in ("effective_config", "effective_config_sha256", "execution_sha256"):
+            self.assertNotIn(field, value)
+        with self.assertRaisesRegex(execution.ExecutionUnavailable, "^EXECUTION_UNQUALIFIED$"):
+            execution._snapshot(value, NONCE, 10, approval())
+
     def test_process_and_release_assertions_are_strict(self):
         changes = [{"producer_pid": True}, {"producer_pid": 11}, {"producer_sha256": "0" * 64},
                    {"core_sha256": "0" * 64}, {"producer_upstream": "b" * 40},
