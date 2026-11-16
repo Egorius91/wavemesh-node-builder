@@ -1,0 +1,10 @@
+{
+  "purpose": "Immutable pre-placement executable for old-writer exclusion regression",
+  "repository": "Egorius91/wavemesh-node-builder",
+  "commit": "dc4e66db0d2d5f03ff9d17772860877b80ab99a1",
+  "path": "agent/access_runtime.py",
+  "fixture": "access_runtime_dc4e66d.py",
+  "bytes": 32492,
+  "sha256": "6134d7f5cb9c864429092216ce1b3e6e56b5f42f066ce032db5f49bfcdaf1223",
+  "scope": "Synthetic local fixture only; never installed, deployed or used with a real panel or credentials"
+}

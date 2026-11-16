@@ -88,7 +88,7 @@ class ReplacementPrepareTests(unittest.TestCase):
         for fail_receipt in (False, True):
             with self.subTest(fail_receipt=fail_receipt):
                 agent = object.__new__(node_agent.NodeAgent)
-                agent.config = SimpleNamespace(command_mode="access", node_id="node_12345678")
+                agent.config = SimpleNamespace(command_mode="access", node_id="node_12345678", tenant_id="tenant_12345678")
                 agent.last_mtls_status = {"state": "SHADOW_ACTIVE"}
                 calls = []
                 def api(method, path, body, **kwargs):

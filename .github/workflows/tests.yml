@@ -131,5 +131,7 @@ jobs:
         run: |
           sudo python3 -I -B tests/native/test_xui_owner_central_postgres.py --finalize \
             --state "$RUNNER_TEMP/wm-central-sql-${GITHUB_RUN_ID}-${GITHUB_RUN_ATTEMPT}.json"
+      - name: Native placement pending HTTP quiescence
+        run: sudo python3 -B tests/native/test_placement_http_quiescence.py
       - name: Patch hygiene
         run: git diff --check

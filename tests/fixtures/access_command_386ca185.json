@@ -1,0 +1,10 @@
+{
+  "sourceCommit": "386ca185c3cfc4021581788f003a745f9ae1e4ac",
+  "sourcePath": "agent/node_agent.py",
+  "sourceSha256": "c91fb34e140134b82ec98a28c8d8655b26861cbefe47540a7672bb090c03fd70",
+  "functionName": "validate_access_command",
+  "functionSha256": "3d00b76fe1aac29746fca25f2cdbcb0bf31a6f22fd0c386efc3a6b92754aa42c",
+  "fixtureSha256": "ec75462b648448b09eec88e2ba3a576dee2ae4e96e7ca91345f4637eb9223ccc",
+  "scope": "Actual historical pure command validator rejects unsupported quota marker before dispatch; not a new full old-Agent runtime acceptance claim.",
+  "fixtureLineEndings": "LF (canonical Git bytes, existing .gitattributes)"
+}
