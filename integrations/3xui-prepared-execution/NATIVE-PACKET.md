@@ -1,60 +1,65 @@
-# Exact-source native packet — NOT RUN
+# Scoped native custody proof — PASS; full PR4 remains open
 
-The producer source commit, patch and file hashes are pinned in `source-manifest.json`.
-The companion Builder commit pins the private v3 compiler. Phase726 cross-compiled
-and linked current producer0ccff723 `./internal/xray` test sources for Linux/amd64
-with Go1.27.4, CGO disabled, `-trimpath -p 2`: PASS. Artifact is 47,447,630 bytes,
-ELF64 AMD64, SHA256 `6fc4bd7ea27a368f181dd6ab09e85094c07087559da9505f00485118c41b5bae`. The exact path is in the phase726 artifact
-receipt; it has NOT been executed. Full Linux producer build remains NOT RUN.
-Earlier phase712/Reset failure/old binaries remain historical and do not qualify
-this correction. Current owner source race18 top-level+17 subcases PASS; compiler45
-is reused from phase712 by unchanged source bytes.
+The manifest pins current producer `e3c7fc18928bfbe16de4e0ffa163935e166ca0e1`.
+Actual Linux exec1245 ran source `253ace5365c804f84746442bc9f15ed75f803a2b`,
+ELF SHA256 `db47f84136ec3200458fd24bdc16bdd274b79e0a1da2e1257c8978d592127852`,
+with unchanged stock Xray26.10.21 SHA256
+`a27e3f95ab6ce270956d0cecd32eda4686a811afc71c64a6a734a3dede14883e`.
+Three selected tests PASS, zero fail/skip. The current producer differs only in
+one portable lifecycle assertion: ReadAt checks ErrClosed on Windows, whose
+File.Stat returns ERROR_INVALID_HANDLE. Product, Linux identity tests and the
+actual-core fixture are byte-identical to the native-tested source. Current
+focused Windows race proves the corrected portable assertion. The original
+Windows failure is retained, not relabelled as a passing grouped run.
 
-Prerequisites: fresh coordinator phase/resource ACK; recovery's actual independently
-checked CLOSED/release; Windows reserve at least 2048 MiB; an exclusive own profile,
-new source manifest and overlay; no shared folders/host credentials or live data;
-exact stock core hash; available Linux toolchain/dependencies in an owned prepared
-baseline. Do not mutate an existing sealed base. Absolute stop 2026-11-16 19:15 UTC.
-No VM or native reservation belongs to this checkpoint.
+Evidence is recorded in `PR4-PHASE757-NATIVE-RESULT.json` and the source manifest.
+The native receipt SHA256 is
+`54450df8ec839dbb220afe5f6816ec980a90e76357aea14f9b8d9b9c55768e8e`.
+Independent guest1284 cleanup found no owned producer/core/helper processes,
+execution socket entries or helper files. The VM is CLOSED: original PID15680
+absent, QMP62440/QGA62441 have no listeners, qemu inventory empty, serial PowerDown,
+qcow2 check zero errors and both sealed profile hashes unchanged. TCP connection
+probe timeouts are recorded separately and are not called connection refusal.
+Release: `PR4-PHASE757-NATIVE-RELEASE.json`, SHA256
+`e43b42aeae31cc3825629b4dd4b989bd81bbd274735602d3cb7ca80d86d1cf75`.
+No VM/native reservation is retained by PR4.
 
-Within that newly admitted guest, build and run only the targeted package:
+The first packet exposed two real compatibility gaps. The synthetic VLESS fixture
+needed explicit decryption:none. Stock's regular-file loader resolves symlinks,
+so a /proc fd path for a memfd is rejected. The corrected producer passes the
+SAME sealed config file as stdin and inherited fd3, using stock's native stdin:
+input. No pipe, mutable file or Xray patch is substituted. Actual fd0/fd3 have
+the same device/inode, full consumed hash, all immutable seals and EPERM writes.
 
-```sh
-go test -c -trimpath -o /work/pr4/producer-stage1-native.test ./internal/xray
-XRAY_E2E_BINARY=/work/pr4/xray-linux-amd64 \
-  /work/pr4/producer-stage1-native.test \
-  -test.run '^TestExecutionNativeImmutableInputUDSAllMutatorsAndLostOutcome$' \
-  -test.count=1 -test.parallel=1 -test.v
-```
+The 1s snapshot deadline exposed repeated full executable hashing under the owner
+lock (actual Go SHA measurements640–991ms for35MB). Cold start still validates
+the actual executable's full stock SHA. Every subsequent identity check validates
+the actual process's executable against an owned descriptor retained for that
+whole generation: same dev/inode plus all write/grow/shrink/seal seals, running
+PID and start ticks. Closed/missing expected handles, replacements and incomplete
+seals fail closed. Actual exit closes only its captured generation's descriptor.
+The 1s deadline and native assertions were not increased or weakened.
 
-The fixture uses `NewProcess` with the actual stock core, synthetic inline TLS,
-loopback-only targets, an owned temporary binary copy and the fixed private Unix
-paths. It has no panel/DB/Node registration, provider access, real rights or money.
-It cannot run when the private socket paths are already occupied. It stops only
-its own child; cleanup must independently verify child/ports/socket closure and
-the VM/overlay lifecycle before release. Preserve failed receipts and process IDs.
+The three native tests cover sealed-object identity (same object, same-content
+replacement, missing/unsealed/partially sealed/closed objects), generation-local
+cleanup, and actual managed stock-core custody. The last covers private Unix
+ownership/modes/peer credentials, nobody-UID denial, no managed TCP listener,
+all eight mutators, selector CAS and stale conflict, target/sentinel route
+choices, non-reset API counters, failed effect remaining UNKNOWN despite
+SetConfig, safe cold generation, pre-effect unsafe override refusal without
+core/hash/epoch changes, supported target/clear and referenced-target removal
+remaining UNKNOWN. It does not assert physical client traffic closure.
 
-Implemented but NOT RUN checks: immutable consumed fd seals and rejected write;
-consumed bytes/hash; real stock native Unix dial; actual producer/core Unix peer
-identity; 0700/0600 ownership; no managed TCP listener; nobody-UID direct access
-rejection; all eight native mutations; user/override handling; same-process selector
-CAS/receipt; stale CAS refusal; target and unrelated sentinel routing decisions;
-non-reset native API traffic counters; native failure remaining UNKNOWN despite
-SetConfig; stop and a fresh cold generation. These assert no physical flow deny.
+The packet was cross-linked with Go1.27.4 for Linux/amd64, CGO disabled, and run
+as a synthetic root fixture in an exclusive disposable restricted-offline VM.
+It proves this package and exact native artifact, not the full producer's
+SQLite/frontend/web build, real templates, installed service or real servers.
+The original startup/snapshot failures, all source pins and receipts remain.
 
-Coverage still required after this packet: real end-to-end client IPv4/IPv6/DNS,
-prepared Exit target/sentinel traffic, existing-flow closure on all-down/stale/
-watchdog, management-loss continuation for issued rights, concurrent service-level
-partial hot paths, full Linux producer build and real collector/Builder CAS
-integration. Snapshot/config or TestRoute results do not substitute for those
-checks. No positive Agent/SaaS capability may be enabled from this packet alone.
-
-Admission or outcomes that cannot be proved stay NOT VERIFIED/UNKNOWN. Do not
-patch Xray, substitute TCP, remove pending debt or repeat an ambiguous business
-operation to obtain PASS. Return the precise failed guarantee for architecture ACK.
-
-Phase726 adds source proof for reserved/absent targets, safe target/clear, removed
-referenced target, sticky UNKNOWN and pre-effect routing/loopback control refusal.
-These are not native kernel/core results. A later admitted native follow-up must
-also verify the corrected override refusal/lifecycle against the actual core before
-positive integration; the existing packet alone has no physical-flow acceptance.
+Remaining gates: production snapshot collector and approved producer manifest,
+Builder CAS/settlement/persistence, watchdog, real end-to-end IPv4/IPv6/DNS,
+all-down/stale/existing-flow closure, issued-right continuation during management
+loss, PR2-owned Agent/SaaS integration and service/Node/fleet acceptance.
+Positive capability remains false. No publication, hosted CI, merge or live-server
+work was performed. Any next native phase needs coordinated resource admission;
+absolute stop2026-11-16 19:15UTC/22:15MSK remains unchanged.

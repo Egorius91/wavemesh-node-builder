@@ -31,7 +31,7 @@ After explicit runtime admission, the existing local mutation owner can use:
 
 ```sh
 wavemesh cascade auto prepared install --id europe --plan /protected/plan.json --runtime-view /protected/current-runtime.json --effective-config /protected/executing.json
-wavemesh cascade auto prepared reconcile --id europe --runtime-view /protected/current-runtime.json --effective-config /protected/executing.json --observations /protected/observations-v2.json
+wavemesh cascade auto prepared reconcile --id europe --runtime-view /protected/current-runtime.json --effective-config /protected/executing.json --observations /protected/observations-v3.json
 ```
 
 These are source interface examples, not authorization to run on a VPS. Install
@@ -111,14 +111,14 @@ Current-head hosted gates are required before merge. Live Node/VPN/Entry and
 PR8 Happ/INCY/fleet acceptance remain separate. Local source/native evidence
 cannot open production or finite-quota admission.
 
-## Process-bound observation v2 — integration in progress
+## Process and epoch-bound observation v3 — integration in progress
 
 Stock engine evidence shows that panel HTTP success can precede replacement of
 the running Xray, even when executable version/hash and desired config match.
-Private observations therefore use schema2 with before/after process identity
-`{boot_id,pid,start_ticks}` and the qualified effective-config digest. Public
-channel/join descriptors remain version1. A schema1 private observation cannot
-establish prepared-route admission.
+Private observations use schema3 with before/after process identity
+`{boot_id,pid,start_ticks}`, native generation, mutation epoch and qualified full
+effective-config digest. All must match an independently current view. Public
+channel/join descriptors remain version1; private schemas1/2 are refused.
 
 The existing Agent collector must supply an independently CURRENT, SETTLED
 runtime view. Missing, ambiguous or pending transitions have no qualified view.
@@ -131,8 +131,10 @@ config/PID pair is insufficient after hot apply: stock can fail to persist its
 changed config while the engine has already changed.
 
 Each fresh sample still binds the complete current executing digest. Within
-the same process, accumulated hysteresis may survive a change to exactly the
-owned rule's `outboundTag`. The compiler first validates the unique unconditional
+the same generation/epoch, unchanged full JSON can retain history. Across epochs,
+only a complete contiguous native receipt chain for exactly the owned rule's
+`outboundTag` may preserve it. Equal final JSON after A→B→A is insufficient.
+The compiler first validates the unique unconditional
 rule, exact inbound, approved target and all prepared outbounds, EU guards,
 ordering and selector collisions, then replaces only this one selector with
 blackhole in a copy of the full executing JSON to derive a continuity hash.
@@ -145,8 +147,7 @@ Heartbeat/replay cannot extend collection-start freshness.
 No-op comparison checks owned rule/balancer/path/observatory intent against the
 policy-validated full execution. Unrelated stock-generated objects are retained
 in execution without forcing template rewrites. Their changes still reset
-accumulated health. Public descriptors and private observation schema2 are
-unchanged by this separation.
+accumulated health. Public descriptors remain version1; current private observations use schema3.
 
 The pure compiler/health/no-op checks and default-closed CLI boundary are
 implemented locally. A no-op routine tick updates only the atomic health file;
@@ -209,3 +210,21 @@ and sole-writer option must also account for every stock/CLI/native writer and
 for the process reset caused by changing the selected route. No vendor fork,
 native mutator change, public-profile projection or financial fence change is
 introduced by this negative integration.
+
+
+## Current private native producer checkpoint
+
+The companion source artifact under integrations/3xui-prepared-execution supplies
+the bounded schema3 execution producer. Its Linux custody/override/lifecycle
+packet passes on unchanged pinned stock Xray. The current manifest records exact
+source, original failures, proof applicability and independently CLOSED resources.
+This is not an installed collector, full producer/template compatibility or
+physical client-flow proof. Cold config uses the same sealed memfd as stdin and
+retained fd3; the sealed executable stays pinned by an owned open descriptor
+until its captured generation exits. Continuous identity checks verify that
+kernel object and immutable seals after the cold full executable hash.
+
+The Agent files in this Builder still precede PR2's current health/ABA correction;
+that owner has not integrated its new handoff here. Do not treat the earlier
+negative transport description as acceptance of the current shared lifecycle.
+Agent/access_runtime/SaaS remain PR2-owned, and prepared capability stays false.

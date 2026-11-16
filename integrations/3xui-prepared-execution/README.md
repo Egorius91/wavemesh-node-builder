@@ -1,6 +1,7 @@
 # Private 3x-ui execution attestation checkpoint
 
-This is an unpublished, unqualified source checkpoint for PR4 stage1. Apply the
+This is an unpublished PR4 source checkpoint with scoped native custody proof.
+Full producer, flow and service acceptance remain open. Apply the
 accompanying patch only to upstream 3x-ui v3.11.0 commit
 `c621ba9014a6aa21fd7c9ecf45655e44e24ebf13`. Preserve upstream GPL-3.0 licensing.
 The source manifest pins every changed file and the immutable local commit.
@@ -13,8 +14,12 @@ this package changes no installed service or live flag. Default behaviour and
 outbound-test processes remain unmanaged and cannot issue an attestation.
 
 The managed launch seals config and the exact stock executable in Linux memfds.
-It starts the core from inherited sealed descriptors, pins actual executable and
-process identity, and requires an actual native API response. Control is a
+It executes the sealed image from inherited fd4. The SAME sealed config file
+is assigned as stdin and retained as fd3, using stock -format json -c stdin:.
+Cold start checks the actual full executable SHA; continuous checks require the
+same sealed executable inode and process instance. Its owned expected descriptor
+stays open for that generation and is closed by that generation's actual exit.
+An actual native API response is required before qualification. Control is a
 filesystem Unix socket at `/run/wavemesh-xray/core.sock`; the read-only snapshot
 is `/run/wavemesh-xray/snapshot.sock` in the same producer process. The parent is
 root-owned 0700, both sockets 0600, and Unix peer credentials are checked. Managed
@@ -56,13 +61,14 @@ A later collector must verify its fresh 32-byte challenge, peer/producer/core
 identities, approved executable/build manifest, both hashes and override policy
 before projecting a compiler runtime view. No collector is wired in this stage.
 
-No native qualification, physical deny, existing-flow closure, rights, counter
-settlement, fleet readiness or VPN profile acceptance follows from source tests.
+The focused native packet passes on the pinned stock core and proves custody,
+mutator accounting and override boundaries. It does not prove physical deny,
+existing-flow closure, rights, counter settlement, full producer build, real
+template compatibility, fleet readiness or VPN profile acceptance.
 Agent capability remains false. Builder still retains pending/UNKNOWN apply debt;
 the owner-local CAS has not been connected to its transaction. Full PR4 is open.
 
-`NATIVE-PACKET.md` defines the next isolated proof and its outstanding coverage.
-The existing stock native receipts cannot qualify this changed producer. Do not
-execute the packet before the coordinator's fresh resource/phase ACK and actual
-recovery CLOSED/release. No publication, hosted CI, merge or live server work is
+`NATIVE-PACKET.md` records exact source/artifact/receipt pins, original failures,
+current proof applicability, independent CLOSED/release and outstanding coverage.
+No native reservation remains; another phase requires coordinated fresh admission. No publication, hosted CI, merge or live server work is
 authorized by this source checkpoint.

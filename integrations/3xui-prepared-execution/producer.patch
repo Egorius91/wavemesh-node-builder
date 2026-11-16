@@ -1,5 +1,5 @@
 diff --git a/internal/web/job/check_client_ip_job.go b/internal/web/job/check_client_ip_job.go
-index eec1278efbdfb1e49bf669383d902e786f634432..6424d864b4599fc97de57ab27954cd2819f360f4 100644
+index eec1278e..6424d864 100644
 --- a/internal/web/job/check_client_ip_job.go
 +++ b/internal/web/job/check_client_ip_job.go
 @@ -690,9 +690,11 @@ func (j *CheckClientIpJob) recordBannedSeen(email string, banned, published []mo
@@ -18,7 +18,7 @@ index eec1278efbdfb1e49bf669383d902e786f634432..6424d864b4599fc97de57ab27954cd28
  		logger.Warningf("[LIMIT_IP] Failed to init Xray API for disconnection: %v", err)
  		return
 diff --git a/internal/web/runtime/local.go b/internal/web/runtime/local.go
-index f130921ce611d2d08f597d2f5edf3afa27d1328d..2a93ce7c7f14ecc53ef218f96012840bbcb46034 100644
+index f130921c..2a93ce7c 100644
 --- a/internal/web/runtime/local.go
 +++ b/internal/web/runtime/local.go
 @@ -23,6 +23,7 @@ import (
@@ -59,7 +59,7 @@ index f130921ce611d2d08f597d2f5edf3afa27d1328d..2a93ce7c7f14ecc53ef218f96012840b
  		return err
  	}
 diff --git a/internal/web/runtime/local_api.go b/internal/web/runtime/local_api.go
-index 2a3c40d90a2fe4281ba559779373a9c1de3ccdf1..fb1558cb96a6eb6993749a4d0a7c617dea8b3e46 100644
+index 2a3c40d9..fb1558cb 100644
 --- a/internal/web/runtime/local_api.go
 +++ b/internal/web/runtime/local_api.go
 @@ -9,19 +9,23 @@ import (
@@ -112,7 +112,7 @@ index 2a3c40d90a2fe4281ba559779373a9c1de3ccdf1..fb1558cb96a6eb6993749a4d0a7c617d
 +	localAPIEndpoint = xray.APIEndpoint{}
  }
 diff --git a/internal/web/service/node.go b/internal/web/service/node.go
-index 0b64420974a571c76cc6a788119ea8096e409382..6f96139b4374abf585d65b3422e09bac9bdaeda6 100644
+index 0b644209..6f96139b 100644
 --- a/internal/web/service/node.go
 +++ b/internal/web/service/node.go
 @@ -1188,8 +1188,8 @@ func openOutboundBridge(nodeID int, outboundTag string) *outboundBridge {
@@ -136,7 +136,7 @@ index 0b64420974a571c76cc6a788119ea8096e409382..6f96139b4374abf585d65b3422e09bac
  	}
  	if err := bridge.api.AddInbound(inboundJSON); err != nil {
 diff --git a/internal/web/service/tuic_relay_apply.go b/internal/web/service/tuic_relay_apply.go
-index ecf63fc842b4051ee23ec6b1b33ad23f2a0d5fd8..35dd2c46b6ae759f15f1eaeabebd9c6e9c0714af 100644
+index ecf63fc8..35dd2c46 100644
 --- a/internal/web/service/tuic_relay_apply.go
 +++ b/internal/web/service/tuic_relay_apply.go
 @@ -144,12 +144,16 @@ func unavailableTuicRepairs(cfg *xray.Config) []xray.InboundReplacement {
@@ -158,7 +158,7 @@ index ecf63fc842b4051ee23ec6b1b33ad23f2a0d5fd8..35dd2c46b6ae759f15f1eaeabebd9c6e
  		return err
  	}
 diff --git a/internal/web/service/xray.go b/internal/web/service/xray.go
-index 596986c33dbd3aed0175ff8cac8836cd5ce48af9..6c941b941315671e6f5ff28023921094838867d5 100644
+index 596986c3..6c941b94 100644
 --- a/internal/web/service/xray.go
 +++ b/internal/web/service/xray.go
 @@ -1344,8 +1344,7 @@ func (s *XrayService) GetXrayTraffic() ([]*xray.Traffic, []*xray.ClientTraffic,
@@ -266,7 +266,7 @@ index 596986c33dbd3aed0175ff8cac8836cd5ce48af9..6c941b941315671e6f5ff28023921094
 +	return p.GetAPIEndpoint()
 +}
 diff --git a/internal/web/web.go b/internal/web/web.go
-index aaee5dbc6c88b47524d8202bc3aa4e06d23a2fe4..24c771340ee9ed725747c37bdc7af78f123869a3 100644
+index aaee5dbc..24c77134 100644
 --- a/internal/web/web.go
 +++ b/internal/web/web.go
 @@ -556,7 +556,7 @@ func (s *Server) start(restartXray bool, startTgBot bool) (err error) {
@@ -279,7 +279,7 @@ index aaee5dbc6c88b47524d8202bc3aa4e06d23a2fe4..24c771340ee9ed725747c37bdc7af78f
  		RequestReconcile: func() { s.xrayService.SetToNeedReconcile() },
  	})
 diff --git a/internal/xray/api.go b/internal/xray/api.go
-index 0e0e68ddcd3bbf2fcba02cbe8cb403a16b4a346f..9718dc292c677da76be0afc7371fc5caa517bea3 100644
+index 0e0e68dd..9718dc29 100644
 --- a/internal/xray/api.go
 +++ b/internal/xray/api.go
 @@ -6,6 +6,7 @@ package xray
@@ -524,10 +524,10 @@ index 0e0e68ddcd3bbf2fcba02cbe8cb403a16b4a346f..9718dc292c677da76be0afc7371fc5ca
  	resp, err := (*x.StatsServiceClient).GetUsersStats(ctx, &statsService.GetUsersStatsRequest{})
 diff --git a/internal/xray/execution.go b/internal/xray/execution.go
 new file mode 100644
-index 0000000000000000000000000000000000000000..3cc5f388c4fbeadcb98044e44b3c4f9c0931b199
+index 00000000..596f15cd
 --- /dev/null
 +++ b/internal/xray/execution.go
-@@ -0,0 +1,853 @@
+@@ -0,0 +1,865 @@
 +package xray
 +
 +import (
@@ -539,6 +539,7 @@ index 0000000000000000000000000000000000000000..3cc5f388c4fbeadcb98044e44b3c4f9c
 +	"errors"
 +	"fmt"
 +	"io"
++	"os"
 +	"strconv"
 +	"strings"
 +	"sync"
@@ -609,6 +610,7 @@ index 0000000000000000000000000000000000000000..3cc5f388c4fbeadcb98044e44b3c4f9c
 +	overrides      map[string]string
 +	transition     *SelectorTransition
 +	checkIdentity  func() error
++	executable     *os.File
 +}
 +
 +func executionJSON(v any) []byte {
@@ -645,6 +647,16 @@ index 0000000000000000000000000000000000000000..3cc5f388c4fbeadcb98044e44b3c4f9c
 +	o.mu.Lock()
 +	defer o.mu.Unlock()
 +	o.invalidateLocked(reason)
++}
++
++func (o *executionOwner) closeIdentity(reason string) {
++	o.mu.Lock()
++	defer o.mu.Unlock()
++	o.invalidateLocked(reason)
++	if o.executable != nil {
++		_ = o.executable.Close()
++		o.executable = nil
++	}
 +}
 +
 +func (o *executionOwner) invalidateLocked(reason string) {
@@ -1383,7 +1395,7 @@ index 0000000000000000000000000000000000000000..3cc5f388c4fbeadcb98044e44b3c4f9c
 +}
 diff --git a/internal/xray/execution_api.go b/internal/xray/execution_api.go
 new file mode 100644
-index 0000000000000000000000000000000000000000..b418fdacbce57ef07ade12484b046738910c43e1
+index 00000000..b418fdac
 --- /dev/null
 +++ b/internal/xray/execution_api.go
 @@ -0,0 +1,94 @@
@@ -1481,12 +1493,133 @@ index 0000000000000000000000000000000000000000..b418fdacbce57ef07ade12484b046738
 +func (x *XrayAPI) RemoveUser(tag, email string) error {
 +	return x.withExecutionMutation("RemoveUser", map[string]any{"tag": tag, "email": email}, nil, func(c *XrayAPI) error { return c.removeUserRaw(tag, email) })
 +}
+diff --git a/internal/xray/execution_identity_linux_test.go b/internal/xray/execution_identity_linux_test.go
+new file mode 100644
+index 00000000..14885efa
+--- /dev/null
++++ b/internal/xray/execution_identity_linux_test.go
+@@ -0,0 +1,58 @@
++//go:build linux
++
++package xray
++
++import (
++	"os"
++	"path/filepath"
++	"strconv"
++	"testing"
++
++	"golang.org/x/sys/unix"
++)
++
++func TestExecutionNativeSealedExecutableIdentity(t *testing.T) {
++	f, err := sealedInput("identity-unit", []byte("same immutable bytes"))
++	if err != nil {
++		t.Fatal(err)
++	}
++	defer f.Close()
++	path := "/proc/self/fd/" + strconv.Itoa(int(f.Fd()))
++	if err = verifySealedExecutable(path, f); err != nil {
++		t.Fatal("same sealed object was refused")
++	}
++	other, err := sealedInput("identity-unit", []byte("same immutable bytes"))
++	if err != nil {
++		t.Fatal(err)
++	}
++	defer other.Close()
++	if verifySealedExecutable("/proc/self/fd/"+strconv.Itoa(int(other.Fd())), f) == nil {
++		t.Fatal("same-content replacement inode was admitted")
++	}
++	plain, err := os.CreateTemp(t.TempDir(), "unsealed")
++	if err != nil {
++		t.Fatal(err)
++	}
++	defer plain.Close()
++	if verifySealedExecutable(plain.Name(), plain) == nil || verifySealedExecutable(filepath.Join(t.TempDir(), "missing"), f) == nil {
++		t.Fatal("unsealed or missing actual object was admitted")
++	}
++	fd, err := unix.MemfdCreate("partial-seals", unix.MFD_CLOEXEC|unix.MFD_ALLOW_SEALING)
++	if err != nil {
++		t.Fatal(err)
++	}
++	partial := os.NewFile(uintptr(fd), "partial-seals")
++	defer partial.Close()
++	if _, err = unix.FcntlInt(partial.Fd(), unix.F_ADD_SEALS, unix.F_SEAL_WRITE); err != nil {
++		t.Fatal(err)
++	}
++	if verifySealedExecutable("/proc/self/fd/"+strconv.Itoa(fd), partial) == nil {
++		t.Fatal("incomplete immutable seals were admitted")
++	}
++	if err = f.Close(); err != nil {
++		t.Fatal(err)
++	}
++	if verifySealedExecutable(path, f) == nil || verifySealedExecutable(path, nil) == nil {
++		t.Fatal("closed or missing expected descriptor was admitted")
++	}
++}
+diff --git a/internal/xray/execution_lifecycle_test.go b/internal/xray/execution_lifecycle_test.go
+new file mode 100644
+index 00000000..ae6272fb
+--- /dev/null
++++ b/internal/xray/execution_lifecycle_test.go
+@@ -0,0 +1,51 @@
++package xray
++
++import (
++	"errors"
++	"os"
++	"os/exec"
++	"testing"
++	"time"
++)
++
++func TestExecutionExitedChildClosesOnlyItsCapturedGeneration(t *testing.T) {
++	old, current := executionFixture(t), executionFixture(t)
++	oldFile, err := os.CreateTemp(t.TempDir(), "old")
++	if err != nil {
++		t.Fatal(err)
++	}
++	defer oldFile.Close()
++	currentFile, err := os.CreateTemp(t.TempDir(), "current")
++	if err != nil {
++		t.Fatal(err)
++	}
++	defer currentFile.Close()
++	old.executable, current.executable = oldFile, currentFile
++	p := newProcess(nil)
++	p.execution = old
++	cmd := exec.Command(os.Args[0], "-test.run=^TestMutationAuditHelper$", "--", "block")
++	cmd.Env = append(os.Environ(), "XRAY_MUT_HELPER=1")
++	if err = p.startCommand(cmd); err != nil {
++		t.Fatal(err)
++	}
++	t.Cleanup(func() {
++		if p.IsRunning() {
++			p.intentionalStop.Store(true)
++			_ = cmd.Process.Kill()
++			_ = p.waitForExit(5 * time.Second)
++		}
++	})
++	p.mu.Lock()
++	p.execution = current
++	p.mu.Unlock()
++	p.intentionalStop.Store(true)
++	if cmd.Process.Kill() != nil || p.waitForExit(5*time.Second) != nil {
++		t.Fatal("owned child did not finish")
++	}
++	if _, err = oldFile.ReadAt(make([]byte, 1), 0); !errors.Is(err, os.ErrClosed) || old.snapshot("").Qualified {
++		t.Fatal("exited generation retained an open qualified executable")
++	}
++	if _, err = currentFile.Stat(); err != nil || !current.snapshot("").Qualified {
++		t.Fatal("old cleanup closed or invalidated the newer generation")
++	}
++}
 diff --git a/internal/xray/execution_linux.go b/internal/xray/execution_linux.go
 new file mode 100644
-index 0000000000000000000000000000000000000000..a8e1dec19d45e57c9d3127144db6127e42e9e98d
+index 00000000..fbde8034
 --- /dev/null
 +++ b/internal/xray/execution_linux.go
-@@ -0,0 +1,361 @@
+@@ -0,0 +1,398 @@
 +//go:build linux
 +
 +package xray
@@ -1555,6 +1688,31 @@ index 0000000000000000000000000000000000000000..a8e1dec19d45e57c9d3127144db6127e
 +		return nil, errors.New("sealed input unavailable")
 +	}
 +	return f, nil
++}
++
++func verifySealedExecutable(path string, expected *os.File) error {
++	if expected == nil {
++		return errors.New("sealed executable custody unavailable")
++	}
++	want, err := expected.Stat()
++	if err != nil {
++		return err
++	}
++	f, err := os.Open(path)
++	if err != nil {
++		return err
++	}
++	defer f.Close()
++	actual, err := f.Stat()
++	if err != nil || !os.SameFile(want, actual) {
++		return errors.New("executing sealed object changed")
++	}
++	seals, err := unix.FcntlInt(f.Fd(), unix.F_GET_SEALS, 0)
++	required := unix.F_SEAL_WRITE | unix.F_SEAL_GROW | unix.F_SEAL_SHRINK | unix.F_SEAL_SEAL
++	if err != nil || seals&required != required {
++		return errors.New("executable immutable seals unavailable")
++	}
++	return nil
 +}
 +
 +func procStartTicks(pid int) (string, error) {
@@ -1662,7 +1820,12 @@ index 0000000000000000000000000000000000000000..a8e1dec19d45e57c9d3127144db6127e
 +	if err != nil {
 +		return err
 +	}
-+	defer coreFD.Close()
++	identityOwned := false
++	defer func() {
++		if !identityOwned {
++			_ = coreFD.Close()
++		}
++	}()
 +	if err = coreFD.Chmod(0500); err != nil {
 +		return err
 +	}
@@ -1681,24 +1844,32 @@ index 0000000000000000000000000000000000000000..a8e1dec19d45e57c9d3127144db6127e
 +	consumedHash := sha256.Sum256(consumed)
 +	id := ExecutionIdentity{Generation: uuid.NewString(), BootID: strings.TrimSpace(string(boot)), CoreSHA256: stockCoreSHA256, ProducerPID: os.Getpid(), ProducerStartTicks: producerTicks, ProducerSHA256: producerHash, ProducerUpstream: producerUpstream, ConsumedSHA256: hex.EncodeToString(consumedHash[:])}
 +	o := newExecutionOwner(consumed, id, nil)
++	o.executable = coreFD
++	identityOwned = true
 +	p.mu.Lock()
 +	p.execution = o
 +	p.apiPort = 0
 +	p.mu.Unlock()
++	started := false
 +	defer func() {
 +		if err != nil {
 +			o.invalidate("cold_start_failed")
 +			_ = p.stop()
++			if !started {
++				o.closeIdentity("cold_start_failed")
++			}
 +		}
 +	}()
-+	cmd := exec.CommandContext(context.Background(), "/proc/self/fd/4", "run", "-format", "json", "-c", "/proc/self/fd/3")
++	cmd := exec.CommandContext(context.Background(), "/proc/self/fd/4", "run", "-format", "json", "-c", "stdin:")
 +	cmd.SysProcAttr = &syscall.SysProcAttr{Pdeathsig: syscall.SIGKILL}
++	cmd.Stdin = configFD
 +	cmd.ExtraFiles = []*os.File{configFD, coreFD}
 +	cmd.Stdout = p.logWriter
 +	cmd.Stderr = p.logWriter
 +	if err = p.startCommand(cmd); err != nil {
 +		return err
 +	}
++	started = true
 +	id.PID = cmd.Process.Pid
 +	o.peerPID.Store(int64(id.PID))
 +	id.StartTicks, err = procStartTicks(id.PID)
@@ -1710,6 +1881,9 @@ index 0000000000000000000000000000000000000000..a8e1dec19d45e57c9d3127144db6127e
 +	if err != nil || actualHash != stockCoreSHA256 {
 +		return errors.New("executing core identity mismatch")
 +	}
++	if err = verifySealedExecutable(fmt.Sprintf("/proc/%d/exe", id.PID), coreFD); err != nil {
++		return err
++	}
 +	o.mu.Lock()
 +	o.identity = id
 +	o.checkIdentity = func() error {
@@ -1720,11 +1894,7 @@ index 0000000000000000000000000000000000000000..a8e1dec19d45e57c9d3127144db6127e
 +		if e != nil || ticks != id.StartTicks {
 +			return errors.New("core identity changed")
 +		}
-+		h, e := hashFile(fmt.Sprintf("/proc/%d/exe", id.PID))
-+		if e != nil || h != id.CoreSHA256 {
-+			return errors.New("core executable changed")
-+		}
-+		return nil
++		return verifySealedExecutable(fmt.Sprintf("/proc/%d/exe", id.PID), coreFD)
 +	}
 +	o.mu.Unlock()
 +	api := &XrayAPI{}
@@ -1850,10 +2020,10 @@ index 0000000000000000000000000000000000000000..a8e1dec19d45e57c9d3127144db6127e
 +func executionRequested() bool { return os.Getenv("XUI_PREPARED_ATTESTATION") == "1" }
 diff --git a/internal/xray/execution_native_linux_test.go b/internal/xray/execution_native_linux_test.go
 new file mode 100644
-index 0000000000000000000000000000000000000000..341279aca21c6d9feb3a489403ccfe6e4dc60c5a
+index 00000000..980bdb7d
 --- /dev/null
 +++ b/internal/xray/execution_native_linux_test.go
-@@ -0,0 +1,341 @@
+@@ -0,0 +1,410 @@
 +//go:build linux
 +
 +package xray
@@ -1961,6 +2131,7 @@ index 0000000000000000000000000000000000000000..341279aca21c6d9feb3a489403ccfe6e
 +	entry := ibs[1].(map[string]any)
 +	entry["port"] = nativePort(t)
 +	entry["listen"] = "127.0.0.1"
++	entry["settings"].(map[string]any)["decryption"] = "none"
 +	stream := entry["streamSettings"].(map[string]any)
 +	stream["tlsSettings"] = nativeTLS(t)
 +	stream["xhttpSettings"].(map[string]any)["path"] = "/native-unit"
@@ -2029,7 +2200,11 @@ index 0000000000000000000000000000000000000000..341279aca21c6d9feb3a489403ccfe6e
 +	cfg, unusedTCP := nativeFixtureConfig(t)
 +	p := NewProcess(cfg)
 +	if err = p.Start(); err != nil {
-+		t.Fatalf("managed cold launch failed (%T)", err)
++		result := p.GetResult()
++		if len(result) > 1024 || strings.Contains(result, `"inbounds"`) || strings.Contains(result, `"key"`) || strings.Contains(result, "-----") {
++			result = "private diagnostic suppressed"
++		}
++		t.Fatalf("managed cold launch failed (%T): %v; child exit: %v; child result: %s", err, err, p.GetErr(), result)
 +	}
 +	t.Cleanup(func() {
 +		if p.IsRunning() {
@@ -2039,6 +2214,9 @@ index 0000000000000000000000000000000000000000..341279aca21c6d9feb3a489403ccfe6e
 +		}
 +	})
 +	s := nativeSnapshot(t)
++	p.execution.mu.Lock()
++	firstExecutable := p.execution.executable
++	p.execution.mu.Unlock()
 +	if !s.Qualified || s.Identity.CoreSHA256 != stockCoreSHA256 || s.Identity.PID <= 0 || s.Identity.ProducerPID != os.Getpid() || s.Epoch != "0" {
 +		t.Fatal("cold generation is not custody attested")
 +	}
@@ -2056,23 +2234,32 @@ index 0000000000000000000000000000000000000000..341279aca21c6d9feb3a489403ccfe6e
 +		c.Close()
 +		t.Fatal("managed control leaked to TCP")
 +	}
-+	consumedPath := filepath.Join("/proc", strconv.Itoa(s.Identity.PID), "fd", "3")
-+	f, e := os.OpenFile(consumedPath, os.O_RDWR, 0)
-+	if e != nil {
-+		t.Fatal("consumed sealed descriptor unavailable")
-+	}
-+	seals, e := unix.FcntlInt(f.Fd(), unix.F_GET_SEALS, 0)
-+	if e != nil || seals&(unix.F_SEAL_WRITE|unix.F_SEAL_GROW|unix.F_SEAL_SHRINK|unix.F_SEAL_SEAL) != (unix.F_SEAL_WRITE|unix.F_SEAL_GROW|unix.F_SEAL_SHRINK|unix.F_SEAL_SEAL) {
++	var consumedStat unix.Stat_t
++	for _, fd := range []string{"0", "3"} {
++		consumedPath := filepath.Join("/proc", strconv.Itoa(s.Identity.PID), "fd", fd)
++		f, err := os.OpenFile(consumedPath, os.O_RDWR, 0)
++		if err != nil {
++			t.Fatal("consumed sealed descriptor unavailable")
++		}
++		var st unix.Stat_t
++		if unix.Fstat(int(f.Fd()), &st) != nil || (fd == "3" && (st.Dev != consumedStat.Dev || st.Ino != consumedStat.Ino)) {
++			f.Close()
++			t.Fatal("stdin and retained config descriptor differ")
++		}
++		consumedStat = st
++		seals, err := unix.FcntlInt(f.Fd(), unix.F_GET_SEALS, 0)
++		if err != nil || seals&(unix.F_SEAL_WRITE|unix.F_SEAL_GROW|unix.F_SEAL_SHRINK|unix.F_SEAL_SEAL) != (unix.F_SEAL_WRITE|unix.F_SEAL_GROW|unix.F_SEAL_SHRINK|unix.F_SEAL_SEAL) {
++			f.Close()
++			t.Fatal("consumed input lacks immutable seals")
++		}
++		if _, err = f.WriteAt([]byte("x"), 0); !errors.Is(err, syscall.EPERM) {
++			f.Close()
++			t.Fatal("consumed bytes remained writable")
++		}
 +		f.Close()
-+		t.Fatal("consumed input lacks immutable seals")
-+	}
-+	if _, e = f.WriteAt([]byte("x"), 0); !errors.Is(e, syscall.EPERM) {
-+		f.Close()
-+		t.Fatal("consumed bytes remained writable")
-+	}
-+	f.Close()
-+	if actual, e := hashFile(consumedPath); e != nil || actual != s.Identity.ConsumedSHA256 {
-+		t.Fatal("consumed generation hash mismatch")
++		if actual, err := hashFile(consumedPath); err != nil || actual != s.Identity.ConsumedSHA256 {
++			t.Fatal("consumed generation hash mismatch")
++		}
 +	}
 +	self, e := os.ReadFile(os.Args[0])
 +	if e != nil {
@@ -2185,6 +2372,12 @@ index 0000000000000000000000000000000000000000..341279aca21c6d9feb3a489403ccfe6e
 +	if p.Stop() != nil || p.IsRunning() {
 +		t.Fatal("first core did not close")
 +	}
++	if firstExecutable == nil {
++		t.Fatal("running generation did not retain executable custody")
++	}
++	if _, err = firstExecutable.Stat(); !errors.Is(err, os.ErrClosed) {
++		t.Fatal("stopped generation retained its executable descriptor")
++	}
 +	api.Close()
 +	p = NewProcess(cfg)
 +	if p.Start() != nil {
@@ -2194,10 +2387,56 @@ index 0000000000000000000000000000000000000000..341279aca21c6d9feb3a489403ccfe6e
 +	if !fresh.Qualified || fresh.Identity.Generation == oldGeneration || fresh.Epoch != "0" {
 +		t.Fatal("new cold generation reused old history")
 +	}
++	freshAPI := &XrayAPI{}
++	if freshAPI.InitEndpoint(p.GetAPIEndpoint()) != nil {
++		t.Fatal("fresh-generation native dial failed")
++	}
++	defer freshAPI.Close()
++	for _, target := range []string{"api", "missing-outbound"} {
++		if err := freshAPI.SetBalancerTarget("unit-balancer", target); !errors.Is(err, ErrExecutionControlBoundary) {
++			t.Fatal("unsafe native override was not refused before effects")
++		}
++		current := nativeSnapshot(t)
++		actual, err := freshAPI.GetBalancerInfo("unit-balancer")
++		if err != nil || actual.Override != "" || !current.Qualified || current.Identity.Generation != fresh.Identity.Generation || current.Epoch != fresh.Epoch || current.ExecutionSHA256 != fresh.ExecutionSHA256 {
++			t.Fatal("refused override changed actual core or the previous safe attestation")
++		}
++	}
++	for _, target := range []string{"wm-exit-path-unit", ""} {
++		if freshAPI.SetBalancerTarget("unit-balancer", target) != nil {
++			t.Fatal("supported fresh override or clear failed")
++		}
++		actual, err := freshAPI.GetBalancerInfo("unit-balancer")
++		current := nativeSnapshot(t)
++		if err != nil || actual.Override != target || !current.Qualified || current.Overrides["unit-balancer"] != target {
++			t.Fatal("actual override and attested override differ")
++		}
++	}
++	if current := nativeSnapshot(t); current.ExecutionSHA256 != fresh.ExecutionSHA256 || current.Epoch != "2" || current.Identity.Generation != fresh.Identity.Generation {
++		t.Fatal("actual clear changed configuration or reused an epoch")
++	}
++	if freshAPI.SetBalancerTarget("unit-balancer", "wm-exit-path-unit") != nil || freshAPI.DelOutbound("wm-exit-path-unit") != nil {
++		t.Fatal("referenced native target removal failed")
++	}
++	removed := nativeSnapshot(t)
++	if removed.Qualified || removed.Config != nil || removed.ExecutionSHA256 != "" || removed.Epoch != "4" {
++		t.Fatal("actual target removal retained qualified execution")
++	}
++	if freshAPI.SetBalancerTarget("unit-balancer", "") != nil {
++		t.Fatal("unknown-state native override clear failed")
++	}
++	actual, err := freshAPI.GetBalancerInfo("unit-balancer")
++	if err != nil || actual.Override != "" {
++		t.Fatal("actual unknown-state override was not cleared")
++	}
++	p.SetConfig(cfg)
++	if current := nativeSnapshot(t); current.Qualified || current.Config != nil || current.Epoch != "5" {
++		t.Fatal("native clear or SetConfig resealed a removed target")
++	}
 +}
 diff --git a/internal/xray/execution_other.go b/internal/xray/execution_other.go
 new file mode 100644
-index 0000000000000000000000000000000000000000..4e86f679c2ebd71916bde176274eb54f27538b36
+index 00000000..4e86f679
 --- /dev/null
 +++ b/internal/xray/execution_other.go
 @@ -0,0 +1,20 @@
@@ -2223,7 +2462,7 @@ index 0000000000000000000000000000000000000000..4e86f679c2ebd71916bde176274eb54f
 +}
 diff --git a/internal/xray/execution_override_test.go b/internal/xray/execution_override_test.go
 new file mode 100644
-index 0000000000000000000000000000000000000000..9907178bfb5083a02bac8db87eb5e73a7de22439
+index 00000000..9907178b
 --- /dev/null
 +++ b/internal/xray/execution_override_test.go
 @@ -0,0 +1,121 @@
@@ -2350,7 +2589,7 @@ index 0000000000000000000000000000000000000000..9907178bfb5083a02bac8db87eb5e73a
 +}
 diff --git a/internal/xray/execution_test.go b/internal/xray/execution_test.go
 new file mode 100644
-index 0000000000000000000000000000000000000000..2f0f8db8de4df95c57ced447241bc1b0d6b1de57
+index 00000000..2f0f8db8
 --- /dev/null
 +++ b/internal/xray/execution_test.go
 @@ -0,0 +1,313 @@
@@ -2668,7 +2907,7 @@ index 0000000000000000000000000000000000000000..2f0f8db8de4df95c57ced447241bc1b0
 +	}
 +}
 diff --git a/internal/xray/process.go b/internal/xray/process.go
-index a9d8c9ce0c7c239eb983c45c15ced5eb7244c02b..04444af871a484eb8ed7a331ac13016715efa2d4 100644
+index a9d8c9ce..7bed589a 100644
 --- a/internal/xray/process.go
 +++ b/internal/xray/process.go
 @@ -6,6 +6,7 @@ import (
@@ -2723,15 +2962,39 @@ index a9d8c9ce0c7c239eb983c45c15ced5eb7244c02b..04444af871a484eb8ed7a331ac130167
  
  	defer func() {
  		if err != nil {
-@@ -739,6 +752,7 @@ func (p *process) waitForCommand(cmd *exec.Cmd, done chan struct{}) {
+@@ -712,6 +725,7 @@ func (p *process) startCommand(cmd *exec.Cmd) error {
+ 	p.done = make(chan struct{})
+ 	p.exitErr = nil
+ 	done := p.done
++	execution := p.execution
+ 	p.mu.Unlock()
+ 	p.intentionalStop.Store(false)
+ 
+@@ -725,7 +739,7 @@ func (p *process) startCommand(cmd *exec.Cmd) error {
+ 
+ 	attachChildLifetime(cmd)
+ 
+-	go p.waitForCommand(cmd, done)
++	go p.waitForCommand(cmd, done, execution)
+ 	return nil
+ }
+ 
+@@ -735,10 +749,13 @@ func (p *process) setExitErr(err error) {
+ 	p.mu.Unlock()
+ }
+ 
+-func (p *process) waitForCommand(cmd *exec.Cmd, done chan struct{}) {
++func (p *process) waitForCommand(cmd *exec.Cmd, done chan struct{}, execution *executionOwner) {
  	defer close(done)
  
  	err := cmd.Wait()
-+	p.invalidateExecution("process_exited")
++	if execution != nil {
++		execution.closeIdentity("process_exited")
++	}
  	p.logWriter.Flush()
  	if err == nil || p.intentionalStop.Load() {
  		return
-@@ -762,6 +776,20 @@ func (p *process) waitForCommand(cmd *exec.Cmd, done chan struct{}) {
+@@ -762,6 +779,20 @@ func (p *process) waitForCommand(cmd *exec.Cmd, done chan struct{}) {
  
  // Stop terminates the running Xray process.
  func (p *process) Stop() error {
