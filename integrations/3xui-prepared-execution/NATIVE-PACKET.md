@@ -1,14 +1,14 @@
 # Exact-source native packet — NOT RUN
 
 The producer source commit, patch and file hashes are pinned in `source-manifest.json`.
-The companion Builder commit pins the private v3 compiler. Phase712 cross-compiled
-and linked the unchanged current `./internal/xray` test package for Linux/amd64
-with Go1.27.4, CGO disabled, `-trimpath -p 2`: PASS. The corrected protobuf `Reset_`
-field is now compiled. The previous failed attempt remains in manifest/history.
-The exact 47,412,047-byte ELF64 artifact is pinned by SHA256 in the manifest and
-phase712 artifact receipt. It has NOT been executed; the complete Linux producer
-build with its database dependencies also remains NOT RUN. An earlier
-`execution-linux.test` in a tool cache is not admitted.
+The companion Builder commit pins the private v3 compiler. Phase726 cross-compiled
+and linked current producer0ccff723 `./internal/xray` test sources for Linux/amd64
+with Go1.27.4, CGO disabled, `-trimpath -p 2`: PASS. Artifact is 47,447,630 bytes,
+ELF64 AMD64, SHA256 `6fc4bd7ea27a368f181dd6ab09e85094c07087559da9505f00485118c41b5bae`. The exact path is in the phase726 artifact
+receipt; it has NOT been executed. Full Linux producer build remains NOT RUN.
+Earlier phase712/Reset failure/old binaries remain historical and do not qualify
+this correction. Current owner source race18 top-level+17 subcases PASS; compiler45
+is reused from phase712 by unchanged source bytes.
 
 Prerequisites: fresh coordinator phase/resource ACK; recovery's actual independently
 checked CLOSED/release; Windows reserve at least 2048 MiB; an exclusive own profile,
@@ -52,3 +52,9 @@ checks. No positive Agent/SaaS capability may be enabled from this packet alone.
 Admission or outcomes that cannot be proved stay NOT VERIFIED/UNKNOWN. Do not
 patch Xray, substitute TCP, remove pending debt or repeat an ambiguous business
 operation to obtain PASS. Return the precise failed guarantee for architecture ACK.
+
+Phase726 adds source proof for reserved/absent targets, safe target/clear, removed
+referenced target, sticky UNKNOWN and pre-effect routing/loopback control refusal.
+These are not native kernel/core results. A later admitted native follow-up must
+also verify the corrected override refusal/lifecycle against the actual core before
+positive integration; the existing packet alone has no physical-flow acceptance.

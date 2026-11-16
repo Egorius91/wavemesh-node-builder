@@ -524,10 +524,10 @@ index 0e0e68ddcd3bbf2fcba02cbe8cb403a16b4a346f..9718dc292c677da76be0afc7371fc5ca
  	resp, err := (*x.StatsServiceClient).GetUsersStats(ctx, &statsService.GetUsersStatsRequest{})
 diff --git a/internal/xray/execution.go b/internal/xray/execution.go
 new file mode 100644
-index 0000000000000000000000000000000000000000..e62a910c380e68ebf596c0a9f6dd5c8e1e80e23d
+index 0000000000000000000000000000000000000000..3cc5f388c4fbeadcb98044e44b3c4f9c0931b199
 --- /dev/null
 +++ b/internal/xray/execution.go
-@@ -0,0 +1,768 @@
+@@ -0,0 +1,853 @@
 +package xray
 +
 +import (
@@ -553,6 +553,7 @@ index 0000000000000000000000000000000000000000..e62a910c380e68ebf596c0a9f6dd5c8e
 +
 +var ErrExecutionConflict = errors.New("execution generation or epoch conflict")
 +var ErrExecutionSelector = errors.New("unsupported execution selector transition")
++var ErrExecutionControlBoundary = errors.New("unsupported native control boundary")
 +
 +type ExecutionIdentity struct {
 +	Generation         string `json:"generation"`
@@ -714,6 +715,9 @@ index 0000000000000000000000000000000000000000..e62a910c380e68ebf596c0a9f6dd5c8e
 +			return ErrExecutionSelector
 +		}
 +	}
++	if err := o.validateControlMutation(kind, payload); err != nil {
++		return err
++	}
 +	wasQualified := o.qualified
 +	beforeEpoch, beforeDigest := o.epoch, executionDigest(o.config)
 +	o.invalidateLocked("native_outcome_unknown")
@@ -728,7 +732,11 @@ index 0000000000000000000000000000000000000000..e62a910c380e68ebf596c0a9f6dd5c8e
 +		o.reason = "unsupported_native_effect"
 +		return nil
 +	}
-+	rule, normalized, err := applyExecutionEffect(next, o.overrides, kind, payload)
++	nextOverrides := make(map[string]string, len(o.overrides))
++	for tag, target := range o.overrides {
++		nextOverrides[tag] = target
++	}
++	rule, normalized, err := applyExecutionEffect(next, nextOverrides, kind, payload)
 +	if err != nil {
 +		o.reason = "unsupported_native_effect"
 +		return nil
@@ -737,10 +745,14 @@ index 0000000000000000000000000000000000000000..e62a910c380e68ebf596c0a9f6dd5c8e
 +		o.reason = "unsupported_execution_input"
 +		return nil
 +	}
++	if err := validateExecutionOverrides(next, nextOverrides); err != nil {
++		o.reason = "unsupported_native_control_state"
++		return nil
++	}
 +	if !o.identityValidLocked() {
 +		return nil
 +	}
-+	o.config, o.qualified, o.reason = next, true, "custody_attested"
++	o.config, o.overrides, o.qualified, o.reason = next, nextOverrides, true, "custody_attested"
 +	if rule != "" {
 +		o.transition = &SelectorTransition{Generation: o.identity.Generation, FromEpoch: strconv.FormatUint(beforeEpoch, 10), ToEpoch: strconv.FormatUint(o.epoch, 10), BeforeSHA256: beforeDigest, AfterSHA256: executionDigest(next), NormalizedSHA256: normalized, RuleTag: rule}
 +	}
@@ -886,17 +898,8 @@ index 0000000000000000000000000000000000000000..e62a910c380e68ebf596c0a9f6dd5c8e
 +		if !ok || !ok2 {
 +			return "", "", unsupported
 +		}
-+		routing, ok := doc["routing"].(map[string]any)
-+		if !ok {
-+			return "", "", unsupported
-+		}
-+		balancers, ok := routing["balancers"].([]any)
-+		if !ok {
-+			return "", "", unsupported
-+		}
-+		i, err := uniqueTag(balancers, tag)
-+		if err != nil || i < 0 {
-+			return "", "", unsupported
++		if err := validateBalancerOverride(doc, tag, target); err != nil {
++			return "", "", err
 +		}
 +		if target == "" {
 +			delete(overrides, tag)
@@ -1076,7 +1079,7 @@ index 0000000000000000000000000000000000000000..e62a910c380e68ebf596c0a9f6dd5c8e
 +}
 +
 +func validateNativeControlBoundary(doc map[string]any) error {
-+	bad := errors.New("unsupported native control boundary")
++	bad := ErrExecutionControlBoundary
 +	api, ok := doc["api"].(map[string]any)
 +	if !ok || len(api) != 2 || api["tag"] != "api" {
 +		return bad
@@ -1181,7 +1184,7 @@ index 0000000000000000000000000000000000000000..e62a910c380e68ebf596c0a9f6dd5c8e
 +	switch v := value.(type) {
 +	case map[string]any:
 +		for key, item := range v {
-+			if item == "api" && (key == "tag" || key == "outboundTag" || key == "dialerProxy" || key == "fallbackTag") {
++			if item == "api" && (key == "tag" || key == "inboundTag" || key == "outboundTag" || key == "dialerProxy" || key == "fallbackTag") {
 +				return true
 +			}
 +			if referencesNativeControl(item) {
@@ -1194,8 +1197,90 @@ index 0000000000000000000000000000000000000000..e62a910c380e68ebf596c0a9f6dd5c8e
 +				return true
 +			}
 +		}
++	case string:
++		return strings.Contains(v, "/run/wavemesh-xray")
 +	}
 +	return false
++}
++
++func validateBalancerOverride(doc map[string]any, tag, target string) error {
++	bad := ErrExecutionControlBoundary
++	routing, ok := doc["routing"].(map[string]any)
++	if !ok || tag == "" {
++		return bad
++	}
++	balancers, ok := routing["balancers"].([]any)
++	if !ok {
++		return bad
++	}
++	if index, err := uniqueTag(balancers, tag); err != nil || index < 0 {
++		return bad
++	}
++	if target == "" {
++		return nil
++	}
++	if target == "api" {
++		return bad
++	}
++	outbounds, err := taggedObjects(doc, "outbounds")
++	if err != nil {
++		return bad
++	}
++	index, err := uniqueTag(outbounds, target)
++	if err != nil || index < 0 || referencesNativeControl(outbounds[index]) {
++		return bad
++	}
++	return nil
++}
++
++func validateExecutionOverrides(doc map[string]any, overrides map[string]string) error {
++	for tag, target := range overrides {
++		if target == "" {
++			return ErrExecutionControlBoundary
++		}
++		if err := validateBalancerOverride(doc, tag, target); err != nil {
++			return err
++		}
++	}
++	return nil
++}
++
++func (o *executionOwner) validateControlMutation(kind string, payload map[string]any) error {
++	switch kind {
++	case "SetBalancerTarget":
++		tag, ok := payload["tag"].(string)
++		target, targetOK := payload["target"].(string)
++		if !ok || !targetOK {
++			return ErrExecutionControlBoundary
++		}
++		if err := validateBalancerOverride(o.config, tag, target); err != nil {
++			return err
++		}
++		if !o.qualified && target != "" {
++			return ErrExecutionConflict
++		}
++	case "ApplyRoutingConfig":
++		routing, ok := payload["routing"].(map[string]any)
++		if !ok {
++			return nil
++		}
++		next, err := executionDocument(executionJSON(o.config))
++		if err != nil {
++			return ErrExecutionControlBoundary
++		}
++		next["routing"] = routing
++		return validateNativeControlBoundary(next)
++	case "AddInbound", "AddOutbound":
++		object, _ := payload["object"].(map[string]any)
++		if object["tag"] == "api" || referencesNativeControl(object) {
++			return ErrExecutionControlBoundary
++		}
++	case "DelInbound", "DelOutbound":
++		if payload["tag"] == "api" {
++			return ErrExecutionControlBoundary
++		}
++	}
++	return nil
 +}
 +
 +func initializePreparedDeny(doc map[string]any) error {
@@ -2135,6 +2220,133 @@ index 0000000000000000000000000000000000000000..4e86f679c2ebd71916bde176274eb54f
 +}
 +func dialExecutionCore(context.Context, APIEndpoint) (net.Conn, error) {
 +	return nil, errors.New("native execution socket unavailable")
++}
+diff --git a/internal/xray/execution_override_test.go b/internal/xray/execution_override_test.go
+new file mode 100644
+index 0000000000000000000000000000000000000000..9907178bfb5083a02bac8db87eb5e73a7de22439
+--- /dev/null
++++ b/internal/xray/execution_override_test.go
+@@ -0,0 +1,121 @@
++package xray
++
++import (
++	"errors"
++	"testing"
++)
++
++func TestExecutionOverrideRejectsUnsafeTargetsBeforeNativeEffects(t *testing.T) {
++	for _, target := range []string{"api", "missing-outbound"} {
++		t.Run(target, func(t *testing.T) {
++			o := executionFixture(t)
++			before := o.snapshot("before")
++			called := false
++			err := o.mutate("SetBalancerTarget", map[string]any{"tag": "unit-balancer", "target": target}, nil, func() error { called = true; return nil })
++			after := o.snapshot("after")
++			if !errors.Is(err, ErrExecutionControlBoundary) || called || !after.Qualified || after.ExecutionSHA256 != before.ExecutionSHA256 || after.Epoch != before.Epoch || len(after.Overrides) != 0 {
++				t.Fatalf("unsafe override was not refused before effects: error=%v called=%v qualified=%v epoch=%s", err, called, after.Qualified, after.Epoch)
++			}
++		})
++	}
++}
++
++func TestExecutionSupportedOverrideAndClearRemainQualified(t *testing.T) {
++	o := executionFixture(t)
++	before := o.snapshot("initial")
++	for i, target := range []string{"wm-exit-path-unit", ""} {
++		calls := 0
++		if err := o.mutate("SetBalancerTarget", map[string]any{"tag": "unit-balancer", "target": target}, nil, func() error { calls++; return nil }); err != nil || calls != 1 {
++			t.Fatalf("supported override failed: error=%v calls=%d", err, calls)
++		}
++		s := o.snapshot("current")
++		if !s.Qualified || s.Overrides["unit-balancer"] != target || s.EffectiveSHA256 != before.EffectiveSHA256 || o.epoch != uint64(i+1) {
++			t.Fatalf("supported override execution lost: qualified=%v epoch=%s", s.Qualified, s.Epoch)
++		}
++	}
++	if s := o.snapshot("cleared"); len(s.Overrides) != 0 || s.ExecutionSHA256 != before.ExecutionSHA256 {
++		t.Fatal("cleared override did not return to the same execution with a newer epoch")
++	}
++}
++
++func TestExecutionRemovedOverrideTargetStaysUnknownAfterClearAndShadow(t *testing.T) {
++	o := executionFixture(t)
++	if err := o.mutate("SetBalancerTarget", map[string]any{"tag": "unit-balancer", "target": "wm-exit-path-unit"}, nil, func() error { return nil }); err != nil {
++		t.Fatal(err)
++	}
++	called := false
++	if err := o.mutate("DelOutbound", map[string]any{"tag": "wm-exit-path-unit"}, nil, func() error { called = true; return nil }); err != nil || !called {
++		t.Fatalf("native removal result changed: %v called=%v", err, called)
++	}
++	s := o.snapshot("removed")
++	if s.Qualified || s.Config != nil || s.ExecutionSHA256 != "" || s.Epoch != "2" {
++		t.Fatalf("dangling override was qualified: qualified=%v epoch=%s", s.Qualified, s.Epoch)
++	}
++	if err := o.mutate("SetBalancerTarget", map[string]any{"tag": "unit-balancer", "target": ""}, nil, func() error { return nil }); err != nil {
++		t.Fatal(err)
++	}
++	p := NewProcess(&Config{})
++	p.execution = o
++	p.SetConfig(&Config{})
++	if s := o.snapshot("after-clear-shadow"); s.Qualified || s.Config != nil || s.Epoch != "3" {
++		t.Fatal("clear or desired shadow resealed unknown native execution")
++	}
++}
++
++func TestExecutionRoutingReplacementCannotResealAnExistingOverride(t *testing.T) {
++	o := executionFixture(t)
++	if err := o.mutate("SetBalancerTarget", map[string]any{"tag": "unit-balancer", "target": "wm-exit-path-unit"}, nil, func() error { return nil }); err != nil {
++		t.Fatal(err)
++	}
++	routing := fixtureRouting(o, "wm-eu-only-block")
++	routing["balancers"] = []any{}
++	if err := o.mutate("ApplyRoutingConfig", map[string]any{"routing": routing}, nil, func() error { return nil }); err != nil {
++		t.Fatal(err)
++	}
++	if s := o.snapshot("after-routing"); s.Qualified || s.Config != nil || s.Epoch != "2" {
++		t.Fatal("routing replacement retained qualified override state")
++	}
++}
++
++func TestExecutionUnknownOverrideCannotRecoverThroughAnotherTarget(t *testing.T) {
++	o := executionFixture(t)
++	lost := errors.New("lost native override reply")
++	if err := o.mutate("SetBalancerTarget", map[string]any{"tag": "unit-balancer", "target": "wm-exit-path-unit"}, nil, func() error { return lost }); !errors.Is(err, lost) {
++		t.Fatal("lost result was changed")
++	}
++	called := false
++	err := o.mutate("SetBalancerTarget", map[string]any{"tag": "unit-balancer", "target": "sentinel"}, nil, func() error { called = true; return nil })
++	if !errors.Is(err, ErrExecutionConflict) || called || o.epoch != 1 {
++		t.Fatalf("unknown state admitted another target: err=%v called=%v epoch=%d", err, called, o.epoch)
++	}
++	if err := o.mutate("SetBalancerTarget", map[string]any{"tag": "unit-balancer", "target": ""}, nil, func() error { return nil }); err != nil {
++		t.Fatal(err)
++	}
++	if s := o.snapshot("after-clear"); s.Qualified || s.Config != nil || s.Epoch != "2" {
++		t.Fatal("successful clear resealed a lost native mutation")
++	}
++}
++
++func TestExecutionKnownControlRedirectionIsRefusedBeforeEffects(t *testing.T) {
++	for _, kind := range []string{"ApplyRoutingConfig", "AddOutbound", "DelInbound"} {
++		t.Run(kind, func(t *testing.T) {
++			o := executionFixture(t)
++			payload := map[string]any{"tag": "api"}
++			if kind == "ApplyRoutingConfig" {
++				routing := fixtureRouting(o, "wm-eu-only-block")
++				routing["rules"].([]any)[0].(map[string]any)["inboundTag"] = []any{"wm-route-unit"}
++				payload = map[string]any{"routing": routing}
++			}
++			if kind == "AddOutbound" {
++				payload = map[string]any{"object": map[string]any{"tag": "loop-to-control", "protocol": "loopback", "settings": map[string]any{"inboundTag": "api"}}}
++			}
++			before := o.snapshot("before")
++			called := false
++			err := o.mutate(kind, payload, nil, func() error { called = true; return nil })
++			after := o.snapshot("after")
++			if !errors.Is(err, ErrExecutionControlBoundary) || called || !after.Qualified || after.ExecutionSHA256 != before.ExecutionSHA256 || after.Epoch != before.Epoch {
++				t.Fatalf("known control effect was not refused: kind=%s err=%v called=%v qualified=%v", kind, err, called, after.Qualified)
++			}
++		})
++	}
 +}
 diff --git a/internal/xray/execution_test.go b/internal/xray/execution_test.go
 new file mode 100644

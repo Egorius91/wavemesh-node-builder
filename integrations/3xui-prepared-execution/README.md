@@ -20,6 +20,14 @@ is `/run/wavemesh-xray/snapshot.sock` in the same producer process. The parent i
 root-owned 0700, both sockets 0600, and Unix peer credentials are checked. Managed
 control has no TCP fallback. Existing normal callers use explicit API endpoints.
 
+Known unsafe native-control redirection is refused under the mutation owner lock
+before calling the core. Override targets must be declared, unambiguous outbounds
+outside the reserved control path. Refusal preserves the previous safe hash/epoch;
+it does not assert that an unsafe requested effect was applied. Qualified success
+also validates every remaining override reference after related native effects.
+Removing a referenced target makes the view UNKNOWN; clear/SetConfig cannot heal it.
+Supported target/clear and the unmanaged path retain their existing semantics.
+
 All eight native mutators invalidate the view before effects under one owner
 mutex. Complete supported success can advance the attested view; errors, lost
 responses, unsupported effects, process changes, persistence failure and service

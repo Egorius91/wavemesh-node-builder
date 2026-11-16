@@ -8,10 +8,10 @@
     "license": "GPL-3.0",
     "license_sha256": "3972dc9744f6499f0f9b2dbf76696f2ae7ad8af9b23dde66d6af86c9dfb36986"
   },
-  "producer_commit": "43c62314bdfdc236f6d2900c7f6d6af4a96cfbd7",
+  "producer_commit": "0ccff723763f0ca55dcba899435c2cbf7b3643a8",
   "patch": {
     "file": "producer.patch",
-    "sha256": "4d8d2566fb9886785b4c1e31c7c026fd7dd1c0fbd3d7a728dc95282b99fe80d3"
+    "sha256": "6b7e572ef2a898bbbfbb4605ff118af8b8a11ac31c94c8bb6bbcf4c7d3e6864a"
   },
   "changed_source_sha256": {
     "internal/web/job/check_client_ip_job.go": "5921d724074f1dad18efb5d55327f6866bae7ecd86ffcbc5a33fae0b75d7b62d",
@@ -22,11 +22,12 @@
     "internal/web/service/xray.go": "bf52fa109d6393a62815dfa169173b9dc1ce2f9c5a3bb48b877fe9624c1de79e",
     "internal/web/web.go": "2cd9df2a547a16f5305305b39f54fdd31f2436634b1951c4ba684e28d36ae912",
     "internal/xray/api.go": "1c06f2f89bf62bdc6ac78b9c1e8979e5e8deaeeb27531a280deb4049247c6fd4",
-    "internal/xray/execution.go": "47428dc2193e7837a52b275d224d81cdc736748257ccec4529cfc5cf22821cee",
+    "internal/xray/execution.go": "578e687e7213d0dbadfbe1f95d662f6b9f10ac8d4d6a4efdbe840938894b53a4",
     "internal/xray/execution_api.go": "d4501b6767dc6d7bb1728e81d3f5138f923a526276e3b45500420ad989f2ebdc",
     "internal/xray/execution_linux.go": "859aa5d33394c8580642b2f3c852977fd1c40560d7ad655ace579c5868c02f31",
     "internal/xray/execution_native_linux_test.go": "774acdc6469dca0c199637ec92b65ce52638411c000880785df5df414a39055c",
     "internal/xray/execution_other.go": "4988e852af47f487b2232ba089db0363498a1f3b5833b626a78f15fd4df7d9b7",
+    "internal/xray/execution_override_test.go": "15f50a1d62b97be709205331ee5de46e72d1b379d50851c89b475450b6bdd432",
     "internal/xray/execution_test.go": "4f2522b334db1f61f7df2782e22a1a947438880a5997047a56d07d460ee55bbd",
     "internal/xray/process.go": "64526c63ea39befbba793fc38b216ecb53312bef8781b3e02cd6d05d784166c0"
   },
@@ -45,13 +46,24 @@
   "proof": {
     "windows_race": {
       "top_level_pass": 18,
-      "subcase_pass": 12,
+      "subcase_pass": 17,
       "fail": 0,
       "skip": 0,
-      "evidence": "PR4-PRODUCER-SOURCE-RACE.jsonl",
-      "evidence_sha256": "e80d3884e4125db046da7f929a5e606b8276a7cbf97c028921bba72f881704fe",
-      "scope": "five changed packages compile; owner logic and existing unmanaged runtime/service regression tests; no native Linux proof",
-      "reuse_applicability": "All 15 producer product/test file hashes unchanged; not rerun under PR2 phase712."
+      "package": "./internal/xray owner tests",
+      "evidence": "PR4-PHASE726-OWNER-RACE.jsonl",
+      "evidence_sha256": "5eb42c799e36dcf7b8b0d2a5c776c184664c93d987e1e40074e66234b3b1b913",
+      "scope": "current changed owner code and new override/control regressions; Windows race, no native Linux proof",
+      "previous_full_source_race": {
+        "top_level_pass": 18,
+        "subcase_pass": 12,
+        "fail": 0,
+        "skip": 0,
+        "evidence": "PR4-PRODUCER-SOURCE-RACE.jsonl",
+        "evidence_sha256": "e80d3884e4125db046da7f929a5e606b8276a7cbf97c028921bba72f881704fe",
+        "scope": "five changed packages compile; owner logic and existing unmanaged runtime/service regression tests; no native Linux proof",
+        "reuse_applicability": "All 15 producer product/test file hashes unchanged; not rerun under PR2 phase712."
+      },
+      "previous_applicability": "Unmanaged API/runtime/service bytes unchanged; not rerun. Prior owner12 are superseded by current owner18."
     },
     "compiler": {
       "pass": 45,
@@ -61,14 +73,15 @@
       "evidence": "PR4-PHASE712-COMPILER.log",
       "evidence_sha256": "04b38dda34316bc36b379791ea0d133b4ca4f6b196c4c43d5913c7002e854fa3",
       "scope": "current frozen product/test bytes after final epoch-length guard",
-      "previous_scope": "before final epoch-length bound; frozen source NOT RERUN due coordinator701"
+      "previous_scope": "before final epoch-length bound; frozen source NOT RERUN due coordinator701",
+      "reuse_applicability": "Phase712 current45 PASS retained by identical compiler2 product/test SHA256; no new compiler run in phase726."
     },
     "linux_cross_compile": {
       "status": "PASS",
-      "source_head": "43c62314bdfdc236f6d2900c7f6d6af4a96cfbd7",
+      "source_head": "0ccff723763f0ca55dcba899435c2cbf7b3643a8",
       "target": "linux/amd64",
       "CGO_ENABLED": 0,
-      "package": "./internal/xray including native test sources",
+      "package": "./internal/xray including all native and override test sources",
       "toolchain": "go1.27.4 windows/amd64",
       "flags": [
         "-c",
@@ -76,16 +89,36 @@
         "-p",
         "2"
       ],
-      "artifact_filename": "producer-stage1-43c62314-linux.test",
-      "artifact_sha256": "384c3df3bb0414548e286c07281725b61c9d3a425119ab9fc02dcb3cc38c143e",
-      "artifact_bytes": 47412047,
-      "evidence": "PR4-PHASE712-LINUX-COMPILE-RESULT.json",
-      "evidence_sha256": "33f3f356efc0f27da68aa1ca2d7865cdce24d58caacddb5ef4be87db4468172e",
+      "artifact_filename": "producer-phase726-0ccff723-linux.test",
+      "artifact_sha256": "6fc4bd7ea27a368f181dd6ab09e85094c07087559da9505f00485118c41b5bae",
+      "artifact_bytes": 47447630,
+      "evidence": "PR4-PHASE726-LINUX-COMPILE-RESULT.json",
+      "evidence_sha256": "ec79e5bff023bab5cec030f6f6e46b916eff46e3ffd6f3a552c85b7367007a5a",
       "native_executed": false,
-      "preserved_previous_failure": {
-        "latest_attempt": "FAIL: native test GetStatsRequest field Reset was not the protobuf field name",
-        "correction": "Reset_ applied before freeze",
-        "current_frozen_source": "NOT RETRIED / NOT VERIFIED under coordinator701"
+      "previous_source_compile": {
+        "status": "PASS",
+        "source_head": "43c62314bdfdc236f6d2900c7f6d6af4a96cfbd7",
+        "target": "linux/amd64",
+        "CGO_ENABLED": 0,
+        "package": "./internal/xray including native test sources",
+        "toolchain": "go1.27.4 windows/amd64",
+        "flags": [
+          "-c",
+          "-trimpath",
+          "-p",
+          "2"
+        ],
+        "artifact_filename": "producer-stage1-43c62314-linux.test",
+        "artifact_sha256": "384c3df3bb0414548e286c07281725b61c9d3a425119ab9fc02dcb3cc38c143e",
+        "artifact_bytes": 47412047,
+        "evidence": "PR4-PHASE712-LINUX-COMPILE-RESULT.json",
+        "evidence_sha256": "33f3f356efc0f27da68aa1ca2d7865cdce24d58caacddb5ef4be87db4468172e",
+        "native_executed": false,
+        "preserved_previous_failure": {
+          "latest_attempt": "FAIL: native test GetStatsRequest field Reset was not the protobuf field name",
+          "correction": "Reset_ applied before freeze",
+          "current_frozen_source": "NOT RETRIED / NOT VERIFIED under coordinator701"
+        }
       }
     },
     "native": "NOT RUN",
@@ -101,5 +134,18 @@
     "access_runtime_financial_saas_pr3_bot": "PR2 root"
   },
   "publication": false,
-  "live_server_changes": false
+  "live_server_changes": false,
+  "control_boundary_phase726": {
+    "review": "ROOT-PRODUCER-CONTROL-BOUNDARY-REVIEW.json",
+    "ack": "ROOT-PHASE726-ACK.md /Root726 +729 clarification",
+    "base": "43c62314bdfdc236f6d2900c7f6d6af4a96cfbd7",
+    "fix_head": "0ccff723763f0ca55dcba899435c2cbf7b3643a8",
+    "source_fix_patch_sha256": "0e68964d1b980fd35abbb367c48d3edb54bd23f475353f3fd09d2acecf635edf",
+    "red_logs": {
+      "PR4-PHASE726-RED.log": "fa5b0e64d340d43d327e4c85aec9851066dafdd1bc48b08f627113a7d7083b33",
+      "PR4-PHASE726-CONTROL-RED.log": "c60e46400fc3271df2390f90b0d9983bebfd3a7720e7b3a45502a47945b75609",
+      "PR4-PHASE726-UNKNOWN-GUARD-RED.log": "c9f7a9e6a962c7ab7e28954a666fd100d0e24f457226a684b93ad08c2060c095"
+    },
+    "semantics": "Known unsafe override/control requests reject before native effects and preserve previous safe qualified hash/epoch. Valid target+clear preserved. Post-effect dangling override or ambiguous routing remains sticky UNKNOWN, not healed by clear/SetConfig."
+  }
 }
