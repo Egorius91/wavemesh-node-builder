@@ -138,6 +138,9 @@ def placement_binding(request_value: dict[str, Any]) -> dict[str, Any] | None:
         raise ProvisionError("Access placement expected version is invalid")
     result["expected_version"] = expected
     if schema == 3:
+        if type(request_value.get("quota_protocol_version")) is not int or request_value["quota_protocol_version"] != 2:
+            raise ProvisionError("Placement quota protocol is unsupported")
+        result["quota_protocol_version"] = 2
         if "traffic_budget" not in request_value:
             raise ProvisionError("Placement traffic budget is missing")
         result["traffic_budget"] = validate_traffic_budget(request_value["traffic_budget"])
@@ -257,7 +260,8 @@ def quiesce_placement_panel(config: dict[str, Any]) -> None:
 
     Killing the CLI alone cannot cancel a request already received by 3X-UI.
     The fixed Builder-managed service must stop its whole process group before
-    starting a fresh invocation. Ordinary completed commands do not restart it.
+    starting a fresh invocation. Budgeted physical denials also use this barrier
+    after persisting their disables; completed non-budgeted commands do not.
     Caller holds the Node/access locks; any failure retains the incomplete fence.
     """
     if os.name != "posix":
@@ -452,6 +456,12 @@ def fenced_access(operation: str):
                 result = function(request_value, config, state_root)
                 counters = []
                 if binding is not None and binding["schema_version"] == 3 and operation != "cleanup":
+                    if request_value["enabled"] is False and result.get("disabled_identity_count", 0) > 0:
+                        # Panel disabled/new-auth refusal can precede the old
+                        # engine's exit. End the managed process group after
+                        # persisting every deny, before final counter/material
+                        # acceptance or a subsequent profile can be enabled.
+                        quiesce_placement_panel(config)
                     counters = record_quota_counters(request_value, config, state_root)
                 if binding is not None:
                     # Persist terminal local execution before publishing output.
@@ -468,7 +478,7 @@ def fenced_access(operation: str):
                               "client_exists": result.get("client_exists", True),
                               "enabled": request_value["enabled"]}
                     if binding["schema_version"] == 3:
-                        result.update(traffic_budget=binding["traffic_budget"], traffic_counters=counters,
+                        result.update(quota_protocol_version=2, traffic_budget=binding["traffic_budget"], traffic_counters=counters,
                                       quota_history_complete=completed["quota_history_complete"])
                         atomic_json(fence_path, {**completed, "execution_complete": True, "quota_material": result,
                             "quota_material_hash": hashlib.sha256(json.dumps(result, sort_keys=True).encode()).hexdigest()})
@@ -1289,8 +1299,9 @@ def main() -> int:
     parser.add_argument("--cleanup-previous", action="store_true")
     args = parser.parse_args()
     if args.capabilities:
-        print(json.dumps({"access_command_schemas": [1, 2, 3], "placement_fence": 4, "disable_absent": True,
-                          "unknown_effect_barrier": 1, "traffic_budget": 1, "counter_observations": 1}))
+        print(json.dumps({"access_command_schemas": [1, 2, 3], "placement_fence": 5, "disable_absent": True,
+                          "unknown_effect_barrier": 1, "traffic_budget": 1, "counter_observations": 1,
+                          "quota_protocol_version": 2}))
         return 0
     try:
         # Lock order: node, then access. Hold through configuration read, panel

@@ -56,10 +56,10 @@ class PlacementQuotaTests(unittest.TestCase):
         self.tmp = tempfile.TemporaryDirectory(); self.addCleanup(self.tmp.cleanup); self.root = Path(self.tmp.name)
         QuotaPanel.clients = {}; QuotaPanel.counters = {}; QuotaPanel.mutations = []; QuotaPanel.add_calls = 0
         patch = mock.patch.object(runtime, "PanelClient", QuotaPanel); patch.start(); self.addCleanup(patch.stop)
-        self.quiesce = mock.patch.object(runtime, "quiesce_placement_panel"); self.quiesce.start(); self.addCleanup(self.quiesce.stop)
+        self.quiesce = mock.patch.object(runtime, "quiesce_placement_panel"); self.quiesce_mock = self.quiesce.start(); self.addCleanup(self.quiesce.stop)
         self.config = {"server": {"domain": "entry.example.invalid"},
             "network": {"subscription": {"backend": "xui-native", "path": "/opaque/subscription/"}}}
-        self.first = dict(schema_version=3, access_id="access_12345678", placement_id="legacy:access_12345678",
+        self.first = dict(schema_version=3, quota_protocol_version=2, access_id="access_12345678", placement_id="legacy:access_12345678",
             tenant_id="tenant001", node_id="node0001", command_id="command001", generation=1, entitlement_revision=4,
             plan_hash="a"*64, expected_version=0, desired_version=1, enabled=True, expires_at="2027-01-01T00:00:00Z",
             device_limit=1, quota_bytes="500", operation="access.provision", traffic_budget=budget())
@@ -94,7 +94,7 @@ class PlacementQuotaTests(unittest.TestCase):
         self.assertEqual(set(second["traffic_counters"][0]), {"identity_hash", "up_bytes", "down_bytes"})
 
     def precredit_observation(self):
-        legacy_request = {k: v for k, v in self.first.items() if k != "traffic_budget"}
+        legacy_request = {k: v for k, v in self.first.items() if k not in {"traffic_budget", "quota_protocol_version"}}
         legacy_request["schema_version"] = 2
         first = runtime.provision(legacy_request, self.config, self.root)
         QuotaPanel.counters[first["panel_email"]] = {"up": 40, "down": 10}
@@ -206,7 +206,7 @@ class PlacementQuotaTests(unittest.TestCase):
             runtime.update_entitlements(self.update(3, enabled=False), self.config, self.root)
 
     def test_adoption_keeps_identity_and_adds_credit_to_verified_counter_baseline(self):
-        old = {k: v for k, v in self.first.items() if k != "traffic_budget"}; old.update(schema_version=2, quota_bytes="0")
+        old = {k: v for k, v in self.first.items() if k not in {"traffic_budget", "quota_protocol_version"}}; old.update(schema_version=2, quota_bytes="0")
         first = runtime.provision(old, self.config, self.root); email = first["panel_email"]
         QuotaPanel.counters[email] = {"up": 40, "down": 10}
         denied = runtime.update_entitlements(self.update(2, enabled=False, traffic_budget=None), self.config, self.root)
@@ -345,9 +345,117 @@ class PlacementQuotaTests(unittest.TestCase):
         with mock.patch.object(agent, "run_json_command", return_value=old):
             self.assertTrue(instance.placement_runtime_ready()); self.assertFalse(instance.placement_runtime_ready(3))
         path.write_text("changed actual bytes")
-        new = {**old, "access_command_schemas": [1, 2, 3], "placement_fence": 4, "traffic_budget": 1, "counter_observations": 1}
+        experimental = {**old, "access_command_schemas": [1, 2, 3], "placement_fence": 4, "traffic_budget": 1, "counter_observations": 1}
+        with mock.patch.object(agent, "run_json_command", return_value=experimental):
+            self.assertFalse(instance.placement_runtime_ready(3))
+        path.write_text("new physical denial protocol bytes")
+        new = {**experimental, "placement_fence": 5, "quota_protocol_version": 2}
         with mock.patch.object(agent, "run_json_command", return_value=new):
             self.assertTrue(instance.placement_runtime_ready()); self.assertTrue(instance.placement_runtime_ready(3))
+
+    def test_physical_quota_protocol_rejects_unsupported_commands_before_effects(self):
+        for marker in (None, 1, "2", True, 2.0):
+            damaged = dict(self.first, quota_protocol_version=marker)
+            if marker is None:
+                del damaged["quota_protocol_version"]
+            with self.subTest(marker=marker):
+                with self.assertRaisesRegex(runtime.ProvisionError, "protocol"):
+                    runtime.provision(damaged, self.config, self.root)
+                with self.assertRaises(agent.AgentError):
+                    agent.validate_access_command(self.envelope(damaged), "node0001", "tenant001")
+                self.assertFalse((self.root/"access_12345678.fence").exists())
+                self.assertEqual(QuotaPanel.mutations, [])
+        self.quiesce_mock.assert_not_called()
+
+    def test_physical_quota_new_command_is_rejected_by_actual_old_validator(self):
+        command = self.envelope()
+        agent.validate_access_command(command, "node0001", "tenant001")
+        fixture = Path(__file__).parents[1]/"fixtures"/"access_command_386ca185.py"
+        manifest = json.loads(fixture.with_suffix(".json").read_text())
+        self.assertEqual(hashlib.sha256(fixture.read_bytes()).hexdigest(), manifest["fixtureSha256"])
+        historical = dict(vars(agent)); exec(compile(fixture.read_text(), str(fixture), "exec"), historical)
+        old = historical["validate_access_command"]
+        with self.assertRaises(agent.AgentError):
+            old(command, "node0001", "tenant001")
+        command = copy.deepcopy(command); del command["payload"]["quota_protocol_version"]
+        old(command, "node0001", "tenant001")
+
+    def test_physical_quota_material_requires_the_new_binding(self):
+        payload = agent.validate_access_command(self.envelope(), "node0001", "tenant001")[3]
+        material = runtime.provision(self.first, self.config, self.root)
+        agent.validate_placement_material(material, payload)
+        for marker in (None, 1, "2", True, 2.0):
+            damaged = dict(material, quota_protocol_version=marker)
+            if marker is None:
+                del damaged["quota_protocol_version"]
+            with self.subTest(marker=marker), self.assertRaisesRegex(agent.AgentError, "protocol"):
+                agent.validate_placement_material(damaged, payload)
+
+    def test_physical_quota_denial_finishes_only_after_quiescence_then_replays(self):
+        first = runtime.provision(self.first, self.config, self.root)
+        QuotaPanel.counters[first["panel_email"]] = {"up": 40, "down": 10}
+        def barrier(config):
+            self.assertTrue(all(not row["client"]["enable"] for row in QuotaPanel.clients.values()))
+            self.assertFalse(self.fence()["execution_complete"])
+            self.assertIsNone(self.fence()["quota_material"])
+            self.assertFalse(self.fence()["quota_epochs"][A]["terminal"])
+        self.quiesce_mock.side_effect = barrier
+        denied = runtime.update_entitlements(self.update(enabled=False), self.config, self.root)
+        self.quiesce_mock.assert_called_once_with(self.config)
+        self.assertTrue(self.fence()["execution_complete"])
+        self.assertTrue(self.fence()["quota_epochs"][A]["terminal"])
+        self.assertEqual(denied["quota_protocol_version"], 2)
+        self.assertEqual(denied["traffic_counters"][0]["up_bytes"], "40")
+        mutations = list(QuotaPanel.mutations)
+        self.assertEqual(runtime.update_entitlements(self.update(enabled=False), self.config, self.root), denied)
+        self.assertEqual(QuotaPanel.mutations, mutations)
+        self.quiesce_mock.assert_called_once()
+
+    def test_physical_quota_barrier_failure_retains_debt_and_safe_retry(self):
+        runtime.provision(self.first, self.config, self.root)
+        self.quiesce_mock.side_effect = runtime.ProvisionError("synthetic restart unknown")
+        with self.assertRaisesRegex(runtime.ProvisionError, "restart unknown"):
+            runtime.update_entitlements(self.update(enabled=False), self.config, self.root)
+        self.assertFalse(self.fence()["execution_complete"])
+        self.assertFalse(self.fence()["quota_epochs"][A]["terminal"])
+        self.assertIsNone(self.fence()["quota_material"])
+        self.quiesce_mock.reset_mock(side_effect=True)
+        denied = runtime.update_entitlements(self.update(enabled=False), self.config, self.root)
+        self.assertEqual(self.quiesce_mock.call_count, 2)  # previous uncertain handler, then persisted deny
+        self.assertEqual(QuotaPanel.add_calls, 1)
+        calls = self.quiesce_mock.call_count
+        self.assertEqual(runtime.update_entitlements(self.update(enabled=False), self.config, self.root), denied)
+        self.assertEqual(self.quiesce_mock.call_count, calls)
+
+    def test_physical_quota_empty_target_uses_absence_without_restart(self):
+        request = self.update(1, enabled=False, traffic_budget=None, quota_bytes="0")
+        denied = runtime.update_entitlements(request, self.config, self.root)
+        self.assertEqual(denied["disabled_identity_count"], 0)
+        self.assertEqual(denied["traffic_counters"], [])
+        self.assertTrue(denied["quota_history_complete"])
+        self.assertEqual(QuotaPanel.mutations, [])
+        self.quiesce_mock.assert_not_called()
+
+    def test_physical_quota_old_experimental_fence_is_preserved_and_closed(self):
+        runtime.provision(self.first, self.config, self.root)
+        fence = self.fence(); del fence["quota_protocol_version"]
+        path = self.root/"access_12345678.fence"; runtime.atomic_json(path, fence)
+        before = path.read_bytes(); mutations = list(QuotaPanel.mutations)
+        with self.assertRaisesRegex(runtime.ProvisionError, "protocol"):
+            runtime.update_entitlements(self.update(enabled=False), self.config, self.root)
+        self.assertEqual(path.read_bytes(), before)
+        self.assertEqual(QuotaPanel.mutations, mutations)
+        self.quiesce_mock.assert_not_called()
+
+    def test_physical_quota_transport_rejects_old_runtime_before_dispatch(self):
+        instance = agent.NodeAgent.__new__(agent.NodeAgent)
+        path = self.root/"runtime.py"; path.write_text("synthetic installed artifact")
+        instance.config = SimpleNamespace(access_runtime_path=path)
+        instance.placement_runtime_ready = mock.Mock(return_value=False)
+        with mock.patch.object(agent.subprocess, "run") as dispatched:
+            with self.assertRaisesRegex(agent.AgentError, "unsupported"):
+                instance.execute_access_runtime("access.provision", self.first)
+        dispatched.assert_not_called()
 
     def test_agent_cycle_preserves_v3_budget_material_and_attempt_on_placement_path(self):
         command = self.envelope(); calls = []

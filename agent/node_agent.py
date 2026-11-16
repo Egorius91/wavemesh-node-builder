@@ -502,6 +502,8 @@ class NodeAgent:
     ) -> dict[str, Any]:
         if not self.config.access_runtime_path.is_file():
             raise AgentError("Access runtime is not installed")
+        if payload.get("schema_version") == 3 and not self.placement_runtime_ready(3):
+            raise AgentError("Budgeted access runtime protocol is unsupported")
         work_root = self.config.env_path.parent
         work_root.mkdir(parents=True, exist_ok=True)
         with tempfile.TemporaryDirectory(prefix=".access-command.", dir=work_root) as directory:
@@ -865,8 +867,9 @@ class NodeAgent:
                 result = run_json_command(["/usr/bin/python3", str(path), "--capabilities"], timeout=10)
                 self._placement_runtime_probe = (digest, result)
             v2 = {"access_command_schemas": [1, 2], "placement_fence": 3, "disable_absent": True, "unknown_effect_barrier": 1}
-            v3 = {"access_command_schemas": [1, 2, 3], "placement_fence": 4, "disable_absent": True,
-                  "unknown_effect_barrier": 1, "traffic_budget": 1, "counter_observations": 1}
+            v3 = {"access_command_schemas": [1, 2, 3], "placement_fence": 5, "disable_absent": True,
+                  "unknown_effect_barrier": 1, "traffic_budget": 1, "counter_observations": 1,
+                  "quota_protocol_version": 2}
             return schema == 2 and result in (v2, v3) or schema == 3 and result == v3
         except Exception:
             return False
@@ -1274,7 +1277,7 @@ def validate_access_command(
             raise AgentError("Placement command tenant or operation is invalid")
         required.update({"placement_id", "generation", "entitlement_revision", "plan_hash", "command_id"})
         if schema == 3:
-            required.add("traffic_budget")
+            required.update({"traffic_budget", "quota_protocol_version"})
     if not isinstance(payload, dict) or set(payload) != required:
         raise AgentError("Node command payload is invalid")
     if command_type == "access.prepare_replacement":
@@ -1315,6 +1318,8 @@ def validate_access_command(
             raise AgentError("Placement command expected version is invalid")
         result.update(schema_version=schema, tenant_id=tenant_id, node_id=node_id, expected_version=expected)
         if schema == 3:
+            if type(payload.get("quota_protocol_version")) is not int or payload["quota_protocol_version"] != 2:
+                raise AgentError("Placement quota protocol is unsupported")
             budget = validate_traffic_budget(payload["traffic_budget"])
             cap = traffic_bytes(quota)
             if payload["enabled"] and (budget is None and cap != 0 or budget is not None and (cap == 0 or traffic_bytes(budget["credit_bytes"]) > cap)):
@@ -1358,7 +1363,9 @@ def validate_traffic_budget(value: Any) -> dict[str, Any] | None:
 def validate_placement_material(material: dict[str, Any], payload: dict[str, Any]) -> None:
     common = {"schema_version", "desired_version", "placement_id", "generation", "entitlement_revision", "plan_hash", "command_id", "client_exists", "enabled"}
     if payload["schema_version"] == 3:
-        common.update({"traffic_budget", "traffic_counters", "quota_history_complete"})
+        common.update({"quota_protocol_version", "traffic_budget", "traffic_counters", "quota_history_complete"})
+        if type(material.get("quota_protocol_version")) is not int or material["quota_protocol_version"] != 2:
+            raise AgentError("Placement quota material protocol is unsupported")
         if type(material.get("quota_history_complete")) is not bool or payload["enabled"] and not material["quota_history_complete"]:
             raise AgentError("Placement quota history is unverified")
         if material.get("traffic_budget") != payload["traffic_budget"]:

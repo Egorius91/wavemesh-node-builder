@@ -10,7 +10,8 @@ bounds issued portions, rather than an exact dataplane byte cutoff.
 ## Command and material
 
 Schema3 extends the existing authenticated placement envelope. Its exact
-payload adds one required `traffic_budget`, either null or this object:
+payload requires `quota_protocol_version: 2` and `traffic_budget`, either null or
+this object. Material and the durable fence also bind that exact protocol version.
 
 | Field | Meaning |
 | --- | --- |
@@ -55,7 +56,7 @@ traffic and engine persistence must be assessed on the exact installed stack.
 The existing atomic per-access fence owns schema3 budget history; no second
 meter file or new runtime service is introduced. `quota_epochs` retains every
 credit, bound identity and observed up/down high-water marks. Its `terminal`
-flag means the local deny was observed, not that SaaS settled the reservation.
+flag means the local physical deny/counters completed, not that SaaS settled the reservation.
 The same fence's `quota_counters` retains every observed identity and both
 counter high-water marks before any credit epoch exists. A higher command
 cannot forget an orphan, accept a lower counter or recreate a missing known
@@ -86,6 +87,17 @@ no panel I/O, even after quota exhaustion. It is historical application proof,
 not a fresh runtime readback. Fresh observations require a later command;
 SaaS must not overwrite the earlier material receipt with changing counters.
 
+With protocol2, a deny covering retained identities first persists every panel
+disable, then uses the existing managed-service quiescence barrier before final
+counters, terminal epochs or material can succeed. Stock3x-ui removal can refuse
+new authentication while old XHTTP/TLS flows remain open, even with its restart
+setting enabled until its asynchronous engine replacement finishes. The barrier
+requires the fixed `x-ui.service` control-group stop and a fresh ready invocation.
+It can interrupt other profiles on that Entry; this implementation does not
+promise seamless local sessions. A new empty target uses its existing absence
+proof without a restart. Failure retains incomplete execution and reserved debt;
+retry reconciles that same command. A cached successful retry does not restart.
+
 Routine schema3 replacement cleanup retains the disabled old clients/counters
 and returns0. Deleting them requires a separately qualified accounting cleanup
 contract. State/history and outstanding reservations are not deleted on rollback.
@@ -97,6 +109,11 @@ its source commit and SHA256. It rejects schema3 on first dispatch and rejects
 a stored schema3 fence even for a higher schema2 local version. The new Agent
 recognizes the old runtime for schema2, but requires the exact schema3 budget
 capability for schema3. Its read-only probe is cached by actual artifact bytes.
+The current descriptor is `placement_fence: 5` with `quota_protocol_version: 2`.
+An older experimental schema3 parser rejects the extra command field; the frozen
+386ca185 validator proves that source boundary. Old experimental3 local fences
+without this marker fail closed and are preserved, never reset or silently
+promoted. This unreleased format change is not an applied-state migration claim.
 After budget initialization rollback keeps forward reconciliation; downgrading
 writers cannot remove the protocol marker or reissue a whole common Q.
 
@@ -105,3 +122,8 @@ Agent transport with synthetic panel/counters and durable local files. The
 unit fixture mocks native service quiescence; it is not Linux/systemd, stock
 3x-ui/Xray, Node, VPN or commercial acceptance. Native and hosted qualification
 must use current source and the exact paired SaaS contract before admission.
+
+`tests/native/test_stock_quota_runtime.py` is the focused full Agent/CLI test
+against the pinned cached stock archive and a fixture-owned systemd service.
+It requires an owned disposable Linux VM and private loopback network namespace;
+it is not ordinary unit discovery or deployed Node acceptance.
