@@ -1,6 +1,9 @@
-# Scoped native custody proof — PASS; full PR4 remains open
+# Scoped native custody proof вЂ” PASS; full PR4 remains open
 
-The manifest pins current producer `e3c7fc18928bfbe16de4e0ffa163935e166ca0e1`.
+This retained proof pins producer `e3c7fc18928bfbe16de4e0ffa163935e166ca0e1`.
+The current manifest supersedes it with source-only API-label compatibility and
+the private reader. Those additions have no current native-reader acceptance;
+see PRIVATE-CONSUMER.md and the manifest for exact proof applicability.
 Actual Linux exec1245 ran source `253ace5365c804f84746442bc9f15ed75f803a2b`,
 ELF SHA256 `db47f84136ec3200458fd24bdc16bdd274b79e0a1da2e1257c8978d592127852`,
 with unchanged stock Xray26.10.21 SHA256
@@ -32,7 +35,7 @@ input. No pipe, mutable file or Xray patch is substituted. Actual fd0/fd3 have
 the same device/inode, full consumed hash, all immutable seals and EPERM writes.
 
 The 1s snapshot deadline exposed repeated full executable hashing under the owner
-lock (actual Go SHA measurements640–991ms for35MB). Cold start still validates
+lock (actual Go SHA measurements640вЂ“991ms for35MB). Cold start still validates
 the actual executable's full stock SHA. Every subsequent identity check validates
 the actual process's executable against an owned descriptor retained for that
 whole generation: same dev/inode plus all write/grow/shrink/seal seals, running

@@ -524,10 +524,10 @@ index 0e0e68dd..9718dc29 100644
  	resp, err := (*x.StatsServiceClient).GetUsersStats(ctx, &statsService.GetUsersStatsRequest{})
 diff --git a/internal/xray/execution.go b/internal/xray/execution.go
 new file mode 100644
-index 00000000..596f15cd
+index 00000000..b47a682c
 --- /dev/null
 +++ b/internal/xray/execution.go
-@@ -0,0 +1,865 @@
+@@ -0,0 +1,866 @@
 +package xray
 +
 +import (
@@ -1159,7 +1159,8 @@ index 00000000..596f15cd
 +		}
 +		if r["outboundTag"] == "api" {
 +			in, ok := r["inboundTag"].([]any)
-+			if !ok || len(in) != 1 || in[0] != "api" || r["type"] != "field" || len(r) != 3 {
++			shape := len(r) == 3 || (len(r) == 4 && r["ruleTag"] == "wm-api-rule")
++			if !ok || len(in) != 1 || in[0] != "api" || r["type"] != "field" || !shape {
 +				return bad
 +			}
 +			apiRules++
@@ -2585,6 +2586,48 @@ index 00000000..9907178b
 +				t.Fatalf("known control effect was not refused: kind=%s err=%v called=%v qualified=%v", kind, err, called, after.Qualified)
 +			}
 +		})
++	}
++}
+diff --git a/internal/xray/execution_template_test.go b/internal/xray/execution_template_test.go
+new file mode 100644
+index 00000000..6a23c71f
+--- /dev/null
++++ b/internal/xray/execution_template_test.go
+@@ -0,0 +1,36 @@
++package xray
++
++import (
++	"strings"
++	"testing"
++)
++
++func TestExecutionBuilderAPIRuleTagIsInert(t *testing.T) {
++	o := executionFixture(t)
++	rule := o.config["routing"].(map[string]any)["rules"].([]any)[0].(map[string]any)
++	rule["ruleTag"] = "wm-api-rule"
++	if err := validateExecutionInputs(o.config); err != nil {
++		t.Fatal("known unconditional Builder control rule label was refused")
++	}
++	for _, mutation := range []map[string]any{{"ruleTag": "other"}, {"ruleTag": ""}, {"ruleTag": true}, {"domain": []any{"example.invalid"}}, {"ip": []any{"127.0.0.1"}}, {"balancerTag": "unit-balancer"}} {
++		doc, _ := executionDocument(executionJSON(o.config))
++		r := doc["routing"].(map[string]any)["rules"].([]any)[0].(map[string]any)
++		for k, v := range mutation {
++			r[k] = v
++		}
++		if validateNativeControlBoundary(doc) == nil {
++			t.Fatal("unsupported control rule shape was admitted")
++		}
++	}
++}
++
++func TestExecutionNginxLoopbackIngressRemainsUnsupported(t *testing.T) {
++	o := executionFixture(t)
++	entry := o.config["inbounds"].([]any)[1].(map[string]any)
++	entry["listen"] = "127.0.0.1"
++	entry["settings"].(map[string]any)["decryption"] = "none"
++	entry["streamSettings"].(map[string]any)["security"] = "none"
++	if err := validateExecutionInputs(o.config); err == nil || !strings.Contains(err.Error(), "unsupported managed ingress") {
++		t.Fatal("loopback execution was mistaken for inline TLS custody")
 +	}
 +}
 diff --git a/internal/xray/execution_test.go b/internal/xray/execution_test.go

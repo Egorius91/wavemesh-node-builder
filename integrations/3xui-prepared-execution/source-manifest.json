@@ -1,7 +1,7 @@
 {
   "schema": 1,
-  "status": "SCOPED_NATIVE_CUSTODY_PASS_PR4_OPEN",
-  "at_utc": "2026-11-16T16:50:56.137134+00:00",
+  "status": "SOURCE_PRIVATE_CONSUMER_PASS_CURRENT_NATIVE_READER_NOT_RUN",
+  "at_utc": "2026-11-16T17:38:23.095993+00:00",
   "upstream": {
     "repository": "https://github.com/MHSanaei/3x-ui",
     "tag": "v3.11.0",
@@ -9,10 +9,10 @@
     "license": "GPL-3.0",
     "license_sha256": "3972dc9744f6499f0f9b2dbf76696f2ae7ad8af9b23dde66d6af86c9dfb36986"
   },
-  "producer_commit": "e3c7fc18928bfbe16de4e0ffa163935e166ca0e1",
+  "producer_commit": "35c57fe48f5df242ea79592d2e17b2dcae926932",
   "patch": {
     "file": "producer.patch",
-    "sha256": "687585876d292d1cddbadf31683cb181bf6757e6b7e414d182a6ba84dafb1364"
+    "sha256": "4fea956be428283de9d2d0e2de9e10739bec79b11e7b83d407dfca9a9d9ab5d8"
   },
   "changed_source_sha256": {
     "internal/web/job/check_client_ip_job.go": "5921d724074f1dad18efb5d55327f6866bae7ecd86ffcbc5a33fae0b75d7b62d",
@@ -23,7 +23,7 @@
     "internal/web/service/xray.go": "bf52fa109d6393a62815dfa169173b9dc1ce2f9c5a3bb48b877fe9624c1de79e",
     "internal/web/web.go": "2cd9df2a547a16f5305305b39f54fdd31f2436634b1951c4ba684e28d36ae912",
     "internal/xray/api.go": "1c06f2f89bf62bdc6ac78b9c1e8979e5e8deaeeb27531a280deb4049247c6fd4",
-    "internal/xray/execution.go": "f1197a43df1da2385bdbc4302e73fb5df0da0e47c179f8fa71edc81196ebc581",
+    "internal/xray/execution.go": "3dc9794d1c0f4705c0878e1f4db6ebd0f2597c5a70473adb9e0178f1684d229f",
     "internal/xray/execution_api.go": "d4501b6767dc6d7bb1728e81d3f5138f923a526276e3b45500420ad989f2ebdc",
     "internal/xray/execution_identity_linux_test.go": "ab630afac4d684b71b25134684b50dbedc8ceb4355b1361fc2fda39fbc21f6f4",
     "internal/xray/execution_lifecycle_test.go": "0a63cbecd68dc116f7a3a6c63aa4e33127f89e4e60e2c8be48e95914b0add981",
@@ -31,6 +31,7 @@
     "internal/xray/execution_native_linux_test.go": "d1df5e86221b84ce0032e07aaee6b3e0ce188e1cbb75015653f7566e115057aa",
     "internal/xray/execution_other.go": "4988e852af47f487b2232ba089db0363498a1f3b5833b626a78f15fd4df7d9b7",
     "internal/xray/execution_override_test.go": "15f50a1d62b97be709205331ee5de46e72d1b379d50851c89b475450b6bdd432",
+    "internal/xray/execution_template_test.go": "a515ffa3d2fcb0037f5264ce5f26e5ec332fb755ca640673cab2841b7e17caee",
     "internal/xray/execution_test.go": "4f2522b334db1f61f7df2782e22a1a947438880a5997047a56d07d460ee55bbd",
     "internal/xray/process.go": "60e410aa60785871e597bf211f5f715d130170f32c32bdfce527bb3f900d6744"
   },
@@ -41,34 +42,29 @@
   },
   "private_execution_schema": 3,
   "public_channel_schema": 1,
-  "builder_base": "dfd2090db8ec056ba0c88f775cc4f6c7a2f2edaa",
+  "builder_base": "d2cd3e62de5fd368582eb3259a63ff0069f4335c",
   "compiler_source_sha256": {
     "scripts/lib/prepared_channels.py": "64b699606631073689a8481243ab8a393c8729bbd7db2f7b6affbae57d1c5960",
     "tests/unit/test_prepared_channels.py": "25476f905139281ab15236e439ad03dc0ee6430d55eeda98f6b6ad0f86274e5b"
   },
   "previous_checkpoint": {
-    "producer_commit": "0ccff723763f0ca55dcba899435c2cbf7b3643a8",
-    "manifest_sha256": "73244aba33653351adf09250097dd4a8a5f076ae3790aece87d442c676f1f2c1",
-    "patch_sha256": "6b7e572ef2a898bbbfbb4605ff118af8b8a11ac31c94c8bb6bbcf4c7d3e6864a"
+    "producer_commit": "e3c7fc18928bfbe16de4e0ffa163935e166ca0e1",
+    "manifest_sha256": "c228af1303e0cf19e1ee2db41a6d30aed43534b48a21fe0eebfde70cccf06471",
+    "patch_sha256": "687585876d292d1cddbadf31683cb181bf6757e6b7e414d182a6ba84dafb1364"
   },
   "proof": {
     "windows_race": {
-      "status": "PASS_COMPOSITE_AFFECTED_CHECKS",
-      "top_level_pass": 33,
+      "status": "PASS",
+      "source_head": "35c57fe48f5df242ea79592d2e17b2dcae926932",
+      "top_level_pass": 21,
       "subcase_pass": 17,
+      "fail": 0,
       "skip": 0,
-      "original_grouped_run": {
-        "file": "PR4-PHASE757-RACE.jsonl",
-        "sha256": "542bc5e715a3257f0ac904fba7c46895b3b4bfd736d7356684c5ab250f0dac73"
+      "evidence": {
+        "file": "PR4-PHASE766-OWNER-RACE.jsonl",
+        "sha256": "a503684a4e605e0b1063d8efd27f301c253429d269bd586c20d596fd34596c82"
       },
-      "original_outcome": "32 top-level+17 subcases PASS; one portable closed-handle assertion FAIL; five packages compiled, runtime/service cases PASS",
-      "original_source": "253ace5365c804f84746442bc9f15ed75f803a2b",
-      "current_focused_correction": {
-        "file": "PR4-PHASE757B-PORTABLE-RACE.jsonl",
-        "sha256": "29202cff044ed33ccd9241d26600d774aa85c5c74f897ecdc95e414706745aab"
-      },
-      "current_focused_top_level_pass": 1,
-      "applicability": "Only lifecycle test changes Stat to ReadAt while retaining errors.Is(os.ErrClosed); product and all other tested bytes unchanged. Original FAIL retained; this is not one all-green grouped run."
+      "scope": "All owner regressions including exact inert API label and still-unsupported nginx loopback; unchanged unmanaged runtime/service evidence retained."
     },
     "compiler": {
       "pass": 45,
@@ -93,7 +89,7 @@
       "artifact_bytes": 47471580
     },
     "native": {
-      "status": "PASS",
+      "status": "HISTORICAL_NATIVE757_SCOPED_PASS_ONLY",
       "source_head": "253ace5365c804f84746442bc9f15ed75f803a2b",
       "top_level_pass": 3,
       "fail": 0,
@@ -108,7 +104,7 @@
         "file": "PR4-PHASE757-NATIVE-RELEASE.json",
         "sha256": "e43b42aeae31cc3825629b4dd4b989bd81bbd274735602d3cb7ca80d86d1cf75"
       },
-      "applicability": "Current product, Linux sealed-identity test and actual-core native fixture hashes equal native253ace53. The one portable lifecycle assertion passed on Linux with Stat; current ReadAt form additionally passed Windows race. No full upstream Linux build, physical flow, template or service acceptance."
+      "applicability": "Kernel identity/memfd/UDS/lifecycle and old untagged control source proof retained. Current inert tagged-control path and Python consumer have no new native acceptance; do not call current whole producer native-qualified."
     },
     "startup_diagnosis": {
       "file": "PR4-PHASE742-STARTUP-DIAGNOSIS.json",
@@ -117,9 +113,62 @@
     "hash_cost": {
       "file": "PR4-PHASE755-HASH-COST-TOOL.json",
       "sha256": "9733f95d4905d522ede9b8a27badc58aebe83d390f4d19e5d23e75b01b3f6ba8"
+    },
+    "previous_windows757_composite": {
+      "status": "PASS_COMPOSITE_AFFECTED_CHECKS",
+      "top_level_pass": 33,
+      "subcase_pass": 17,
+      "skip": 0,
+      "original_grouped_run": {
+        "file": "PR4-PHASE757-RACE.jsonl",
+        "sha256": "542bc5e715a3257f0ac904fba7c46895b3b4bfd736d7356684c5ab250f0dac73"
+      },
+      "original_outcome": "32 top-level+17 subcases PASS; one portable closed-handle assertion FAIL; five packages compiled, runtime/service cases PASS",
+      "original_source": "253ace5365c804f84746442bc9f15ed75f803a2b",
+      "current_focused_correction": {
+        "file": "PR4-PHASE757B-PORTABLE-RACE.jsonl",
+        "sha256": "29202cff044ed33ccd9241d26600d774aa85c5c74f897ecdc95e414706745aab"
+      },
+      "current_focused_top_level_pass": 1,
+      "applicability": "Only lifecycle test changes Stat to ReadAt while retaining errors.Is(os.ErrClosed); product and all other tested bytes unchanged. Original FAIL retained; this is not one all-green grouped run."
+    },
+    "private_consumer": {
+      "status": "SOURCE_SYNTHETIC_PASS_NATIVE_NOT_RUN",
+      "top_level_pass": 18,
+      "fail": 0,
+      "skip": 0,
+      "evidence": {
+        "file": "PR4-PHASE766-READER.log",
+        "sha256": "119d6929ed7e79cd4f4184d04a922e08c0efc4c645b0ea7277f66713e5a6f988"
+      },
+      "initial_mock_portability_failure": {
+        "file": "PR4-PHASE766-READER-INITIAL-FAILURE.json",
+        "sha256": "55f22f1474c399470526980f51c6b761e164e6697c75b5d14130e5a34961a89c"
+      },
+      "go_canonical_vectors": {
+        "total": 13,
+        "supported_match": 4,
+        "explicit_refusal": 9,
+        "result": {
+          "file": "PR4-PHASE766-GO-WIRE-VECTORS-RESULT.json",
+          "sha256": "ed2b6de487a1068c9000980755aa9b1b8365fe6de9816f36cfaf69d75c92c6bd"
+        }
+      },
+      "generated_entry_shape": {
+        "file": "PR4-PHASE766-GENERATED-ENTRY-SHAPE.json",
+        "sha256": "f45a42a0b3295f1f3800f4a92c1f75b47071380d5504f14a7c79ac71ae657a41"
+      },
+      "current_production_approval": null,
+      "native_execution": false,
+      "integration": "Library returns only private in-memory data; no installed caller, Agent or health transport."
+    },
+    "template_regression_red": {
+      "file": "PR4-PHASE766-TEMPLATE-RED.jsonl",
+      "sha256": "55fe517f3d8db26ecfec28dc69cd2c09dee1ececfaf7fdb1b9a21da6d016fa2e"
     }
   },
   "remaining_gates": [
+    "Actual native consumer/proc/Unix/hash/permissions plus current tagged-control fixture, after resource/phase ACK",
     "Full Linux producer/SQLite/frontend build and installed producer manifest",
     "Real stock template compatibility and collector consuming the fresh private snapshot",
     "Builder owner-CAS/settlement/persistence and watchdog integration",
@@ -130,5 +179,10 @@
   "physical_flow_acceptance": false,
   "full_producer_acceptance": false,
   "publication": false,
-  "live_changes": false
+  "live_changes": false,
+  "private_consumer_source_sha256": {
+    "scripts/lib/prepared_execution.py": "a62fd36e75c77807a0bd5035f1e37112d389d7b9f01150e3f18e1c2bdfbb71af",
+    "tests/unit/test_prepared_execution.py": "ffcf959a1e2854e58e141294c5253457e512d2a8ff88fbec93a0be7ba0bc5be8",
+    "tests/fixtures/prepared-execution-go-json-vectors.json": "b4e3262c19ca45ff47334a479fab74def0d004f75be4212270eb474b263fc61a"
+  }
 }

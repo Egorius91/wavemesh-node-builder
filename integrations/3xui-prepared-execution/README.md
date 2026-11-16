@@ -41,7 +41,7 @@ apply is deliberately conservative and needs a new cold generation; selector-onl
 CAS is a separate owner-local method with no public mutating endpoint.
 
 Private execution snapshots and path observations use version 3. Every new sample
-must bind equal before/after/independently-current generation and epoch. A→B→A
+must bind equal before/after/independently-current generation and epoch. Aв†’Bв†’A
 cannot reuse an earlier sample. Only a bounded, complete chain of native selector
 receipts for the one owned unconditional rule can preserve hysteresis. Cold
 launch resets prepared selectors to blackhole. Public channel v1 is unchanged.
@@ -72,3 +72,10 @@ the owner-local CAS has not been connected to its transaction. Full PR4 is open.
 current proof applicability, independent CLOSED/release and outstanding coverage.
 No native reservation remains; another phase requires coordinated fresh admission. No publication, hosted CI, merge or live server work is
 authorized by this source checkpoint.
+
+
+Current source follow-up adds only the exact inert wm-api-rule label and a private
+read-only consumer. security:none remains unsupported; it is not converted to TLS.
+PRIVATE-CONSUMER.md specifies trust, fresh readback, canonical hash bounds, the
+source proof and outstanding actual Linux reader/full-build gates. There is no
+production producer approval or installed consumer/transaction integration.
