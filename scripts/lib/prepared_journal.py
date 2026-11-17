@@ -165,6 +165,11 @@ def prepared_status(directory):
     if os.path.lexists(pending):
         return "active"
     origin = os.path.lexists(completed)
+    # A lost primary marker cannot erase dispatch/reply provenance. Presence
+    # alone fences writers, including dangling or unreadable retained facts.
+    if not origin and any(os.path.lexists(directory / name) for name in
+                          ("prepared.owner-request.json", "prepared.owner-result.json")):
+        return "active"
     try:
         result = decode(read_private(directory / "result.json"))
         if not origin and "prepared_commit" not in result:
