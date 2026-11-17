@@ -2,3 +2,4 @@
 *.sh text eol=lf
 bin/wavemesh text eol=lf
 install.sh text eol=lf
+integrations/3xui-prepared-execution/producer.patch -whitespace
