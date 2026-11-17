@@ -15,6 +15,7 @@ from unittest import mock
 
 
 TOOL = Path(__file__).resolve().parents[2] / "scripts/lib/transaction_state.py"
+sys.path.insert(0, str(TOOL.parent))
 
 
 def load_journal():
@@ -57,6 +58,50 @@ class PreparedDebt(unittest.TestCase):
             self.assertEqual((transaction / "result.json").read_bytes(), before)
         self.journal.mark(transaction, "recovering")
         self.assert_retained(transaction)
+
+    def test_known_result_before_completed_rename_survives_generic_mark(self):
+        transaction = self.pending()
+        self.journal.atomic_json(transaction / "result.json", {
+            "status": "committed", "prepared_commit": {"malformed": "must-retain"}})
+        before = (transaction / "result.json").read_bytes()
+        for status in self.journal.ACTIVE | self.journal.TERMINAL:
+            with self.subTest(status=status), self.assertRaises(RuntimeError):
+                self.journal.mark(transaction, status)
+            self.assertEqual((transaction / "result.json").read_bytes(), before)
+        self.assert_retained(transaction)
+
+    def test_completed_origin_and_damaged_result_are_active_and_not_prunable(self):
+        transaction = self.journal.begin(self.root, "auto-prepared-reconcile", 123)
+        marker = transaction / "prepared.apply.completed.json"
+        for intent in ("{", "null", "{}"):
+            for result in (None, "{", "null", '{"status":"committed"}',
+                           '{"status":"committed","prepared_commit":{}}'):
+                with self.subTest(intent=intent, result=result):
+                    marker.write_text(intent, encoding="utf-8")
+                    outcome = transaction / "result.json"
+                    if result is None:
+                        outcome.unlink(missing_ok=True)
+                    else:
+                        outcome.write_text(result, encoding="utf-8")
+                    saved = outcome.read_bytes() if outcome.exists() else None
+                    self.assertEqual([item["id"] for item in self.journal.incomplete(self.root)], [transaction.name])
+                    self.assertEqual(self.journal.resolve(self.root, transaction.name, True), transaction)
+                    for status in self.journal.ACTIVE | self.journal.TERMINAL:
+                        with self.assertRaises(RuntimeError):
+                            self.journal.mark(transaction, status)
+                    self.assertEqual(outcome.read_bytes() if outcome.exists() else None, saved)
+                    self.journal.prune(self.root, 0)
+                    self.assertTrue(os.path.lexists(marker))
+
+    def test_completed_origin_without_plan_or_result_is_not_hidden(self):
+        transaction = self.journal.begin(self.root, "auto-prepared-reconcile", 123)
+        (transaction / "plan.json").unlink()
+        (transaction / "result.json").unlink()
+        self.journal.atomic_json(transaction / "prepared.apply.completed.json", {})
+        self.assertEqual([item["id"] for item in self.journal.incomplete(self.root)], [transaction.name])
+        self.assertEqual(self.journal.resolve(self.root, transaction.name, True), transaction)
+        self.journal.prune(self.root, 0)
+        self.assertTrue(transaction.is_dir())
 
     def test_terminal_result_cannot_hide_or_prune_pending_after_restart(self):
         transaction = self.pending()

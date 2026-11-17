@@ -164,7 +164,9 @@ wm_transaction_wait_xui() {
 wm_transaction_rollback() {
   local transaction="$1" message="${2:-automatic rollback}" failed=0 db="" nginx_conf="${WM_NGINX_MANAGED_CONF:-/etc/nginx/wavemesh-managed-locations.conf}"
   trap - EXIT INT TERM HUP
-  if [[ -e "$transaction/prepared.apply.pending.json" || -L "$transaction/prepared.apply.pending.json" ]]; then
+  if [[ -e "$transaction/prepared.apply.pending.json" || -L "$transaction/prepared.apply.pending.json" ||
+        -e "$transaction/prepared.apply.completed.json" || -L "$transaction/prepared.apply.completed.json" ]] ||
+      ! python3 "$WM_TRANSACTION_TOOL" prepared-guard --transaction "$transaction"; then
     python3 "$WM_TRANSACTION_TOOL" mark --transaction "$transaction" --status rollback_failed --message "Prepared Xray update outcome UNKNOWN; retain pending dispatch and reconcile before any restore" || true
     wm_warn "Rollback stopped: a prepared Xray update has no proven terminal outcome"
     return 1

@@ -10,6 +10,8 @@ import tempfile
 from datetime import datetime, timezone
 from pathlib import Path
 
+from prepared_journal import prepared_status
+
 ACTIVE = {"in_progress", "recovering", "rollback_failed"}
 TERMINAL = {"committed", "rolled_back"}
 
@@ -49,6 +51,11 @@ def _prepared_pending(path):
     return os.path.lexists(Path(path) / "prepared.apply.pending.json")
 
 
+def _prepared_completed(path):
+    # Origin must survive a damaged result and failures after a known commit.
+    return os.path.lexists(Path(path) / "prepared.apply.completed.json")
+
+
 def atomic_json(path, value):
     path = Path(path)
     _mkdirs(path.parent)
@@ -75,7 +82,9 @@ def records(root):
     for directory in sorted((item for item in root.iterdir() if item.is_dir()), reverse=True):
         plan_path = directory / "plan.json"
         pending = _prepared_pending(directory)
-        if not plan_path.exists() and not pending:
+        completed = _prepared_completed(directory)
+        prepared = prepared_status(directory)
+        if not plan_path.exists() and not pending and not completed and prepared is None:
             continue
         try:
             plan = json.loads(plan_path.read_text(encoding="utf-8"))
@@ -89,8 +98,10 @@ def records(root):
                 outcome = {}
         except (OSError, ValueError):
             outcome = {"status": "in_progress"}
-        if pending:
+        if pending or prepared == "active":
             outcome = {"status": "rollback_failed", "message": "Prepared update outcome UNKNOWN; retain dispatch evidence"}
+        elif prepared == "committed":
+            outcome = {"status": "committed", "finished_at": outcome.get("finished_at")}
         result.append({
             "id": directory.name,
             "operation": str(plan.get("operation") or "unknown")[:80],
@@ -111,7 +122,7 @@ def resolve(root, transaction_id, active_only=False):
         raise ValueError("invalid transaction id")
     root = Path(root).resolve()
     path = (root / transaction_id).resolve()
-    if path.parent != root or not path.is_dir() or not ((path / "plan.json").is_file() or _prepared_pending(path)):
+    if path.parent != root or not path.is_dir() or not ((path / "plan.json").is_file() or prepared_status(path) is not None):
         raise ValueError("transaction not found")
     if active_only:
         item = next((record for record in records(root) if record["id"] == transaction_id), None)
@@ -125,6 +136,12 @@ def begin(root, operation, pid):
     if pending:
         raise RuntimeError(f"incomplete transaction: {pending[0]['id']}")
     root = Path(root)
+    # A previous rename barrier may have failed after becoming visible. The
+    # pure reader never repairs it; mutation admission repeats that barrier.
+    if root.exists():
+        for directory in root.iterdir():
+            if directory.is_dir() and prepared_status(directory) == "committed":
+                _sync_directory(directory)
     _mkdirs(root)
     os.chmod(root, 0o700)
     transaction_id = f"{datetime.now(timezone.utc).strftime('%Y%m%dT%H%M%SZ')}-{secrets.token_hex(3)}"
@@ -141,6 +158,21 @@ def mark(path, status, message=""):
         raise ValueError("unsupported transaction status")
     if status in TERMINAL and _prepared_pending(path):
         raise RuntimeError("Prepared update outcome UNKNOWN; terminal status is forbidden")
+    if status == "committed" and prepared_status(path) == "committed":
+        _sync_directory(path)
+        return
+    if _prepared_completed(path):
+        raise RuntimeError("Prepared completion requires verified metadata; retain origin and result")
+    try:
+        previous = json.loads((Path(path) / "result.json").read_text(encoding="utf-8"))
+    except FileNotFoundError:
+        previous = {}
+    except (OSError, ValueError):
+        if _prepared_pending(path):
+            raise RuntimeError("Prepared update result is unreadable; retain origin") from None
+        previous = {}
+    if isinstance(previous, dict) and "prepared_commit" in previous:
+        raise RuntimeError("Prepared commit proof cannot be overwritten by generic mark")
     value = {"status": status}
     if status in TERMINAL or status == "rollback_failed":
         value["finished_at"] = utc_now()
@@ -153,7 +185,10 @@ def prune(root, keep):
     terminal = [item for item in records(root) if item["status"] in TERMINAL]
     for item in terminal[max(0, keep):]:
         path = resolve(root, item["id"])
-        if not _prepared_pending(path):
+        prepared = prepared_status(path)
+        if prepared == "committed":
+            _sync_directory(path)
+        if not _prepared_pending(path) and prepared != "active":
             shutil.rmtree(path)
 
 
@@ -185,6 +220,8 @@ def main():
     mark_parser.add_argument("--transaction", required=True); mark_parser.add_argument("--status", required=True); mark_parser.add_argument("--message", default="")
     resolve_parser = sub.add_parser("resolve")
     resolve_parser.add_argument("--root", required=True); resolve_parser.add_argument("--id", required=True); resolve_parser.add_argument("--active-only", action="store_true")
+    guard_parser = sub.add_parser("prepared-guard")
+    guard_parser.add_argument("--transaction", required=True)
     install_parser = sub.add_parser("atomic-install")
     install_parser.add_argument("--source", required=True); install_parser.add_argument("--target", required=True)
     args = parser.parse_args()
@@ -207,6 +244,9 @@ def main():
         try: print(begin(args.root, args.operation, args.pid))
         except RuntimeError as error: raise SystemExit(str(error)) from error
     elif args.command == "mark": mark(args.transaction, args.status, args.message)
+    elif args.command == "prepared-guard":
+        if prepared_status(args.transaction) is not None:
+            raise SystemExit("Prepared origin retained; snapshot restore forbidden")
     elif args.command == "resolve":
         try: print(resolve(args.root, args.id, args.active_only))
         except ValueError as error: raise SystemExit(str(error)) from error

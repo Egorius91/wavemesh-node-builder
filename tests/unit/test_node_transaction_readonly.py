@@ -16,6 +16,7 @@ from unittest import mock
 
 ROOT = pathlib.Path(__file__).parents[2]
 sys.path.insert(0, str(ROOT))
+sys.path.insert(0, str(ROOT / "scripts/lib"))
 from operations import node_transaction_readonly as m
 
 
@@ -147,13 +148,14 @@ class ObserverTests(unittest.TestCase):
                 self.assertTrue(all(not flags & (m.os.O_WRONLY | m.os.O_RDWR | m.os.O_CREAT | m.os.O_TRUNC)
                                     for _, flags in fs.opens))
 
-    def test_unknown_status_gap_legacy_stays_compatible_new_observer_refuses(self):
+    def test_unknown_status_is_blocked_by_current_cli_and_observer(self):
         legacy = legacy_module()
         with tempfile.TemporaryDirectory() as root:
             child = pathlib.Path(root)/'synthetic-unknown'; child.mkdir()
             (child/'plan.json').write_text(json.dumps(plan()), encoding='utf-8')
             (child/'result.json').write_text(json.dumps({'status':'future_terminal'}), encoding='utf-8')
-            self.assertEqual(legacy.incomplete(root), [])  # Reproduces old CLI admission gap.
+            # ca21 closed the old CLI gap; both readers must stay conservative.
+            self.assertEqual([item['id'] for item in legacy.incomplete(root)], ['synthetic-unknown'])
         self.assert_stop(Posix(('future_terminal',)), 'STOP_TRANSACTION_STATUS_UNKNOWN')
 
     def test_actual_redacted_producers_terminal_compatibility_and_metadata_cap(self):

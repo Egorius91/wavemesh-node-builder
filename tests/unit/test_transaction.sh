@@ -142,4 +142,38 @@ assert json.loads((transaction / "result.json").read_text(encoding="utf-8"))["st
 assert not (transaction / "unsafe-effect").exists()
 PY
 done
+# A known-result origin also blocks restore when completed is malformed or
+# dangling. Generic rollback_failed must not erase the retained proof.
+for completed_kind in malformed dangling; do
+  transaction="$tmp/completed-${completed_kind}"
+  mkdir -p "$transaction"
+  printf '{"schema_version":1,"operation":"auto-prepared-reconcile"}\n' > "$transaction/plan.json"
+  printf '{"status":"committed","prepared_commit":{"malformed":"retain"}}\n' > "$transaction/result.json"
+  cp "$transaction/result.json" "$transaction/result.before"
+  if [[ "$completed_kind" == dangling ]]; then
+    ln -s "$transaction/absent-target.json" "$transaction/prepared.apply.completed.json"
+    [[ -L "$transaction/prepared.apply.completed.json" && ! -e "$transaction/prepared.apply.completed.json" ]]
+  else
+    printf '{broken-json\n' > "$transaction/prepared.apply.completed.json"
+  fi
+  (
+    effect="$transaction/unsafe-effect"
+    wm_transaction_assert_xray_recovery() { printf 'recovery\n' >> "$effect"; return 0; }
+    wm_atomic_install_json() { printf 'restore\n' >> "$effect"; }
+    wm_load_config() { printf 'load\n' >> "$effect"; }
+    wm_xray_apply_template() { printf 'POST\n' >> "$effect"; }
+    systemctl() { printf 'restart\n' >> "$effect"; }
+    nginx() { printf 'nginx\n' >> "$effect"; }
+    if wm_transaction_rollback "$transaction" "completed ${completed_kind}"; then exit 74; fi
+    [[ ! -e "$effect" ]]
+  )
+  cmp "$transaction/result.before" "$transaction/result.json"
+  python3 - "$transaction" <<'PYCASE'
+import os, sys
+from pathlib import Path
+transaction = Path(sys.argv[1])
+assert os.path.lexists(transaction / "prepared.apply.completed.json")
+assert not (transaction / "unsafe-effect").exists()
+PYCASE
+ done
 echo "transaction shell tests: OK"
