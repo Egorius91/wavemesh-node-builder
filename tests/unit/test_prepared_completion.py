@@ -270,6 +270,12 @@ class PreparedCompletionWriter(unittest.TestCase):
             with self.assertRaises(completion.CompletionUnavailable):completion.complete(directory,reply)
         self.assertEqual(Path(intent['files']['runtime']).read_bytes(),before)
 
+    def test_redirected_resume_is_refused_before_any_private_read_or_write(self):
+        case=self.make_case();directory,intent,reply,view,effective=case
+        with mock.patch.object(completion,'_require_node_owner'),mock.patch.object(Path,'is_symlink',return_value=True),mock.patch.object(reader,'read_private',side_effect=AssertionError('redirected resume read private data')),mock.patch.object(journal,'atomic_bytes',side_effect=AssertionError('redirected resume wrote data')),mock.patch.object(journal,'_sync_directory',side_effect=AssertionError('redirected resume synced data')):
+            with self.assertRaisesRegex(completion.CompletionUnavailable,'^PREPARED_COMPLETION_NOT_VERIFIED$'):
+                completion.complete(directory)
+
     def test_typed_prefix_proof_is_checked_before_pending_is_renamed(self):
         case=self.make_case();directory,intent,reply,view,effective=case
         with mock.patch.object(completion.os,'rename',side_effect=OSError('synthetic pre-rename stop')):

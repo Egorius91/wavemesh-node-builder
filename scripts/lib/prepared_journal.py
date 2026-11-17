@@ -215,7 +215,7 @@ def prepared_status(directory):
                 or proof["local_post"]["template"] != digest(candidates["template"])
                 or proof["local_post"]["process"] != sha(process_raw) or sha(process_raw) != reply["outcome"]["ProcessConfigSHA256"]
                 or not selector_matches(process, intent["expected"]) or not selector_matches(candidates["template"], intent["expected"])
-                or post.get("prepared_routes", {}).get(route) != state):
+                or digest(post.get("prepared_routes", {}).get(route)) != digest(state)):
             return "active"
         return "committed"
     except (OSError, ValueError, TypeError, KeyError, AttributeError, OverflowError, RecursionError):

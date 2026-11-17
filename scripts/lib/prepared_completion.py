@@ -160,6 +160,8 @@ def complete(transaction, owner_result=None):
     try:
         _require_node_owner()
         directory = Path(transaction)
+        if directory.is_symlink():
+            raise ValueError("redirected completion directory")
         pending, completed = directory / "prepared.apply.pending.json", directory / "prepared.apply.completed.json"
         if os.path.lexists(completed):
             if reader.prepared_status(directory) != "committed":

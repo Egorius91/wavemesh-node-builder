@@ -57,6 +57,19 @@ class PreparedJournal(unittest.TestCase):
         self.addCleanup(temporary.cleanup)
         self.root = Path(temporary.name) / "transactions"
 
+    def test_runtime_post_cannot_change_owned_numeric_types(self):
+        directory = completed_fixture(self.root)
+        path = directory / 'prepared.runtime.post.json'
+        post = reader.decode(path.read_bytes())
+        post['prepared_routes']['route-unit']['sample_at'] = 100.0
+        journal.atomic_json(path, post)
+        result = reader.decode((directory / 'result.json').read_bytes())
+        result['prepared_commit']['local_post']['runtime'] = reader.sha(path.read_bytes())
+        journal.atomic_json(directory / 'result.json', result)
+        self.assertEqual(reader.prepared_status(directory), 'active')
+        with self.assertRaises(RuntimeError):
+            journal.admit(self.root)
+
     def test_valid_history_is_read_only_and_never_promotes_samples(self):
         directory = completed_fixture(self.root)
         before = {p.name: p.read_bytes() for p in directory.iterdir() if p.is_file()}
