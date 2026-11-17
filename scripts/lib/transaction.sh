@@ -167,8 +167,8 @@ wm_transaction_rollback() {
   if [[ -e "$transaction/prepared.apply.pending.json" || -L "$transaction/prepared.apply.pending.json" ||
         -e "$transaction/prepared.apply.completed.json" || -L "$transaction/prepared.apply.completed.json" ]] ||
       ! python3 "$WM_TRANSACTION_TOOL" prepared-guard --transaction "$transaction"; then
-    python3 "$WM_TRANSACTION_TOOL" mark --transaction "$transaction" --status rollback_failed --message "Prepared Xray update outcome UNKNOWN; retain pending dispatch and reconcile before any restore" || true
-    wm_warn "Rollback stopped: a prepared Xray update has no proven terminal outcome"
+    python3 "$WM_TRANSACTION_TOOL" mark --transaction "$transaction" --status rollback_failed --message "Prepared origin retained; reconcile journal before any snapshot restore" || true
+    wm_warn "Rollback stopped: prepared origin is retained; snapshot restore is forbidden"
     return 1
   fi
   if [[ -e "$transaction/prepared.no-effect.json" ]]; then

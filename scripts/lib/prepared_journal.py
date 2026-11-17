@@ -169,6 +169,7 @@ def prepared_status(directory):
             return "active"
         raw = read_private(completed)
         intent = validate_intent(decode(raw), directory.name)
+        validate_intent(proof["intent"], directory.name)
         if sha(raw) != proof["intent_sha256"] or intent != proof["intent"] or proof["selector_transition"] != expected_transition(intent):
             return "active"
         reply_raw = read_private(directory / "prepared.owner-result.json")

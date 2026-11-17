@@ -131,7 +131,11 @@ def resolve(root, transaction_id, active_only=False):
     return path
 
 
-def begin(root, operation, pid):
+def admit(root):
+    """Mutation admission only: retain debt, repair verified directory barriers.
+
+    Caller holds the existing node flock. Read-only check/list never call this.
+    """
     pending = incomplete(root)
     if pending:
         raise RuntimeError(f"incomplete transaction: {pending[0]['id']}")
@@ -142,6 +146,11 @@ def begin(root, operation, pid):
         for directory in root.iterdir():
             if directory.is_dir() and prepared_status(directory) == "committed":
                 _sync_directory(directory)
+
+
+def begin(root, operation, pid):
+    admit(root)
+    root = Path(root)
     _mkdirs(root)
     os.chmod(root, 0o700)
     transaction_id = f"{datetime.now(timezone.utc).strftime('%Y%m%dT%H%M%SZ')}-{secrets.token_hex(3)}"
@@ -209,7 +218,7 @@ def prune_backups(root, keep):
 def main():
     parser = argparse.ArgumentParser()
     sub = parser.add_subparsers(dest="command", required=True)
-    for name in ("check", "list", "latest", "prune", "prune-backups"):
+    for name in ("check", "admit", "list", "latest", "prune", "prune-backups"):
         child = sub.add_parser(name)
         child.add_argument("--root", required=True)
         if name == "list": child.add_argument("--json", action="store_true")
@@ -229,6 +238,13 @@ def main():
     if args.command == "check":
         pending = incomplete(args.root)
         if pending: print(pending[0]["id"]); raise SystemExit(2)
+    elif args.command == "admit":
+        try:
+            admit(args.root)
+        except RuntimeError as error:
+            raise SystemExit(str(error)) from None
+        except (OSError, ValueError):
+            raise SystemExit("Node journal durability admission not verified") from None
     elif args.command == "list":
         items = records(args.root)
         if args.json: print(json.dumps({"transactions": items}, indent=2))

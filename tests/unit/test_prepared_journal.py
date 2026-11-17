@@ -62,6 +62,8 @@ class PreparedJournal(unittest.TestCase):
                 mock.patch.object(os, "replace", side_effect=AssertionError("reader renamed")), \
                 mock.patch.object(Path, "write_bytes", side_effect=AssertionError("reader wrote")):
             self.assertEqual(reader.prepared_status(directory), "committed")
+            self.assertEqual(journal.incomplete(self.root), [])
+            self.assertEqual(journal.records(self.root)[0]["status"], "committed")
         self.assertEqual(before, {p.name: p.read_bytes() for p in directory.iterdir() if p.is_file()})
         state = json.loads((directory / "prepared.runtime.post.json").read_text())["prepared_routes"]["route-unit"]
         self.assertEqual(state["mutation_epoch"], "0")
@@ -88,7 +90,7 @@ class PreparedJournal(unittest.TestCase):
             self.assertEqual(reader.prepared_status(self.root / "redirected"), "active")
 
     def test_foreign_stale_duplicate_or_contradictory_proofs_stay_active(self):
-        for change in ("foreign", "lost-reply", "partial-owner", "stale-epoch", "wrong-after", "wrong-intent", "duplicate-key", "missing-artifact", "changed-candidate", "changed-runtime-post", "missing-origin", "missing-origin-bad-result"):
+        for change in ("foreign", "lost-reply", "partial-owner", "stale-epoch", "wrong-after", "wrong-intent", "boolean-copy", "duplicate-key", "missing-artifact", "changed-candidate", "changed-runtime-post", "missing-origin", "missing-origin-bad-result"):
             with self.subTest(change=change):
                 root = self.root / change
                 directory = completed_fixture(root)
@@ -108,6 +110,8 @@ class PreparedJournal(unittest.TestCase):
                     result["prepared_commit"]["selector_transition"]["after_sha256"] = "e"*64
                 elif change == "wrong-intent":
                     result["prepared_commit"]["intent"]["route_id"] = "route-other"
+                elif change == "boolean-copy":
+                    result["prepared_commit"]["intent"]["schema_version"] = True
                 elif change == "missing-artifact":
                     (directory / "prepared.process.json").unlink()
                 elif change == "changed-candidate":
@@ -134,7 +138,8 @@ class PreparedJournal(unittest.TestCase):
                 raise OSError("synthetic failed completed directory barrier")
             real(path)
         with mock.patch.object(journal, "_sync_directory", side_effect=fail):
-            for action in (lambda: journal.begin(self.root, "must-not-start", 124),
+            for action in (lambda: journal.admit(self.root),
+                           lambda: journal.begin(self.root, "must-not-start", 124),
                            lambda: journal.prune(self.root, 0),
                            lambda: journal.mark(directory, "committed")):
                 with self.assertRaises(OSError):
@@ -144,6 +149,13 @@ class PreparedJournal(unittest.TestCase):
         journal.mark(directory, "committed")
         journal.prune(self.root, 0)
         self.assertFalse(directory.exists())
+
+    def test_mutating_admission_refuses_debt_before_any_durability_action(self):
+        directory = completed_fixture(self.root)
+        journal.atomic_json(directory / "prepared.apply.pending.json", {})
+        with mock.patch.object(journal, "_sync_directory", side_effect=AssertionError("admission passed unresolved debt")):
+            with self.assertRaisesRegex(RuntimeError, "incomplete transaction"):
+                journal.admit(self.root)
 
 
 if __name__ == "__main__":
