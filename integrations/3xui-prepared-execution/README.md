@@ -88,14 +88,20 @@ production release approval or public/physical/installed readiness follows from
 this component proof. The independently closed native slot is released to ROOT.
 
 
-Current internal producer source90f920be adds an owner-held selector persistence
+Current internal producer sourced8eea105 adds an owner-held selector persistence
 barrier. The service builds separate actual/template/process selector copies,
 uses exact expected generation/epoch and a conditional existing template row
 update, then atomically writes the desired process config inside the same owner
 callback as the single native call. Config.Clone preserves RawMessage bytes and
 panel-only TUIC metadata. Errors retain partial operation facts and require
 reconciliation; nil/no-op alone cannot claim commit. No public handler or Builder
-positive settlement dispatch is connected.59 Windows/CGO source checks pass,
-including the unchanged inline-TLS refusal, with zero skips. This is not a real
+positive settlement dispatch is connected.The source90 checkpoint passed59 Windows/CGO checks, including the unchanged
+inline-TLS refusal. The cold desired/actual compatibility correction passes4
+affected checks with explicit unchanged-source reuse; neither run has skips. This is not a real
 core/full-service/Linux persistence proof; the old35 full-main binary does not
 contain this revision. See the current manifest owner_persistence_barrier scope.
+
+Cold launch may block actual execution while persisted desired selection remains
+an Exit. The current service patches each independent preimage rather than
+requiring those before-targets to match. Native no-op with divergent metadata
+still refuses reconciliation. No owner/TLS/control/DTO guard is weakened.

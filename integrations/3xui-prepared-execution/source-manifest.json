@@ -1,7 +1,7 @@
 {
   "schema": 1,
   "status": "PRIVATE_OWNER_BARRIER_SOURCE_PASS_CURRENT_FULL_BUILD_NOT_RUN",
-  "at_utc": "2026-11-17T12:24:11.638446+00:00",
+  "at_utc": "2026-11-17T12:34:51.158152+00:00",
   "upstream": {
     "repository": "https://github.com/MHSanaei/3x-ui",
     "tag": "v3.11.0",
@@ -9,10 +9,10 @@
     "license": "GPL-3.0",
     "license_sha256": "3972dc9744f6499f0f9b2dbf76696f2ae7ad8af9b23dde66d6af86c9dfb36986"
   },
-  "producer_commit": "90f920be36d3a515a05638d269d91686f90269cf",
+  "producer_commit": "d8eea105ec2d41895c5119c86193b11afcbe9a7f",
   "patch": {
     "file": "producer.patch",
-    "sha256": "123785ee72dcac4f0043f3b19fc73c6f9d5e9c1808e5c30eb0e75a5116ce9783"
+    "sha256": "22b877ecf5454500c3966f6bb74b62791780166904a1bc42459226fa619f4ce2"
   },
   "changed_source_sha256": {
     "internal/web/job/check_client_ip_job.go": "5921d724074f1dad18efb5d55327f6866bae7ecd86ffcbc5a33fae0b75d7b62d",
@@ -22,8 +22,8 @@
     "internal/web/service/node.go": "9687b7e25045ea1638c09c1c6137d2632967f2cf6cbe7d49e941d4db54c5e18f",
     "internal/web/service/tuic_relay_apply.go": "9a5c5ab1c383835433699ed68f4287acc7b044befaf7dc0d130903c798ffc01c",
     "internal/web/service/xray.go": "bf52fa109d6393a62815dfa169173b9dc1ce2f9c5a3bb48b877fe9624c1de79e",
-    "internal/web/service/xray_execution.go": "4f69d54d0699827d0994d055bb58aa0678ee50fa0058df03be1058b531018ab6",
-    "internal/web/service/xray_execution_test.go": "9203582a04dfd203883560cdec3172bc3807ef2edd63430a015ef4a171469a23",
+    "internal/web/service/xray_execution.go": "48fafb830f262aacebb77cf1a7c7666e7aef34e3cfa2cba17d6bb09977fe568c",
+    "internal/web/service/xray_execution_test.go": "932e72385aaa97f4ede7cc24bd691eeb70706bdfb162ce2e9522a2c80d86d0ba",
     "internal/web/service/xray_setting.go": "9647b1ca8c72d326d04ba0b297235bc435c6ce6dc996dce961f2194a4ca089a9",
     "internal/web/web.go": "2cd9df2a547a16f5305305b39f54fdd31f2436634b1951c4ba684e28d36ae912",
     "internal/xray/api.go": "1c06f2f89bf62bdc6ac78b9c1e8979e5e8deaeeb27531a280deb4049247c6fd4",
@@ -54,9 +54,9 @@
     "tests/unit/test_prepared_channels.py": "25476f905139281ab15236e439ad03dc0ee6430d55eeda98f6b6ad0f86274e5b"
   },
   "previous_checkpoint": {
-    "producer_commit": "b6b6f40eee3c106e0ac4b86c6df069c4d6cd85d3",
-    "manifest_sha256": "390fdb33769ef0c888b049ff23446d0cd079f4c6334c1af10e8d466ad182ffb9",
-    "patch_sha256": "edfb4cb726c7cbaf4c176d5020583208470a0c938a18b392c9b61d55feb27f6b"
+    "producer_commit": "90f920be36d3a515a05638d269d91686f90269cf",
+    "manifest_sha256": "b6cad2cbf2ef69c09664385b31ae3402ae9f98fc67b3c309a4cd069afd3fe2c8",
+    "patch_sha256": "123785ee72dcac4f0043f3b19fc73c6f9d5e9c1808e5c30eb0e75a5116ce9783"
   },
   "proof": {
     "windows_race": {
@@ -308,7 +308,7 @@
       "portability": "Ubuntu24.04/gcc13.3/glibc2.39 build; static/portable release and working-node compatibility NOT VERIFIED.",
       "applies_to_current_producer": false,
       "current_source_build": "NOT_RUN",
-      "reason": "Current90f920be changes runtime retry, owner/service persistence and Config clone; old full main artifact remains exact source35 only."
+      "reason": "Currentd8eea105 contains runtime retry and owner/service persistence deltas; exact old full main artifact applies only to35."
     },
     "no_implicit_rpc_retry": {
       "status": "PASS_SCOPED_WINDOWS_CGO_UNIT_ONLY",
@@ -340,7 +340,7 @@
       },
       "limits": "Synthetic callback and loopback fake gRPC pooling/restart tests only. No full producer build/runtime, managed UDS RPC or Linux acceptance for this delta."
     },
-    "evidence_reuse_boundary": "Earlier component proofs retain only their original exact source/hash scope. Current59 source regressions are not current full build, Linux runtime, service composition or public TLS acceptance.",
+    "evidence_reuse_boundary": "Base90 source59 retains exact original scope. Current4 affected source checks plus five complete file hashes and six unchanged owning-function hashes prove bounded reuse. No whole-app/native/full-build acceptance transferred.",
     "owner_persistence_barrier": {
       "status": "PASS_SCOPED_WINDOWS_SOURCE_ONLY",
       "source_head": "90f920be36d3a515a05638d269d91686f90269cf",
@@ -363,10 +363,39 @@
         "sha256": "fb3086047c5003f93f19e915186d737394a4f3eb556bb67a01de8ed4b521df79"
       },
       "limits": "Owner fake RoutingService callbacks + actual temporary SQLite/file persistence. Real core, managed UDS, full app/service composition, native directory fsync/current full build NOT RUN. No handler/wire/capability enabled."
+    },
+    "owner_cold_desired_compatibility": {
+      "status": "PASS_FOCUSED_WINDOWS_SOURCE_ONLY",
+      "source_head": "d8eea105ec2d41895c5119c86193b11afcbe9a7f",
+      "source_ack": 883,
+      "top_level_pass": 4,
+      "skip": 0,
+      "fail": 0,
+      "summary": {
+        "file": ".tools\\pr4-owner-barrier-20261117\\cold-preimage-fixed-summary.json",
+        "sha256": "18ee09c5be5ed4dd464be8b8070496105704e384664b0fc749e7f556d4b892fb"
+      },
+      "log": {
+        "file": ".tools\\pr4-owner-barrier-20261117\\cold-preimage-fixed.jsonl",
+        "sha256": "2157351334d90a8561d89a1a50c7233f9bf6eb10f9ba07277e636d4404bfd172"
+      },
+      "expected_red": {
+        "file": ".tools\\pr4-owner-barrier-20261117\\cold-preimage-baseline.json",
+        "sha256": "400bb47ce189387e9699157aa084a89b335b59979a739ca7aba6f3d79096043e"
+      },
+      "reuse_proof": {
+        "file": ".tools\\pr4-owner-barrier-20261117\\cold-preimage-reuse.json",
+        "sha256": "bf97ccd50a3bd2ab5eb8aaca31fe82e4399d7b128f649aa139ce8c73bde007db"
+      },
+      "roundtrip": {
+        "file": "PR4-COLD-DESIRED-ARTIFACT-ROUNDTRIP-20261117.json",
+        "sha256": "c92d451606595ec6469e5ef63151a49f098700152c5be1928f57edb47a5371d3"
+      },
+      "scope": "Cold consumed actual deny may differ from persisted desired target; exact expected nativeCAS, DBraw preimage, same rule/inbound and no-op conflict retained. Candidate source tests only; full service/native runtime NOT RUN."
     }
   },
   "remaining_gates": [
-    "Current producer90f920be full native build and managed service/RPC/persistence proof NOT RUN; historical source35 binary is not this revision",
+    "Current producerd8eea105 full native build and managed service/RPC/persistence proof NOT RUN; historical source35 binary is not this revision",
     "Installed transaction/caller integration under approved full producer release, not the synthetic ELF",
     "Reviewed installed full-producer release/manifest and target-node compatibility; the private Linux build is separately proven",
     "Real stock template compatibility and collector consuming the fresh private snapshot",

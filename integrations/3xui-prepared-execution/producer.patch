@@ -318,10 +318,10 @@ index 596986c3..6c941b94 100644
 +}
 diff --git a/internal/web/service/xray_execution.go b/internal/web/service/xray_execution.go
 new file mode 100644
-index 00000000..2fa12679
+index 00000000..60247f77
 --- /dev/null
 +++ b/internal/web/service/xray_execution.go
-@@ -0,0 +1,213 @@
+@@ -0,0 +1,232 @@
 +package service
 +
 +import (
@@ -369,20 +369,6 @@ index 00000000..2fa12679
 +	if row.Value != templateBefore {
 +		return result, errExecutionTemplateConflict
 +	}
-+	// Preserve panel-only metadata and unrelated RawMessage bytes.
-+	desired := p.CloneConfig()
-+	processBytes, err := json.Marshal(desired)
-+	if err != nil || bytes.Equal(processBytes, []byte("null")) {
-+		return result, errExecutionDesiredConflict
-+	}
-+	processDoc, err := executionServiceDocument(processBytes)
-+	if err != nil {
-+		return result, err
-+	}
-+	templateDoc, err := executionServiceDocument([]byte(templateBefore))
-+	if err != nil {
-+		return result, err
-+	}
 +	var api xray.XrayAPI
 +	if err := api.InitEndpoint(p.GetAPIEndpoint()); err != nil {
 +		return result, err
@@ -392,53 +378,25 @@ index 00000000..2fa12679
 +	if err != nil {
 +		return result, err
 +	}
-+	actual, err := executionServiceDocument(actualRouting)
++	candidate, err := buildExecutionSelectorCandidate(actualRouting, templateBefore, p.CloneConfig(), ruleTag, target)
 +	if err != nil {
 +		return result, err
 +	}
-+	actualBefore, binding, err := replaceExecutionSelector(actual, ruleTag, target)
-+	if err != nil {
-+		return result, err
-+	}
-+	var desiredTargets []string
-+	for _, doc := range []map[string]any{templateDoc, processDoc} {
-+		routing, ok := doc["routing"].(map[string]any)
-+		if !ok || !executionTargetExists(doc, target) {
-+			return result, errExecutionDesiredConflict
-+		}
-+		before, desiredBinding, err := replaceExecutionSelector(routing, ruleTag, target)
-+		if err != nil || !reflect.DeepEqual(binding, desiredBinding) {
-+			return result, errExecutionDesiredConflict
-+		}
-+		desiredTargets = append(desiredTargets, before)
-+	}
-+	if actualBefore == target {
-+		if desiredTargets[0] != target || desiredTargets[1] != target {
-+			// Native no-op cannot silently reconcile divergent persisted state.
-+			return result, errExecutionDesiredConflict
-+		}
++	if candidate.noOp {
 +		result.NoOp = true
 +		return result, nil
 +	}
-+	// A stale persisted selector is not permission to overwrite a different
-+	// version of the desired configuration with the actual/native document.
-+	if desiredTargets[0] != actualBefore || desiredTargets[1] != actualBefore {
-+		return result, errExecutionDesiredConflict
-+	}
-+	templateAfter, _ := json.Marshal(templateDoc)
++	templateAfter, _ := json.Marshal(candidate.template)
 +	prepared, err := setting.prepareXraySetting(string(templateAfter))
 +	if err != nil {
 +		return result, err
 +	}
 +	normalized, err := executionServiceDocument([]byte(prepared))
-+	if err != nil || !reflect.DeepEqual(templateDoc, normalized) {
++	if err != nil || !reflect.DeepEqual(candidate.template, normalized) {
 +		return result, errExecutionDesiredConflict
 +	}
-+	processRouting, _ := json.Marshal(processDoc["routing"])
-+	desired.RouterConfig = processRouting
-+	nativeAfter, _ := json.Marshal(actual)
-+	outcome, err := api.CompareAndApplyRoutingAndPersist(nativeAfter, expected, func() error {
-+		return persistExecutionSelector(setting, p, row, prepared, desired, &result)
++	outcome, err := api.CompareAndApplyRoutingAndPersist(candidate.routing, expected, func() error {
++		return persistExecutionSelector(setting, p, row, prepared, candidate.desired, &result)
 +	})
 +	result.NativeAttempted, result.NativeSucceeded = outcome.NativeAttempted, outcome.NativeSucceeded
 +	result.KnownCommit = err == nil && outcome.Persisted && outcome.OwnerConfirmed && result.TemplatePersisted && result.ConfigPersisted
@@ -446,6 +404,67 @@ index 00000000..2fa12679
 +		err = errExecutionOutcomeUnknown
 +	}
 +	return result, err
++}
++
++type executionSelectorCandidate struct {
++	routing  []byte
++	template map[string]any
++	desired  *xray.Config
++	noOp     bool
++}
++
++// Builds independent selector deltas without replacing native/generated or
++// unrelated desired sections. Its input Config remains untouched.
++func buildExecutionSelectorCandidate(actualRouting []byte, templateBefore string, desired *xray.Config, ruleTag, target string) (*executionSelectorCandidate, error) {
++	// Preserve panel-only metadata and unrelated RawMessage bytes.
++	desired = desired.Clone()
++	processBytes, err := json.Marshal(desired)
++	if err != nil || bytes.Equal(processBytes, []byte("null")) {
++		return nil, errExecutionDesiredConflict
++	}
++	processDoc, err := executionServiceDocument(processBytes)
++	if err != nil {
++		return nil, err
++	}
++	templateDoc, err := executionServiceDocument([]byte(templateBefore))
++	if err != nil {
++		return nil, err
++	}
++	actual, err := executionServiceDocument(actualRouting)
++	if err != nil {
++		return nil, err
++	}
++	actualBefore, binding, err := replaceExecutionSelector(actual, ruleTag, target)
++	if err != nil {
++		return nil, err
++	}
++	var desiredTargets []string
++	for _, doc := range []map[string]any{templateDoc, processDoc} {
++		routing, ok := doc["routing"].(map[string]any)
++		if !ok || !executionTargetExists(doc, target) {
++			return nil, errExecutionDesiredConflict
++		}
++		before, desiredBinding, err := replaceExecutionSelector(routing, ruleTag, target)
++		if err != nil || !reflect.DeepEqual(binding, desiredBinding) {
++			return nil, errExecutionDesiredConflict
++		}
++		desiredTargets = append(desiredTargets, before)
++	}
++	if actualBefore == target {
++		if desiredTargets[0] != target || desiredTargets[1] != target {
++			// Native no-op cannot silently reconcile divergent persisted state.
++			return nil, errExecutionDesiredConflict
++		}
++		return &executionSelectorCandidate{noOp: true}, nil
++	}
++	// Cold launch deliberately blocks the consumed selector while preserving
++	// persisted desired selection. Each desired copy has its own preimage; only
++	// its bound rule changes. The native CAS still uses the actual preimage.
++
++	processRouting, _ := json.Marshal(processDoc["routing"])
++	desired.RouterConfig = processRouting
++	nativeAfter, _ := json.Marshal(actual)
++	return &executionSelectorCandidate{routing: nativeAfter, template: templateDoc, desired: desired}, nil
 +}
 +
 +// Called only after the single native RPC returned success. Failure leaves the
@@ -537,10 +556,10 @@ index 00000000..2fa12679
 +}
 diff --git a/internal/web/service/xray_execution_test.go b/internal/web/service/xray_execution_test.go
 new file mode 100644
-index 00000000..f22d3b35
+index 00000000..86f5bf14
 --- /dev/null
 +++ b/internal/web/service/xray_execution_test.go
-@@ -0,0 +1,188 @@
+@@ -0,0 +1,234 @@
 +package service
 +
 +import (
@@ -549,6 +568,7 @@ index 00000000..f22d3b35
 +	"os"
 +	"path/filepath"
 +	"reflect"
++	"strings"
 +	"testing"
 +
 +	"github.com/mhsanaei/3x-ui/v3/internal/database"
@@ -592,6 +612,9 @@ index 00000000..f22d3b35
 +	}
 +	if err := setting.compareExecutionTemplate(row.Id, got.Value, "candidate"); err != nil {
 +		t.Fatal(err)
++	}
++	if err := setting.compareExecutionTemplate(row.Id, "candidate", "candidate"); err != nil {
++		t.Fatal("cold actual transition cannot retain an already-selected desired template:", err)
 +	}
 +	if err := db.First(&sentinel, sentinel.Id).Error; err != nil || sentinel.Value != "sentinel" {
 +		t.Fatal("unrelated setting changed")
@@ -727,6 +750,48 @@ index 00000000..f22d3b35
 +	result, err := (&XrayService{}).ApplyExecutionSelector(xray.ExecutionExpected{}, "", "wm-rule-unit", "wm-exit-path-unit")
 +	if !errors.Is(err, ErrXrayNotRunning) || !reflect.DeepEqual(result, ExecutionPersistenceResult{}) {
 +		t.Fatal("missing process reached mutation")
++	}
++}
++
++func TestExecutionCandidateColdDenyUsesSeparateDesiredPreimages(t *testing.T) {
++	const desiredJSON = `{"inbounds":[{"tag":"generated-inbound","protocol":"socks","settings":{"sentinel":"keep"}}],"outbounds":[{"tag":"wm-eu-only-block","protocol":"blackhole"},{"tag":"wm-exit-path-unit","protocol":"blackhole"}],"routing":{"rules":[{"type":"field","inboundTag":["wm-route-unit"],"ruleTag":"wm-rule-unit","outboundTag":"wm-exit-path-unit"}],"sentinel":"desired-only"},"sentinel":"template-only"}`
++	const actualRouting = `{"rules":[{"type":"field","inboundTag":["api"],"outboundTag":"api"},{"type":"field","inboundTag":["wm-route-unit"],"ruleTag":"wm-rule-unit","outboundTag":"wm-eu-only-block"}],"sentinel":"actual-only"}`
++	var desired xray.Config
++	if err := json.Unmarshal([]byte(desiredJSON), &desired); err != nil {
++		t.Fatal(err)
++	}
++	desired.InboundConfigs[0].TuicRelay = true
++	desired.InboundConfigs[0].TuicInboundID = 19
++	before := desired.Clone()
++	candidate, err := buildExecutionSelectorCandidate([]byte(actualRouting), desiredJSON, &desired, "wm-rule-unit", "wm-exit-path-unit")
++	if err != nil {
++		t.Fatalf("cold deny cannot reconcile the selected desired target: %v", err)
++	}
++	if candidate.noOp || !desired.Equals(before) {
++		t.Fatal("native cold transition mistaken for no-op or input mutated")
++	}
++	if !candidate.desired.InboundConfigs[0].TuicRelay || candidate.desired.InboundConfigs[0].TuicInboundID != 19 || !reflect.DeepEqual(candidate.desired.InboundConfigs, before.InboundConfigs) {
++		t.Fatal("generated/panel-only process metadata lost")
++	}
++	actual, _ := executionServiceDocument(candidate.routing)
++	if actual["sentinel"] != "actual-only" || len(actual["rules"].([]any)) != 2 || candidate.template["sentinel"] != "template-only" {
++		t.Fatal("actual and desired documents were substituted")
++	}
++	processAfter, _ := executionServiceDocument(candidate.desired.RouterConfig)
++	if processAfter["sentinel"] != "desired-only" || len(processAfter["rules"].([]any)) != 1 {
++		t.Fatal("generated native rules leaked into process desired config")
++	}
++	// A native no-op cannot commit divergent metadata or clear earlier debt.
++	if _, err := buildExecutionSelectorCandidate(candidate.routing, strings.ReplaceAll(desiredJSON, "\"outboundTag\":\"wm-exit-path-unit\"", "\"outboundTag\":\"wm-eu-only-block\""), &desired, "wm-rule-unit", "wm-exit-path-unit"); !errors.Is(err, errExecutionDesiredConflict) {
++		t.Fatal("native no-op reconciled mismatched template")
++	}
++	noOp, err := buildExecutionSelectorCandidate(candidate.routing, desiredJSON, &desired, "wm-rule-unit", "wm-exit-path-unit")
++	if err != nil || !noOp.noOp {
++		t.Fatal("fully matching no-op was dispatched")
++	}
++	wrong := strings.ReplaceAll(desiredJSON, "wm-route-unit", "wm-route-other")
++	if _, err := buildExecutionSelectorCandidate([]byte(actualRouting), wrong, &desired, "wm-rule-unit", "wm-exit-path-unit"); !errors.Is(err, errExecutionDesiredConflict) {
++		t.Fatal("different inbound binding accepted")
 +	}
 +}
 diff --git a/internal/web/service/xray_setting.go b/internal/web/service/xray_setting.go
