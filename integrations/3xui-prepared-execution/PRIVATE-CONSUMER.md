@@ -45,9 +45,9 @@ invent a receipt chain or advance health counters. Fixed errors contain no raw
 configuration, credentials, paths or exception payloads.
 
 Source proof: reader20 tests PASS0skip with mocked Unix/proc facts,13 actual Go
-canonical vectors, and current producer owner21+17 race cases PASS. Those source checks are distinct from the actual Linux result below. A full
-producer build, installed caller and real Entry/service integration remain
-NOT VERIFIED. Native757 custody/mutator proof retains its tested source scope. A new native run needs the
+canonical vectors, and current producer owner21+17 race cases PASS. Those source checks are distinct from the actual Linux result below. At that checkpoint no full producer build was proven; the17Nov full build
+below is separately verified. Installed caller and real Entry/service integration
+remain NOT VERIFIED. Native757 custody/mutator proof retains its tested source scope. A new native run needs the
 coordinator's actual resource release, phase ACK and fresh admission.
 
 The actual Builder Entry remains unsupported by managed qualification: Nginx
@@ -121,5 +121,34 @@ down candidate, stale equal-JSON epoch/ABA/new generation, process/hash/binding/
 freshness/incomplete-input refusals, fixed engine, collector refusal without
 fallback, side-effect traps and fresh exact CAS context. Compiler45/reader20/
 owner21+17/native7 remain scoped to their unchanged source pins; this evaluator
-has no native acceptance. Full producer/real Entry TLS/actual CAS-persistence-
-settlement/watchdog and physical flow gates remain open.
+has no native acceptance. Approved installed producer/real Entry TLS/actual CAS-persistence-
+settlement/watchdog and physical flow gates remain open; the17Nov private full
+build is separately proven below.
+
+
+17Nov full private producer build: frozen producer35/Builder source8dd passed
+actual Linuxamd64/Go1.27.4/GCC13.3/glibc2.39 CGO compilation of the full main
+application, not a test ELF. All169 real frontend assets are present in the ELF;
+-v returns dev+35c57fe4; the existing migrate CLI created an isolated synthetic
+SQLite database with25tables and integrity_check=ok. Raw fixture values were not
+exported. Private binary106420408bytes has SHA256
+2a45079b9ae10cc41706f9d4f41355a4448580c1e555eeaf893a1234a8cf5072.
+
+One original preflight failed before compilation because the selected ZIP cache
+omitted older transitive go.mod metadata. The failure/diagnostic remain retained.
+Already-cached signed metadata completed the offline graph; a fresh empty host
+cache and native cache both verified with sumdb enabled and original go.sum
+unchanged. Exactly one actual full build ran. No producer/input guard was relaxed.
+
+The full artifact/result/build metadata were downloaded and hashes verified.
+V3 cleanup and independent readback removed both work roots/input/fixture DB,
+found no owned processes or operational approval. VM18536/63460/63461 is CLOSED:
+PID/listeners absent, serial PowerDown, overlaycheck0errors, pinned backing/thin
+base/preparation hashes unchanged. Release and immutable proof are referenced in
+source-manifest.json. No native reservation remains.
+
+This closes the private full-build gap only. No producer/core service was started,
+no operational release approval installed, and no actual Entry/TLS, native
+evaluator, ownerCAS/persistence/settlement/watchdog or physical-flow acceptance
+follows. The compiled artifact's target-node/static portability remains unverified.
+The historical test-ELF custody/reader proof keeps its original scope.

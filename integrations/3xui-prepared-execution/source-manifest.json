@@ -1,7 +1,7 @@
 {
   "schema": 1,
-  "status": "SOURCE_READONLY_EVALUATION_PASS_SCOPED_NATIVE_READER_RETAINED_FULL_PR4_OPEN",
-  "at_utc": "2026-11-16T18:48:47.032934+00:00",
+  "status": "PRIVATE_FULL_NATIVE_BUILD_PASS_RUNTIME_TLS_PHYSICAL_GATES_OPEN",
+  "at_utc": "2026-11-17T09:28:43.690619+00:00",
   "upstream": {
     "repository": "https://github.com/MHSanaei/3x-ui",
     "tag": "v3.11.0",
@@ -252,11 +252,59 @@
         "live_changes": false
       },
       "scope": "Private in-memory candidate only. Exact expected generation/epoch is future CAS context, not actual atomic apply or persistence proof."
+    },
+    "full_private_producer_build": {
+      "status": "PASS_BUILD_ONLY_NO_RELEASE_APPROVAL",
+      "producer_head": "35c57fe48f5df242ea79592d2e17b2dcae926932",
+      "builder_source_tested": "8dd43aaf18039f78cc2a1b1033382f22c490e88c",
+      "binary_sha256": "2a45079b9ae10cc41706f9d4f41355a4448580c1e555eeaf893a1234a8cf5072",
+      "binary_bytes": 106420408,
+      "version": "dev+35c57fe4",
+      "target": "linux/amd64",
+      "toolchain": {
+        "go": "go version go1.27.4 linux/amd64",
+        "gcc": "13.3.0",
+        "libc": "ldd (Ubuntu GLIBC 2.39-0ubuntu8.9) 2.39"
+      },
+      "CGO_ENABLED": 1,
+      "embedded_assets": 169,
+      "sqlite": {
+        "integrity": "ok",
+        "required_tables": true,
+        "table_count": 25,
+        "fixture_values_exported": false
+      },
+      "actual_build_attempts": 1,
+      "build_seconds": 3669.3883843421936,
+      "frozen_go_sum_unchanged": true,
+      "harness": "V3 offline dependency metadata closure; original selected ZIP-only preflight failure864 retained, no compilation attempted in that failed run.",
+      "proof": {
+        "file": "PR4-FULL-PRODUCER-FROZEN-PROOF-20261117.json",
+        "sha256": "9c5274736853725a3015f2b6d89e7cc239010a28714eb5b91a6c02df56ad1425"
+      },
+      "native_receipt": {
+        "guestPid": 950,
+        "sha256": "41f553bc687867f240d1b5548dafaf305a792ed4a019a71b2dc071c4aa5362c9"
+      },
+      "independent_cleanup": {
+        "guestPid": 6180,
+        "sha256": "88fe422e45632ba4df45ba3642c1a2120d8b81d99c8b580a21f8e041c3903c9a"
+      },
+      "release": {
+        "file": "PR4-FULL-PRODUCER-NATIVE-RELEASE-20261117.json",
+        "sha256": "767d60dd56211273e36a65fe1f20e4674900e90b5b3d4e22a298674a3bd29d38"
+      },
+      "installed": false,
+      "production_approval": false,
+      "full_runtime_acceptance": false,
+      "public_tls_acceptance": false,
+      "physical_flow_acceptance": false,
+      "portability": "Ubuntu24.04/gcc13.3/glibc2.39 build; static/portable release and working-node compatibility NOT VERIFIED."
     }
   },
   "remaining_gates": [
     "Installed transaction/caller integration under approved full producer release, not the synthetic ELF",
-    "Full Linux producer/SQLite/frontend build and installed producer manifest",
+    "Reviewed installed full-producer release/manifest and target-node compatibility; the private Linux build is separately proven",
     "Real stock template compatibility and collector consuming the fresh private snapshot",
     "Builder owner-CAS/settlement/persistence and watchdog integration",
     "Actual IPv4/IPv6/DNS/all-down/stale/existing-flow closure and management-loss continuation",
