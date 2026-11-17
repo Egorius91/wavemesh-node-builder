@@ -1,7 +1,7 @@
 {
   "schema": 1,
-  "status": "PRIVATE_OWNER_BARRIER_SOURCE_PASS_CURRENT_FULL_BUILD_NOT_RUN",
-  "at_utc": "2026-11-17T12:34:51.158152+00:00",
+  "status": "PRIVATE_OWNER_PROCESS_POSTIMAGE_AND_JOURNAL_PORTABLE_PASS_NATIVE_OPEN",
+  "at_utc": "2026-11-17T14:42:48.986100+00:00",
   "upstream": {
     "repository": "https://github.com/MHSanaei/3x-ui",
     "tag": "v3.11.0",
@@ -9,10 +9,10 @@
     "license": "GPL-3.0",
     "license_sha256": "3972dc9744f6499f0f9b2dbf76696f2ae7ad8af9b23dde66d6af86c9dfb36986"
   },
-  "producer_commit": "d8eea105ec2d41895c5119c86193b11afcbe9a7f",
+  "producer_commit": "0d0b7617b4b994747983bc42f9acb2040b6a4042",
   "patch": {
     "file": "producer.patch",
-    "sha256": "22b877ecf5454500c3966f6bb74b62791780166904a1bc42459226fa619f4ce2"
+    "sha256": "bd220e4403968cf0d39bf2d4887af322564663df288e87d673f36287432d3748"
   },
   "changed_source_sha256": {
     "internal/web/job/check_client_ip_job.go": "5921d724074f1dad18efb5d55327f6866bae7ecd86ffcbc5a33fae0b75d7b62d",
@@ -22,8 +22,8 @@
     "internal/web/service/node.go": "9687b7e25045ea1638c09c1c6137d2632967f2cf6cbe7d49e941d4db54c5e18f",
     "internal/web/service/tuic_relay_apply.go": "9a5c5ab1c383835433699ed68f4287acc7b044befaf7dc0d130903c798ffc01c",
     "internal/web/service/xray.go": "bf52fa109d6393a62815dfa169173b9dc1ce2f9c5a3bb48b877fe9624c1de79e",
-    "internal/web/service/xray_execution.go": "48fafb830f262aacebb77cf1a7c7666e7aef34e3cfa2cba17d6bb09977fe568c",
-    "internal/web/service/xray_execution_test.go": "932e72385aaa97f4ede7cc24bd691eeb70706bdfb162ce2e9522a2c80d86d0ba",
+    "internal/web/service/xray_execution.go": "ffd3291eda83b5671b7c747a465c695605289f40aa42613eb778f122f5bd0daf",
+    "internal/web/service/xray_execution_test.go": "6d261d8b0983e8b7ae078d884da60d27d2891b76d0f6b9659f5d17d18cd117d3",
     "internal/web/service/xray_setting.go": "9647b1ca8c72d326d04ba0b297235bc435c6ce6dc996dce961f2194a4ca089a9",
     "internal/web/web.go": "2cd9df2a547a16f5305305b39f54fdd31f2436634b1951c4ba684e28d36ae912",
     "internal/xray/api.go": "1c06f2f89bf62bdc6ac78b9c1e8979e5e8deaeeb27531a280deb4049247c6fd4",
@@ -36,10 +36,10 @@
     "internal/xray/execution_native_linux_test.go": "d1df5e86221b84ce0032e07aaee6b3e0ce188e1cbb75015653f7566e115057aa",
     "internal/xray/execution_other.go": "4988e852af47f487b2232ba089db0363498a1f3b5833b626a78f15fd4df7d9b7",
     "internal/xray/execution_override_test.go": "15f50a1d62b97be709205331ee5de46e72d1b379d50851c89b475450b6bdd432",
-    "internal/xray/execution_persist_test.go": "61ae223aeb6f56d111b1751d85bc3db3946ecb58bbd4f02a345688685ff7a51f",
+    "internal/xray/execution_persist_test.go": "6b27b553037b5ec8c44e292b934ffc1b8acc1abc9bb133720f98559b187dc9b8",
     "internal/xray/execution_template_test.go": "a515ffa3d2fcb0037f5264ce5f26e5ec332fb755ca640673cab2841b7e17caee",
     "internal/xray/execution_test.go": "4f2522b334db1f61f7df2782e22a1a947438880a5997047a56d07d460ee55bbd",
-    "internal/xray/process.go": "fa00910ae4a10c132ed86331d24a01cdebea96b8123e6e316756cf3a988cbbd7"
+    "internal/xray/process.go": "5ee126e0455d621db7e4f790899433faf9858ad65b4889beafe752f5805e6b10"
   },
   "stock_core": {
     "version": "26.10.21",
@@ -54,9 +54,9 @@
     "tests/unit/test_prepared_channels.py": "25476f905139281ab15236e439ad03dc0ee6430d55eeda98f6b6ad0f86274e5b"
   },
   "previous_checkpoint": {
-    "producer_commit": "90f920be36d3a515a05638d269d91686f90269cf",
-    "manifest_sha256": "b6cad2cbf2ef69c09664385b31ae3402ae9f98fc67b3c309a4cd069afd3fe2c8",
-    "patch_sha256": "123785ee72dcac4f0043f3b19fc73c6f9d5e9c1808e5c30eb0e75a5116ce9783"
+    "producer_commit": "d8eea105ec2d41895c5119c86193b11afcbe9a7f",
+    "manifest_sha256": "48e77b9d2bd6c57b4a4fb748fea1360f6216746c60247e26eaf4ac97356cb38c",
+    "patch_sha256": "22b877ecf5454500c3966f6bb74b62791780166904a1bc42459226fa619f4ce2"
   },
   "proof": {
     "windows_race": {
@@ -308,7 +308,7 @@
       "portability": "Ubuntu24.04/gcc13.3/glibc2.39 build; static/portable release and working-node compatibility NOT VERIFIED.",
       "applies_to_current_producer": false,
       "current_source_build": "NOT_RUN",
-      "reason": "Currentd8eea105 contains runtime retry and owner/service persistence deltas; exact old full main artifact applies only to35."
+      "reason": "Current0d0b7617 includes process postimage result and earlier owner/retry changes; old full main artifact applies only to35."
     },
     "no_implicit_rpc_retry": {
       "status": "PASS_SCOPED_WINDOWS_CGO_UNIT_ONLY",
@@ -340,7 +340,7 @@
       },
       "limits": "Synthetic callback and loopback fake gRPC pooling/restart tests only. No full producer build/runtime, managed UDS RPC or Linux acceptance for this delta."
     },
-    "evidence_reuse_boundary": "Base90 source59 retains exact original scope. Current4 affected source checks plus five complete file hashes and six unchanged owning-function hashes prove bounded reuse. No whole-app/native/full-build acceptance transferred.",
+    "evidence_reuse_boundary": "Earlier proofs retain exact original source/hash scope. Current Go5 and changed portable58 are separately scoped, not full native/service/current build acceptance.",
     "owner_persistence_barrier": {
       "status": "PASS_SCOPED_WINDOWS_SOURCE_ONLY",
       "source_head": "90f920be36d3a515a05638d269d91686f90269cf",
@@ -431,10 +431,73 @@
       "focused_pass": 6,
       "skip": 0,
       "native": "NOT_RUN"
+    },
+    "owner_process_postimage": {
+      "source_head": "0d0b7617b4b994747983bc42f9acb2040b6a4042",
+      "source_ack": 912,
+      "source_review": 924,
+      "status": "PASS_WINDOWS_CGO_FOCUSED_ONLY",
+      "top_level_pass": 5,
+      "fail": 0,
+      "skip": 0,
+      "summary": {
+        "file": ".tools\\pr4-process-postimage-20261117\\focused-summary.json",
+        "sha256": "3463ca759326db19af7791e88192bf1dc267b36737d671f9e2786f1d1729e5f8"
+      },
+      "artifact_roundtrip": {
+        "file": "PR4-PROCESS-POSTIMAGE-ARTIFACT-ROUNDTRIP-20261117.json",
+        "sha256": "197e3e292d7a705f4e46f9551038c8e72a77cd2c1d9f5bb40d41f0a04f3aa14f"
+      },
+      "scope": "Exact raw payload hash after existing atomic write/barriers and memory adoption. Missing/stale startup disk, byte identity, partial/file failure and cold desired distinctness; real managed service/core NOT RUN."
+    },
+    "private_journal_completion": {
+      "builder_source": "ea9421b4fcf806b25367a3e1fa205862629965c7",
+      "source_ack": 888,
+      "process_shape_ack": 912,
+      "status": "PASS_CHANGED_PORTABLE_SCOPE_NATIVE_NOT_RUN",
+      "portable_pass": 58,
+      "fail": 0,
+      "skip": 0,
+      "ordinary_script": "PASS",
+      "native_not_run": [
+        {
+          "test": "tests.unit.test_prepared_completion.PreparedCompletionNativeOwner.test_native_existing_fd9_is_held_until_caller_closes_it",
+          "reason": "native Linux root node lock required"
+        },
+        {
+          "test": "tests.unit.test_prepared_completion.PreparedCompletionNativeOwner.test_native_foreign_inode_and_weak_lock_are_refused",
+          "reason": "native Linux root node lock required"
+        },
+        {
+          "test": "tests.unit.test_prepared_debt.PreparedDebt.test_dangling_pending_symlink_remains_debt_without_reading_target",
+          "reason": "native Linux symlink required"
+        },
+        {
+          "test": "tests.unit.test_prepared_debt.PreparedDebt.test_new_directory_entries_and_atomic_record_are_synced_before_return",
+          "reason": "native Linux directory fsync required"
+        },
+        {
+          "test": "tests.unit.test_prepared_debt.PreparedDebt.test_new_transaction_directory_sync_failure_prevents_record_or_dispatch",
+          "reason": "native Linux directory fsync required"
+        },
+        {
+          "test": "tests.unit.test_prepared_debt.PreparedDebt.test_pending_directory_sync_failure_stops_before_dispatch_and_keeps_debt",
+          "reason": "native Linux directory fsync required"
+        }
+      ],
+      "summary": {
+        "file": ".tools\\pr4-process-postimage-20261117\\frozen-portable-summary.json",
+        "sha256": "86ceb85c07d8e8d5e7f32e6b80c80e263baeae72f0fd336f1cd365d2f0374429"
+      },
+      "results": {
+        "file": ".tools\\pr4-process-postimage-20261117\\frozen-portable-results.json",
+        "sha256": "54c8dfebf27f14fb54fd1b6dc1c5233ff4f60b9cdb34e1ec3ab9c206ce6a1126"
+      },
+      "scope": "Real owned temporary files/SQLite; positive owner/collector mocked. Strict trusted result+raw process postimage, before/candidate guards, Root field preservation, no pre-sample relabel, retained origin/metadata-only recovery. No installed transport/caller or capability."
     }
   },
   "remaining_gates": [
-    "Current producerd8eea105 full native build and managed service/RPC/persistence proof NOT RUN; historical source35 binary is not this revision",
+    "Current producer0d0b7617 full native main and actual managed core/service/caller integration NOT RUN; historical35 binary is not this revision",
     "Installed transaction/caller integration under approved full producer release, not the synthetic ELF",
     "Reviewed installed full-producer release/manifest and target-node compatibility; the private Linux build is separately proven",
     "Real stock template compatibility and collector consuming the fresh private snapshot",
@@ -453,9 +516,11 @@
     "tests/fixtures/prepared-execution-go-json-vectors.json": "de1a7bdb8b57af0d0ceeffc24969a36136fe10e1aeca2ed99cea4b5944f98d3b"
   },
   "private_journal_reader_source_sha256": {
-    "scripts/lib/prepared_journal.py": "e588cbc03000e937a85e3bf07547187f417be7efad16a49da080d512461a98cc",
-    "scripts/lib/transaction_state.py": "da498478b6a1d9a895194cb4ef598da504aa21e371218bcb2a2e0d945c70617d",
+    "scripts/lib/prepared_journal.py": "5f300366f4f52fe557fde37da4eaccc6ac1028220fc413f57b7fcd14b92f1aeb",
+    "scripts/lib/transaction_state.py": "f0a2b781af9dca4eb16aa6ac0338d23560e85646347a4bc2b61553b8968f3e05",
     "scripts/lib/transaction.sh": "16749b772e946250562cd33bac3477b453a539b178c03bf9752772c3f28870a9",
-    "tests/unit/test_prepared_journal.py": "b3c61ab762285955b5d29e0ac72bf075da81699e57bf7dc66a28103c60ec1f42"
+    "scripts/lib/prepared_completion.py": "454a8bba7ebd6bc7083858ca6eb03e9608f4629fec02ea17056c1e574d135ca8",
+    "tests/unit/test_prepared_journal.py": "8a344d5365caa39f9ef979371b63840134da02ea3a6223a7768b8e56d80510e5",
+    "tests/unit/test_prepared_completion.py": "267cdd340bc1edaf43098a467af4f52533bbca4ed2f76196aee65bca34d28ba6"
   }
 }

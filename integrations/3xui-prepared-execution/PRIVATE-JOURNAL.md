@@ -1,54 +1,62 @@
-# Private prepared journal: one historical reader
+# Private prepared journal: one historical reader and isolated writer
 
-The authoritative pure stdlib reader is scripts/lib/prepared_journal.py.
-`prepared_status(transaction: Path) -> None | "active" | "committed"` performs
-bounded private-file reads only. It does not collect execution, repair/fsync,
-write, dispatch, publish health, or grant capability. The Agent owner can install
-these same frozen bytes; do not implement another interpretation of its schema.
+Authoritative stdlib-only reader: scripts/lib/prepared_journal.py.
+prepared_status(transaction: Path) -> None | "active" | "committed". It performs
+bounded private-file reads only: no collect, write, fsync, capability or readiness.
+The Agent installs these same frozen bytes, never another schema implementation.
 
-None means ordinary journal handling remains applicable. Any pending presence
-(including dangling symlink) is active. Completed presence with malformed/missing
-proof is active; a result carrying prepared_commit without retained origin is
-also active. Committed requires the exact version1 hash-bound completed intent,
-plan, ordinary owner-result receipt, four private candidate artifacts, matching
-selector transition and actual local runtime postimage. It is historical audit,
-not current execution/readiness. Generic mark cannot erase this provenance;
-idempotent committed does not rewrite it. Snapshot rollback always refuses any
-prepared origin, including a proof with missing markers, via the read-only guard.
+None preserves ordinary handling. Any pending presence, including broken link,
+is active. Completed with malformed/missing/foreign proof is active. Result proof
+without retained origin is active. Generic mark cannot erase prepared_commit;
+idempotent committed does not rewrite it. Snapshot rollback refuses every origin.
+Mutation-only transaction_state.admit(root), CLI admit --root ROOT, repeats
+verified directory barriers under the caller's existing node flock. begin reuses
+it; read-only check/list remain pure. Agent owns its separate barrier integration.
 
-Frozen intent has version/transaction/route/binding; expected generation, epoch,
-engine instance, before/after/normalized native hashes and owned rule/inbound/
-target; admitted absolute storage paths; local preimage hashes (runtime absence
-is distinct); and hashes of existing private candidate files. Its full copy in
-result contains hashes/context, never credential/config payload. Candidate and
-runtime postimage files stay private in the same transaction directory.
+Private unshipped version1 intent records transaction/route/binding, exact native
+before generation/epoch/instance/hash, expected full post and normalized hash,
+owned rule/inbound/target, admitted storage paths, preimage hashes and THREE
+frozen client candidate hashes (config/runtime/template). Process disk preimage
+is nullable, audit-only; managed Start may bypass that file entirely. It is never
+an assertion about desired process memory. Do not reconstruct desired memory
+from consumed native JSON or an older disk file.
 
-The ordinary private owner reply binds version, transaction id and raw intent
-hash to exact operation-local Go result flags. Only a future trusted owner
-adapter may retain it. A caller verified=true/force CLI is not provided. Lost,
-partial, foreign, no-op or unproven writer replies cannot finish existing debt.
-Fresh exact execution collection and separate template/process readbacks still
-belong to the completion writer. No such transport/caller is installed here.
+The trusted future owner adapter binds an ordinary private reply to the same
+transaction and raw frozen intent hash. Its outcome contains the six existing
+Go operation flags plus ProcessConfigSHA256. A known result needs all success
+flags, NoOp false and a strict lowercase64-hex process hash. The Go owner returns
+that hash from the SAME MarshalIndent payload only after atomic file/directory
+barriers and memory adoption. Failure returns no successful hash. No handler,
+wire, endpoint, token privilege, server ledger or force/verified CLI is added.
 
-Pre-apply prepared samples retain their original generation/epoch/full hash.
-The merged runtime postimage may preserve changed unrelated Root fields, but its
-owned state must equal the frozen pre-apply candidate; a new epoch must obtain
-its own fresh sample. Native no-op cannot manufacture a committed transition.
+Independent post-reply file read must match the owner raw hash and owned selector.
+Exact bytes are retained in prepared.process.post.json, never remarshal/copied
+into the template or running process. Three candidates remain frozen; the process
+is a server-owned POSTIMAGE, not a pre-dispatch client candidate. Separate stored
+template readback uses a read-only SQLite connection against the admitted local
+source. Backend/path admission belongs to the trusted future caller.
 
-Pure visibility cannot prove that a prior directory barrier succeeded. Existing
-mutating begin/prune/idempotent completion therefore repeat directory fsync under
-the existing node flock before proceeding; a failed barrier stops the action.
-The Agent owner must do the same at its mutation boundary. No new lock/store is
-introduced. Shared-runtime writes remain closed until ROOT's health writer lock
-and unresolved-journal fence are accepted. This reader alone performs no runtime
-write and does not authorize publication/live/6004/physical deny.
+Private complete(transaction, owner_result=None) is uninstalled source only.
+It requires the existing Builder FD9 owner; retains the exact reply before fresh
+collection/local commit; checks actual collector epoch+1/full hashes/receipt and
+approved routing; checks storage independently before/after; writes only local
+reconcile config/runtime. Config uses exact validated frozen candidate bytes.
+Runtime merges only prepared_routes[route_id] into current Root fields; a third
+owned state/config stops. Unrelated Root fields are preserved. Pre-apply samples
+keep their original epoch/instance/hash; they never become fresh post-apply health.
+Lost/partial/no-op/unproven replies cannot complete earlier debt.
 
-The portable tests prove structure, origin retention, foreign/stale/duplicate/
-corrupt refusal, metadata-only idempotency and barrier failure propagation.
-Actual Linux fsync/flock/Bash execution is a separate native packet. Current
-producer remains d8eea105; full producer/core/service integration is NOT RUN.
+Durable verified result includes full HASH-ONLY intent copy, reply hash, exact
+selector receipt and local post hashes. Then the SAME pending intent is renamed
+to completed and directory-synced. Failures retain origin. Retry performs only
+metadata/readback; no dispatch, restart, restore or process-file rewrite. A known
+result prefix is type-safe and cannot be overwritten by generic status handling.
+Private runtime postimage preserves the exact merged Root document for audit.
 
-The mutation-only API is transaction_state.admit(root), exposed privately as
-`admit --root ROOT` for existing lock-owning health callers. begin uses the same
-function. Read-only check/list do not repair barriers. The intent copy is itself
-type-validated before comparison (Python true must not compare as schema1).
+58 current portable checks plus ordinary journal script pass. Six Linux-specific
+cases (including actual FD9/flock and directory/symlink barriers) are explicitly
+NOT RUN here. Positive collector/owner are mocked: not real managed service/core
+or installed caller proof. Source0d0b processHash5 Windows/CGO tests are separate.
+Root's health/Agent integration and grouped native packet must be accepted before
+any activation. Full producer/main,6004,physical flows/watchdog,capability and
+public/live/Node admission remain open. No publication or live action occurs here.

@@ -88,7 +88,7 @@ production release approval or public/physical/installed readiness follows from
 this component proof. The independently closed native slot is released to ROOT.
 
 
-Current internal producer sourced8eea105 adds an owner-held selector persistence
+Current internal producer source0d0b7617 adds an owner-held selector persistence
 barrier. The service builds separate actual/template/process selector copies,
 uses exact expected generation/epoch and a conditional existing template row
 update, then atomically writes the desired process config inside the same owner
@@ -105,3 +105,9 @@ Cold launch may block actual execution while persisted desired selection remains
 an Exit. The current service patches each independent preimage rather than
 requiring those before-targets to match. Native no-op with divergent metadata
 still refuses reconciliation. No owner/TLS/control/DTO guard is weakened.
+
+Owner-process postimage correction returns the raw SHA of the same atomic desired
+payload after memory adoption. The private journal now checks that postimage
+against the bound trusted owner reply; it never substitutes consumed JSON or an
+old startup disk file. PRIVATE-JOURNAL.md records the exact three-candidate and
+server-postimage boundary, portable58 scope and explicit native/transport gates.

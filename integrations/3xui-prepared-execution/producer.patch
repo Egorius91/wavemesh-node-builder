@@ -318,10 +318,10 @@ index 596986c3..6c941b94 100644
 +}
 diff --git a/internal/web/service/xray_execution.go b/internal/web/service/xray_execution.go
 new file mode 100644
-index 00000000..60247f77
+index 00000000..eb8d29c9
 --- /dev/null
 +++ b/internal/web/service/xray_execution.go
-@@ -0,0 +1,232 @@
+@@ -0,0 +1,235 @@
 +package service
 +
 +import (
@@ -342,12 +342,13 @@ index 00000000..60247f77
 +// ExecutionPersistenceResult describes this operation, never public readiness.
 +// Any attempted native call without KnownCommit must be reconciled, not retried.
 +type ExecutionPersistenceResult struct {
-+	NativeAttempted   bool
-+	NativeSucceeded   bool
-+	TemplatePersisted bool
-+	ConfigPersisted   bool
-+	KnownCommit       bool
-+	NoOp              bool
++	NativeAttempted     bool
++	NativeSucceeded     bool
++	TemplatePersisted   bool
++	ConfigPersisted     bool
++	KnownCommit         bool
++	NoOp                bool
++	ProcessConfigSHA256 string
 +}
 +
 +// ApplyExecutionSelector is internal service-owned source only: no handler or
@@ -399,7 +400,7 @@ index 00000000..60247f77
 +		return persistExecutionSelector(setting, p, row, prepared, candidate.desired, &result)
 +	})
 +	result.NativeAttempted, result.NativeSucceeded = outcome.NativeAttempted, outcome.NativeSucceeded
-+	result.KnownCommit = err == nil && outcome.Persisted && outcome.OwnerConfirmed && result.TemplatePersisted && result.ConfigPersisted
++	result.KnownCommit = err == nil && outcome.Persisted && outcome.OwnerConfirmed && result.TemplatePersisted && result.ConfigPersisted && result.ProcessConfigSHA256 != ""
 +	if err == nil && !result.KnownCommit {
 +		err = errExecutionOutcomeUnknown
 +	}
@@ -474,10 +475,12 @@ index 00000000..60247f77
 +		return err
 +	}
 +	result.TemplatePersisted = true
-+	if err := p.PersistExecutionConfig(desired); err != nil {
++	processHash, err := p.PersistExecutionConfig(desired)
++	if err != nil {
 +		return err
 +	}
 +	result.ConfigPersisted = true
++	result.ProcessConfigSHA256 = processHash
 +	return nil
 +}
 +
@@ -556,15 +559,17 @@ index 00000000..60247f77
 +}
 diff --git a/internal/web/service/xray_execution_test.go b/internal/web/service/xray_execution_test.go
 new file mode 100644
-index 00000000..86f5bf14
+index 00000000..c2886de5
 --- /dev/null
 +++ b/internal/web/service/xray_execution_test.go
-@@ -0,0 +1,234 @@
+@@ -0,0 +1,240 @@
 +package service
 +
 +import (
++	"crypto/sha256"
 +	"encoding/json"
 +	"errors"
++	"fmt"
 +	"os"
 +	"path/filepath"
 +	"reflect"
@@ -675,7 +680,7 @@ index 00000000..86f5bf14
 +	p = xray.NewTestProcess(old, filepath.Join(dir, "absent", "config.json"))
 +	err = persistExecutionSelector(setting, p, &before, "after", desired, &result)
 +	stored, readErr := setting.executionTemplate()
-+	if err == nil || readErr != nil || stored.Value != "after" || !result.TemplatePersisted || result.ConfigPersisted || result.KnownCommit || p.GetConfig() != old {
++	if err == nil || readErr != nil || stored.Value != "after" || !result.TemplatePersisted || result.ConfigPersisted || result.ProcessConfigSHA256 != "" || result.KnownCommit || p.GetConfig() != old {
 +		t.Fatal("partial persistence was hidden or compensated")
 +	}
 +	p = xray.NewTestProcess(old, path)
@@ -685,6 +690,10 @@ index 00000000..86f5bf14
 +	}
 +	if !result.TemplatePersisted || !result.ConfigPersisted || result.KnownCommit || !p.GetConfig().Equals(desired) {
 +		t.Fatal("persistence alone claimed native commit or lost desired bytes")
++	}
++	postBytes, readErr := os.ReadFile(path)
++	if readErr != nil || result.ProcessConfigSHA256 != fmt.Sprintf("%x", sha256.Sum256(postBytes)) {
++		t.Fatal("service did not retain exact owner process postimage hash")
 +	}
 +	if err := db.Migrator().DropTable(&model.Setting{}); err != nil {
 +		t.Fatal(err)
@@ -3316,16 +3325,18 @@ index 00000000..9907178b
 +}
 diff --git a/internal/xray/execution_persist_test.go b/internal/xray/execution_persist_test.go
 new file mode 100644
-index 00000000..f1c56bce
+index 00000000..7af4644e
 --- /dev/null
 +++ b/internal/xray/execution_persist_test.go
-@@ -0,0 +1,222 @@
+@@ -0,0 +1,262 @@
 +package xray
 +
 +import (
 +	"context"
++	"crypto/sha256"
 +	"encoding/json"
 +	"errors"
++	"fmt"
 +	"os"
 +	"path/filepath"
 +	"testing"
@@ -3470,12 +3481,17 @@ index 00000000..f1c56bce
 +	p := NewTestProcess(old, filepath.Join(t.TempDir(), "missing", "config.json"))
 +	p.execution = o
 +	done := make(chan error, 1)
++	failedHash := ""
 +	go func() {
-+		done <- o.mutate("ApplyRoutingConfig", map[string]any{"routing": fixtureRouting(o, "wm-exit-path-unit")}, nil, func() error { return p.PersistExecutionConfig(&Config{}) })
++		done <- o.mutate("ApplyRoutingConfig", map[string]any{"routing": fixtureRouting(o, "wm-exit-path-unit")}, nil, func() error {
++			var err error
++			failedHash, err = p.PersistExecutionConfig(&Config{})
++			return err
++		})
 +	}()
 +	select {
 +	case err := <-done:
-+		if err == nil || p.GetConfig() != old || o.snapshot("").Qualified {
++		if err == nil || failedHash != "" || p.GetConfig() != old || o.snapshot("").Qualified {
 +			t.Fatal("failed file write advanced shadow/owner")
 +		}
 +	case <-time.After(time.Second):
@@ -3490,18 +3506,51 @@ index 00000000..f1c56bce
 +	desired.InboundConfigs[1].TuicRelay = true
 +	desired.InboundConfigs[1].TuicInboundID = 42
 +	desired.RouterConfig = append([]byte(" \n"), desired.RouterConfig...)
-+	if err := p.PersistExecutionConfig(&desired); err != nil {
++	postHash, err := p.PersistExecutionConfig(&desired)
++	if err != nil {
 +		t.Fatal(err)
 +	}
 +	if !p.GetConfig().Equals(&desired) || !p.GetConfig().InboundConfigs[1].TuicRelay || p.GetConfig().InboundConfigs[1].TuicInboundID != 42 {
 +		t.Fatal("clone reformatted RawMessages or dropped panel-only inbound metadata")
 +	}
 +	frozen, _ := os.ReadFile(path)
++	if postHash != fmt.Sprintf("%x", sha256.Sum256(frozen)) {
++		t.Fatal("owner hash differs from the exact persisted payload")
++	}
 +	desired.RouterConfig[0] = 'X'
 +	desired.InboundConfigs[1].Settings[0] = 'X'
 +	after, _ := os.ReadFile(path)
 +	if string(frozen) != string(after) || p.GetConfig().RouterConfig[0] == 'X' || p.GetConfig().InboundConfigs[1].Settings[0] == 'X' {
 +		t.Fatal("persisted config aliases caller")
++	}
++}
++
++func TestPersistExecutionConfigUsesMemoryDesiredWithoutAValidStartupDisk(t *testing.T) {
++	for _, stale := range []bool{false, true} {
++		t.Run(fmt.Sprintf("stale=%t", stale), func(t *testing.T) {
++			path := filepath.Join(t.TempDir(), "config.json")
++			if stale {
++				if err := os.WriteFile(path, []byte("stale non-JSON disk is not memory desired"), 0600); err != nil {
++					t.Fatal(err)
++				}
++			}
++			var desired Config
++			if err := json.Unmarshal(executionJSON(executionFixture(t).config), &desired); err != nil {
++				t.Fatal(err)
++			}
++			p := NewTestProcess(&desired, path)
++			hash, err := p.PersistExecutionConfig(p.CloneConfig())
++			if err != nil {
++				t.Fatal(err)
++			}
++			data, err := os.ReadFile(path)
++			if err != nil || hash != fmt.Sprintf("%x", sha256.Sum256(data)) {
++				t.Fatal("missing/stale disk contaminated owner postimage")
++			}
++			if !p.GetConfig().Equals(&desired) {
++				t.Fatal("memory desired replaced by disk contents")
++			}
++		})
 +	}
 +}
 +
@@ -3904,10 +3953,14 @@ index 00000000..2f0f8db8
 +	}
 +}
 diff --git a/internal/xray/process.go b/internal/xray/process.go
-index a9d8c9ce..c8d8a9e0 100644
+index a9d8c9ce..a45c7340 100644
 --- a/internal/xray/process.go
 +++ b/internal/xray/process.go
-@@ -6,6 +6,7 @@ import (
+@@ -3,9 +3,11 @@ package xray
+ import (
+ 	"bytes"
+ 	"context"
++	"crypto/sha256"
  	"encoding/json"
  	"errors"
  	"fmt"
@@ -3915,7 +3968,7 @@ index a9d8c9ce..c8d8a9e0 100644
  	"os"
  	"os/exec"
  	"path/filepath"
-@@ -132,9 +133,12 @@ type process struct {
+@@ -132,9 +134,12 @@ type process struct {
  	// GetAPIPort/Stop from other goroutines (status endpoint, check-xray-running
  	// and traffic jobs). Snapshot under the lock, then do any blocking syscall
  	// (Wait/Signal/Kill) on the local copy without holding it.
@@ -3931,7 +3984,7 @@ index a9d8c9ce..c8d8a9e0 100644
  
  	version string
  	apiPort int
-@@ -312,6 +316,12 @@ func (p *Process) GetConfig() *Config {
+@@ -312,6 +317,12 @@ func (p *Process) GetConfig() *Config {
  	return p.config
  }
  
@@ -3944,7 +3997,7 @@ index a9d8c9ce..c8d8a9e0 100644
  // SetConfig replaces the stored configuration snapshot after the running
  // process has been reconciled with it through the gRPC API (hot apply), so
  // later change detection compares against what is actually running.
-@@ -334,7 +344,37 @@ func (p *Process) PersistConfig() error {
+@@ -334,7 +345,38 @@ func (p *Process) PersistConfig() error {
  	if path == "" {
  		path = GetConfigPath()
  	}
@@ -3959,15 +4012,16 @@ index a9d8c9ce..c8d8a9e0 100644
 +// PersistExecutionConfig is for the existing owner-held persistence callback.
 +// Unlike PersistConfig it must not invalidate/reenter the execution owner on
 +// error: mutate already invalidated it before invoking the native operation.
-+// Only a successful atomic write advances the detached desired snapshot.
-+func (p *Process) PersistExecutionConfig(config *Config) error {
++// Only a successful atomic write advances the detached desired snapshot and
++// returns the raw SHA-256 of that same MarshalIndent payload.
++func (p *Process) PersistExecutionConfig(config *Config) (string, error) {
 +	if config == nil {
-+		return common.NewError("execution desired config required")
++		return "", common.NewError("execution desired config required")
 +	}
 +	frozen := config.Clone()
 +	data, err := json.MarshalIndent(frozen, "", "  ")
 +	if err != nil {
-+		return err
++		return "", err
 +	}
 +	p.mu.RLock()
 +	path := p.configPath
@@ -3976,14 +4030,14 @@ index a9d8c9ce..c8d8a9e0 100644
 +		path = GetConfigPath()
 +	}
 +	if err := writeFileAtomic(path, data, 0o600); err != nil {
-+		return err
++		return "", err
 +	}
 +	p.SetConfig(frozen)
-+	return nil
++	return fmt.Sprintf("%x", sha256.Sum256(data)), nil
  }
  
  // GetOnlineClients returns the union of locally-online clients and
-@@ -613,9 +653,14 @@ func (p *process) refreshVersion() {
+@@ -613,9 +655,14 @@ func (p *process) refreshVersion() {
  
  // Start launches the Xray process with the current configuration.
  func (p *process) Start() (err error) {
@@ -3998,7 +4052,7 @@ index a9d8c9ce..c8d8a9e0 100644
  
  	defer func() {
  		if err != nil {
-@@ -712,6 +757,7 @@ func (p *process) startCommand(cmd *exec.Cmd) error {
+@@ -712,6 +759,7 @@ func (p *process) startCommand(cmd *exec.Cmd) error {
  	p.done = make(chan struct{})
  	p.exitErr = nil
  	done := p.done
@@ -4006,7 +4060,7 @@ index a9d8c9ce..c8d8a9e0 100644
  	p.mu.Unlock()
  	p.intentionalStop.Store(false)
  
-@@ -725,7 +771,7 @@ func (p *process) startCommand(cmd *exec.Cmd) error {
+@@ -725,7 +773,7 @@ func (p *process) startCommand(cmd *exec.Cmd) error {
  
  	attachChildLifetime(cmd)
  
@@ -4015,7 +4069,7 @@ index a9d8c9ce..c8d8a9e0 100644
  	return nil
  }
  
-@@ -735,10 +781,13 @@ func (p *process) setExitErr(err error) {
+@@ -735,10 +783,13 @@ func (p *process) setExitErr(err error) {
  	p.mu.Unlock()
  }
  
@@ -4030,7 +4084,7 @@ index a9d8c9ce..c8d8a9e0 100644
  	p.logWriter.Flush()
  	if err == nil || p.intentionalStop.Load() {
  		return
-@@ -762,6 +811,20 @@ func (p *process) waitForCommand(cmd *exec.Cmd, done chan struct{}) {
+@@ -762,6 +813,20 @@ func (p *process) waitForCommand(cmd *exec.Cmd, done chan struct{}) {
  
  // Stop terminates the running Xray process.
  func (p *process) Stop() error {
