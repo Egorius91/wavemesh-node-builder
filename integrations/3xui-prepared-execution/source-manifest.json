@@ -395,12 +395,12 @@
     },
     "private_journal_reader": {
       "status": "PASS_PORTABLE_SYNTHETIC_NATIVE_NOT_RUN",
-      "builder_source": "2182e9e5a6abb01e4ae708a03b2457104aa37111",
+      "builder_source": "09ce5f6e40eae3caf51cb2342dafb4da6d0c78c7",
       "source_ack": 888,
       "reader_ack": 894,
       "portable_reader_retention_cases": 8,
       "existing_readonly_compatibility_cases": 28,
-      "ordinary_transaction_script": "PASS",
+      "ordinary_transaction_script": "PASS_FINAL_CURRENT",
       "skip": 0,
       "source_summary": {
         "file": ".tools\\pr4-journal-completion-20261117\\guards-summary.json",
@@ -416,7 +416,13 @@
       },
       "native_Bash_fsync": "NOT_RUN",
       "positive_completion_writer": "NOT_IMPLEMENTED_YET",
-      "limits": "Pure historical validator and retention only; synthetic owner flags and artifact fixture are not actual producer proof. Shared runtime write and transport remain closed."
+      "limits": "Pure historical validator and retention only; synthetic owner flags and artifact fixture are not actual producer proof. Shared runtime write and transport remain closed.",
+      "frozen_current_unittest_cases": 37,
+      "frozen_summary": {
+        "file": ".tools\\pr4-journal-completion-20261117\\reader-frozen37.json",
+        "sha256": "c0d3417e9fa036f35801d4242f41911d156be8cab658427b3ddb0947cdc9e74c"
+      },
+      "earlier_portable_reader_retention_cases": 8
     }
   },
   "remaining_gates": [
@@ -439,9 +445,9 @@
     "tests/fixtures/prepared-execution-go-json-vectors.json": "de1a7bdb8b57af0d0ceeffc24969a36136fe10e1aeca2ed99cea4b5944f98d3b"
   },
   "private_journal_reader_source_sha256": {
-    "scripts/lib/prepared_journal.py": "1f73c859622ec678e286c27f3f1c6882372c78151add249d7b18ff5c75dd9bd3",
+    "scripts/lib/prepared_journal.py": "af9da144c246faa4d9b683309eee2502402a39877522be896c8bd5839ab5b285",
     "scripts/lib/transaction_state.py": "288090a3cba373f6d48504b4ac3b6ec591280525f2c4ce8cbfd9484322b1a5d3",
     "scripts/lib/transaction.sh": "d23de93860123516520ee0f7feff382fb0a545c23d7d41f3e349a84bcac6d534",
-    "tests/unit/test_prepared_journal.py": "dd59819cab161ecc5738495536ca2a0a8864d0b0733c8746c167bbbf4fb9c0b9"
+    "tests/unit/test_prepared_journal.py": "088cb38aa7d050ad08183db372dd2263cb4f236a01ce46a4c41e68535da0bc58"
   }
 }
