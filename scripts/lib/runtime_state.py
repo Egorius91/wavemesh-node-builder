@@ -244,7 +244,11 @@ def evaluate(config, previous, inbounds_response, template, nginx_text, subscrip
     rules = template.get("routing", {}).get("rules", [])
     route_probes = {item.get("route_id"): item for item in probes.get("routes", [])}
     old_exits = (previous or {}).get("exits", {})
-    result = {"observed_at": observed_at, "node_status": "healthy", "xui": probes.get("control", {}), "exits": {}, "routes": {}}
+    # Like sync_runtime, update only this observer's fields. The prepared route
+    # controller owns its own namespace and sample/epoch; a legacy health tick
+    # must neither erase that state nor relabel it as a fresh observation.
+    result = copy.deepcopy(previous or {})
+    result.update({"observed_at": observed_at, "node_status": "healthy", "xui": probes.get("control", {}), "exits": {}, "routes": {}})
     if not all(value in (True, "active", "reachable", "running", "valid", "loopback") for value in result["xui"].values()):
         result["node_status"] = "unhealthy"
     subscriptions = Path(subscription_dir)
