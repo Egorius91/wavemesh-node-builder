@@ -190,8 +190,9 @@ def placement_public_profiles(config, client_uuid, response):
     if config.get("node", {}).get("role") not in {"entry", "standalone"} or backend(config) != "xui-native":
         refuse()
     try:
-        if str(uuid.UUID(client_uuid)) != client_uuid:
+        if not isinstance(client_uuid, str) or str(uuid.UUID(client_uuid)) != client_uuid.lower():
             refuse()
+        client_uuid = client_uuid.lower()
     except (ValueError, TypeError, AttributeError):
         refuse()
     domain = config.get("server", {}).get("domain")
@@ -263,12 +264,15 @@ def placement_public_profiles(config, client_uuid, response):
                     re.search(r"%(?![0-9a-fA-F]{2})", line)):
                 refuse()
             parsed = urlsplit(line)
-            if (parsed.scheme != "vless" or parsed.username != client_uuid or parsed.password is not None
+            if (parsed.scheme != "vless" or not parsed.username or parsed.username.lower() != client_uuid or parsed.password is not None
                     or parsed.path or parsed.hostname.lower() != domain or parsed.port != 443):
                 refuse()
             pairs = parse_qsl(parsed.query, keep_blank_values=True, strict_parsing=True,
                               encoding="utf-8", errors="strict", max_num_fields=16)
             params = dict(pairs)
+            for name in ("host", "sni"):
+                if name in params and params[name].lower() == domain:
+                    params[name] = domain
             if (len(pairs) != len(params) or set(params) - allowed or
                     any(any(ord(c) < 32 or ord(c) == 127 for c in v) for v in params.values()) or
                     any(params.get(k) != v for k, v in {"encryption": "none", "security": "tls",

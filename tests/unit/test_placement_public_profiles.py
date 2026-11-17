@@ -54,6 +54,14 @@ class PlacementPublicProfiles(unittest.TestCase):
         self.assertEqual(actual["alpn"], ["h2,http/1.1"])
         self.assertEqual(actual["extra"], ['{"mode":"stream-one"}'])
 
+    def test_dns_and_uuid_case_normalize_without_rotating_the_identity(self):
+        cfg = configuration(); cfg["server"]["domain"] = DOMAIN.upper()
+        identifier = "a164f2a3-8809-4b3d-bc91-dba91f038074"
+        native = link(host=DOMAIN.upper(), sni=DOMAIN.upper()).replace(IDENTITY, identifier.upper()).replace("@" + DOMAIN, "@" + DOMAIN.upper())
+        output = placement_public_profiles(cfg, identifier.upper(), response(native))[0]
+        self.assertEqual(urlsplit(output).username, identifier)
+        self.assertEqual(parse_qs(urlsplit(output).query)["sni"], [DOMAIN])
+
     def test_every_uuid_host_port_and_authority_is_bound(self):
         for bad in (link().replace(IDENTITY, "22222222-2222-4222-8222-222222222222"),
                     link().replace(f"@{DOMAIN}:443", "@foreign.example.com:443"),
