@@ -4,6 +4,7 @@ Run as root in a fresh network namespace of an admitted disposable Linux host.
 The namespace has only loopback; its synthetic CA is trusted only by these tests.
 """
 import contextlib
+from datetime import datetime, timedelta, timezone
 import hashlib
 import ipaddress
 import json
@@ -57,15 +58,41 @@ class NativeTLS(unittest.TestCase):
         cls.ca = cls.root/'ca.pem'
         run('openssl', 'req', '-x509', '-newkey', 'rsa:2048', '-nodes', '-days', '1',
             '-subj', '/CN=synthetic-public-entry-test-ca', '-keyout', str(cls.root/'ca.key'), '-out', str(cls.ca))
+        # Reuse the existing expired-identity fixture's explicit validity dates.
+        # New OpenSSL rejects x509 -days -1. Keep the CA older than either leaf.
+        (cls.root/'index').touch(); (cls.root/'serial').write_text('1000\n')
+        (cls.root/'issued').mkdir()
+        ca_config = cls.root/'ca.cnf'
+        ca_config.write_text('\n'.join([
+            '[ca]', 'default_ca=fixture', '[fixture]', 'default_md=sha256', 'default_days=1',
+            'database='+str(cls.root/'index'), 'serial='+str(cls.root/'serial'),
+            'new_certs_dir='+str(cls.root/'issued'), 'private_key='+str(cls.root/'ca.key'),
+            'certificate='+str(cls.ca), 'policy=identity', 'unique_subject=no',
+            '[identity]', 'commonName=supplied',
+            '[ca_ext]', 'basicConstraints=critical,CA:TRUE', 'keyUsage=critical,keyCertSign,cRLSign',
+            '[leaf_ext]', 'basicConstraints=critical,CA:FALSE',
+            'keyUsage=digitalSignature,keyEncipherment', 'extendedKeyUsage=serverAuth',
+            'subjectAltName=DNS:'+DOMAIN, '']))
+        run('openssl', 'req', '-new', '-key', str(cls.root/'ca.key'),
+            '-subj', '/CN=synthetic-public-entry-test-ca', '-out', str(cls.root/'ca.csr'))
+        now = datetime.now(timezone.utc)
+        date = lambda days: (now+timedelta(days=days)).strftime('%y%m%d%H%M%SZ')
+        historical_ca = cls.root/'historical-ca.pem'
+        run('openssl', 'ca', '-batch', '-notext', '-selfsign', '-config', str(ca_config),
+            '-in', str(cls.root/'ca.csr'), '-extensions', 'ca_ext',
+            '-startdate', date(-3), '-enddate', date(2), '-out', str(historical_ca))
+        cls.ca.write_bytes(historical_ca.read_bytes())
         run('openssl', 'req', '-newkey', 'rsa:2048', '-nodes', '-subj', '/CN='+DOMAIN,
             '-keyout', str(cls.root/'leaf.key'), '-out', str(cls.root/'leaf.csr'))
         (cls.root/'leaf.ext').write_text('subjectAltName=DNS:'+DOMAIN+'\n'
                                        'basicConstraints=CA:FALSE\nkeyUsage=digitalSignature,keyEncipherment\n'
                                        'extendedKeyUsage=serverAuth\n')
-        for name, days in [('leaf.pem', '1'), ('expired.pem', '-1')]:
-            run('openssl', 'x509', '-req', '-in', str(cls.root/'leaf.csr'), '-CA', str(cls.ca),
-                '-CAkey', str(cls.root/'ca.key'), '-set_serial', '2' if days == '1' else '3',
-                '-days', days, '-extfile', str(cls.root/'leaf.ext'), '-out', str(cls.root/name))
+        run('openssl', 'x509', '-req', '-in', str(cls.root/'leaf.csr'), '-CA', str(cls.ca),
+            '-CAkey', str(cls.root/'ca.key'), '-set_serial', '2', '-days', '1',
+            '-extfile', str(cls.root/'leaf.ext'), '-out', str(cls.root/'leaf.pem'))
+        run('openssl', 'ca', '-batch', '-notext', '-config', str(ca_config),
+            '-in', str(cls.root/'leaf.csr'), '-extensions', 'leaf_ext',
+            '-startdate', date(-2), '-enddate', date(-1), '-out', str(cls.root/'expired.pem'))
         cls.empty_roots = cls.root/'empty-ca-directory'; cls.empty_roots.mkdir()
         cls.ca_environment = {'SSL_CERT_FILE': str(cls.ca), 'SSL_CERT_DIR': str(cls.empty_roots)}
 
