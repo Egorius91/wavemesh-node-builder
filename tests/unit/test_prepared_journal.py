@@ -13,14 +13,14 @@ import prepared_journal as reader
 import transaction_state as journal
 
 
-def completed_fixture(root):
+def completed_fixture(root, process_before=None):
     directory = journal.begin(root, "auto-prepared-reconcile", 123)
     state = {"mutation_epoch": "0", "sample_at": 100, "selected": "unit", "binding": "b"*64,
-             "native_generation": "00000000-0000-4000-8000-000000000002", "effective_config_sha256": "a"*64}
+             "native_generation": "00000000-0000-4000-8000-000000000002", "effective_config_sha256": "a"*64,
+             "engine_instance": {"boot_id":"00000000-0000-4000-8000-000000000001", "pid":123,"start_ticks":"100"}}
     candidates = {"config": {"node": {"role": "entry"}},
                   "runtime": {"prepared_routes": {"route-unit": state}, "root_revision": 1},
-                  "template": {"routing": {"sentinel": "template"}},
-                  "process": {"routing": {"sentinel": "process"}}}
+                  "template": {"routing": {"sentinel": "template", "rules": [{"type":"field","ruleTag":"wm-rule-unit","inboundTag":["wm-route-unit"],"outboundTag":"wm-exit-path-unit"}]}}}
     for kind, filename in reader.ARTIFACTS.items():
         journal.atomic_json(directory / filename, candidates[kind])
     intent = {"schema_version": 1, "transaction_id": directory.name, "route_id": "route-unit", "binding": "b"*64,
@@ -29,12 +29,14 @@ def completed_fixture(root):
                            "before_sha256": "a"*64, "after_sha256": "c"*64, "normalized_sha256": "d"*64,
                            "rule_tag": "wm-rule-unit", "inbound_tag": "wm-route-unit", "target": "wm-exit-path-unit"},
               "files": {kind: str((root.parent / kind).absolute()) for kind in ("config", "runtime", "database", "process")},
-              "before": {"config": "e"*64, "runtime": None, "owned": None, "template": "f"*64, "process": "a"*64},
+              "before": {"config": "e"*64, "runtime": None, "owned": None, "template": "f"*64, "process": process_before},
               "candidate": {kind: reader.sha((directory / filename).read_bytes()) for kind, filename in reader.ARTIFACTS.items()}}
+    process = {"routing": {"rules": [{"type":"field","ruleTag":"wm-rule-unit", "inboundTag":["wm-route-unit"],"outboundTag":"wm-exit-path-unit"}], "sentinel":"process-owned"}, "inbounds":[{"tag":"generated-sentinel"}]}
+    journal.atomic_json(directory / reader.PROCESS_POST, process)
     marker = directory / "prepared.apply.completed.json"
     journal.atomic_json(marker, intent)
     reply = {"schema_version": 1, "transaction_id": directory.name, "intent_sha256": reader.sha(marker.read_bytes()),
-             "outcome": {key: key != "NoOp" for key in reader.OUTCOME}}
+             "outcome": {**{key: key != "NoOp" for key in reader.OUTCOME}, "ProcessConfigSHA256": reader.sha((directory / reader.PROCESS_POST).read_bytes())}}
     journal.atomic_json(directory / "prepared.owner-result.json", reply)
     post = copy.deepcopy(candidates["runtime"])
     post["root_revision"] = 2
@@ -44,7 +46,7 @@ def completed_fixture(root):
              "intent": intent, "owner_result_sha256": reader.sha((directory / "prepared.owner-result.json").read_bytes()),
              "selector_transition": reader.expected_transition(intent),
              "local_post": {"config": intent["candidate"]["config"], "runtime": reader.sha((directory / "prepared.runtime.post.json").read_bytes()),
-                            "template": reader.digest(candidates["template"]), "process": reader.digest(candidates["process"])}}
+                            "template": reader.digest(candidates["template"]), "process": reader.sha((directory / reader.PROCESS_POST).read_bytes())}}
     journal.atomic_json(directory / "result.json", {"status": "committed", "finished_at": "2026-11-17T13:00:00Z", "prepared_commit": proof})
     return directory
 
@@ -90,7 +92,7 @@ class PreparedJournal(unittest.TestCase):
             self.assertEqual(reader.prepared_status(self.root / "redirected"), "active")
 
     def test_foreign_stale_duplicate_or_contradictory_proofs_stay_active(self):
-        for change in ("foreign", "lost-reply", "partial-owner", "stale-epoch", "wrong-after", "wrong-intent", "boolean-copy", "duplicate-key", "missing-artifact", "changed-candidate", "changed-runtime-post", "missing-origin", "missing-origin-bad-result"):
+        for change in ("foreign", "lost-reply", "partial-owner", "stale-epoch", "wrong-after", "wrong-intent", "boolean-copy", "duplicate-key", "missing-artifact", "changed-candidate", "changed-runtime-post", "missing-origin", "missing-origin-bad-result", "missing-process-hash", "wrong-process-hash", "missing-process-post"):
             with self.subTest(change=change):
                 root = self.root / change
                 directory = completed_fixture(root)
@@ -113,12 +115,20 @@ class PreparedJournal(unittest.TestCase):
                 elif change == "boolean-copy":
                     result["prepared_commit"]["intent"]["schema_version"] = True
                 elif change == "missing-artifact":
-                    (directory / "prepared.process.json").unlink()
+                    (directory / "prepared.config.json").unlink()
                 elif change == "changed-candidate":
                     journal.atomic_json(directory / "prepared.xray.json", {"different": True})
+                elif change in ("missing-process-hash", "wrong-process-hash"):
+                    reply = json.loads((directory / "prepared.owner-result.json").read_text())
+                    if change == "missing-process-hash": del reply["outcome"]["ProcessConfigSHA256"]
+                    else: reply["outcome"]["ProcessConfigSHA256"] = "e"*64
+                    journal.atomic_json(directory / "prepared.owner-result.json", reply)
+                    result["prepared_commit"]["owner_result_sha256"] = reader.sha((directory / "prepared.owner-result.json").read_bytes())
+                elif change == "missing-process-post":
+                    (directory / reader.PROCESS_POST).unlink()
                 elif change == "changed-runtime-post":
                     journal.atomic_json(directory / "prepared.runtime.post.json", {"prepared_routes": {}})
-                elif change in ("missing-origin", "missing-origin-bad-result"):
+                elif change in ("missing-origin", "missing-origin-bad-result", "missing-process-hash", "wrong-process-hash", "missing-process-post"):
                     (directory / "prepared.apply.completed.json").unlink()
                 journal.atomic_json(directory / "result.json", result)
                 if change == "missing-origin-bad-result":

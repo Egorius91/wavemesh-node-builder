@@ -14,7 +14,8 @@ import uuid
 LIMIT = 4 << 20
 HASH = re.compile(r"[0-9a-f]{64}\Z")
 ARTIFACTS = {"config": "prepared.config.json", "runtime": "prepared.runtime.json",
-             "template": "prepared.xray.json", "process": "prepared.process.json"}
+             "template": "prepared.xray.json"}
+PROCESS_POST = "prepared.process.post.json"
 OUTCOME = {"NativeAttempted", "NativeSucceeded", "TemplatePersisted", "ConfigPersisted", "KnownCommit", "NoOp"}
 
 
@@ -112,7 +113,7 @@ def validate_intent(intent, transaction_id):
         raise ValueError("distinct storage paths required")
     _shape(intent["before"], ("config", "runtime", "owned", "template", "process"))
     for key, value in intent["before"].items():
-        if value is not None or key not in ("runtime", "owned"):
+        if value is not None or key not in ("runtime", "owned", "process"):
             _hash(value)
     _shape(intent["candidate"], ARTIFACTS)
     for value in intent["candidate"].values():
@@ -131,15 +132,28 @@ def validate_owner_result(value, transaction_id, intent_sha256):
     _shape(value, ("schema_version", "transaction_id", "intent_sha256", "outcome"))
     if type(value["schema_version"]) is not int or value["schema_version"] != 1 or value["transaction_id"] != transaction_id or value["intent_sha256"] != intent_sha256:
         raise ValueError("foreign owner result")
-    _shape(value["outcome"], OUTCOME)
-    if any(type(flag) is not bool for flag in value["outcome"].values()):
+    _shape(value["outcome"], OUTCOME | {"ProcessConfigSHA256"})
+    if any(type(value["outcome"][key]) is not bool for key in OUTCOME):
         raise ValueError("exact owner outcome required")
+    process_hash = value["outcome"]["ProcessConfigSHA256"]
+    if not isinstance(process_hash, str):
+        raise ValueError("owner process hash required")
+    if process_hash:
+        _hash(process_hash)
     return value
 
 
 def known_owner_result(value):
     outcome = value["outcome"]
-    return outcome["NoOp"] is False and all(outcome[key] is True for key in OUTCOME - {"NoOp"})
+    return (outcome["NoOp"] is False and bool(outcome["ProcessConfigSHA256"])
+            and all(outcome[key] is True for key in OUTCOME - {"NoOp"}))
+
+
+def selector_matches(document, expected):
+    matches = [rule for rule in document.get("routing", {}).get("rules", [])
+               if isinstance(rule, dict) and rule.get("ruleTag") == expected["rule_tag"]]
+    return matches == [{"type": "field", "ruleTag": expected["rule_tag"],
+                        "inboundTag": [expected["inbound_tag"]], "outboundTag": expected["target"]}]
 
 
 def prepared_status(directory):
@@ -187,15 +201,20 @@ def prepared_status(directory):
             _hash(value)
         runtime_post = read_private(directory / "prepared.runtime.post.json")
         post = decode(runtime_post)
+        process_raw = read_private(directory / PROCESS_POST)
+        process = decode(process_raw)
         route = intent["route_id"]
         state = candidates["runtime"].get("prepared_routes", {}).get(route)
         if (not isinstance(state, dict) or state.get("binding") != intent["binding"]
                 or state.get("native_generation") != intent["expected"]["generation"]
                 or state.get("mutation_epoch") != intent["expected"]["epoch"]
-                or state.get("effective_config_sha256") != intent["expected"]["before_sha256"]):
+                or state.get("effective_config_sha256") != intent["expected"]["before_sha256"]
+                or digest(state.get("engine_instance")) != digest(intent["expected"]["engine_instance"])):
             return "active"
         if (proof["local_post"]["config"] != intent["candidate"]["config"] or proof["local_post"]["runtime"] != sha(runtime_post)
-                or proof["local_post"]["template"] != digest(candidates["template"]) or proof["local_post"]["process"] != digest(candidates["process"])
+                or proof["local_post"]["template"] != digest(candidates["template"])
+                or proof["local_post"]["process"] != sha(process_raw) or sha(process_raw) != reply["outcome"]["ProcessConfigSHA256"]
+                or not selector_matches(process, intent["expected"]) or not selector_matches(candidates["template"], intent["expected"])
                 or post.get("prepared_routes", {}).get(route) != state):
             return "active"
         return "committed"

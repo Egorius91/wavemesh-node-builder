@@ -57,13 +57,21 @@ def _prepared_completed(path):
 
 
 def atomic_json(path, value):
+    # Preserve the existing text-file byte format on each platform.
+    data = (json.dumps(value, indent=2, sort_keys=True) + "\n").replace("\n", os.linesep).encode("utf-8")
+    atomic_bytes(path, data)
+
+
+def atomic_bytes(path, data):
+    """Same durable journal write for an exact owner-produced private payload."""
+    if not isinstance(data, bytes):
+        raise TypeError("atomic bytes payload required")
     path = Path(path)
     _mkdirs(path.parent)
     fd, temporary = tempfile.mkstemp(prefix=f".{path.name}.", dir=path.parent)
     try:
-        with os.fdopen(fd, "w", encoding="utf-8") as stream:
-            json.dump(value, stream, indent=2, sort_keys=True)
-            stream.write("\n")
+        with os.fdopen(fd, "wb") as stream:
+            stream.write(data)
             stream.flush()
             os.fsync(stream.fileno())
         os.chmod(temporary, 0o600)
