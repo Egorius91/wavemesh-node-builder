@@ -18,9 +18,40 @@ def utc_now():
     return datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
 
 
+def _sync_directory(path):
+    # Windows cannot open/fsync directories. POSIX journal durability must be
+    # checked on native Linux; a failed barrier must reach the dispatch caller.
+    if os.name == "nt":
+        return
+    fd = os.open(path, os.O_RDONLY | os.O_DIRECTORY)
+    try:
+        os.fsync(fd)
+    finally:
+        os.close(fd)
+
+
+def _mkdirs(path):
+    path = Path(path)
+    missing = []
+    ancestor = path
+    while not ancestor.exists():
+        missing.append(ancestor)
+        ancestor = ancestor.parent
+    path.mkdir(parents=True, exist_ok=True)
+    # Persist each new directory entry, including a new journal root, before
+    # writing a record that could authorize a later native effect.
+    for directory in reversed(missing):
+        _sync_directory(directory.parent)
+
+
+def _prepared_pending(path):
+    # A broken symlink or malformed marker is still unresolved dispatch debt.
+    return os.path.lexists(Path(path) / "prepared.apply.pending.json")
+
+
 def atomic_json(path, value):
     path = Path(path)
-    path.parent.mkdir(parents=True, exist_ok=True)
+    _mkdirs(path.parent)
     fd, temporary = tempfile.mkstemp(prefix=f".{path.name}.", dir=path.parent)
     try:
         with os.fdopen(fd, "w", encoding="utf-8") as stream:
@@ -30,6 +61,7 @@ def atomic_json(path, value):
             os.fsync(stream.fileno())
         os.chmod(temporary, 0o600)
         os.replace(temporary, path)
+        _sync_directory(path.parent)
     finally:
         if os.path.exists(temporary):
             os.unlink(temporary)
@@ -42,16 +74,23 @@ def records(root):
         return result
     for directory in sorted((item for item in root.iterdir() if item.is_dir()), reverse=True):
         plan_path = directory / "plan.json"
-        if not plan_path.exists():
+        pending = _prepared_pending(directory)
+        if not plan_path.exists() and not pending:
             continue
         try:
             plan = json.loads(plan_path.read_text(encoding="utf-8"))
+            if not isinstance(plan, dict):
+                plan = {}
         except (OSError, ValueError):
             plan = {}
         try:
             outcome = json.loads((directory / "result.json").read_text(encoding="utf-8"))
+            if not isinstance(outcome, dict):
+                outcome = {}
         except (OSError, ValueError):
             outcome = {"status": "in_progress"}
+        if pending:
+            outcome = {"status": "rollback_failed", "message": "Prepared update outcome UNKNOWN; retain dispatch evidence"}
         result.append({
             "id": directory.name,
             "operation": str(plan.get("operation") or "unknown")[:80],
@@ -64,7 +103,7 @@ def records(root):
 
 
 def incomplete(root):
-    return [item for item in records(root) if item["status"] in ACTIVE]
+    return [item for item in records(root) if item["status"] not in TERMINAL]
 
 
 def resolve(root, transaction_id, active_only=False):
@@ -72,11 +111,11 @@ def resolve(root, transaction_id, active_only=False):
         raise ValueError("invalid transaction id")
     root = Path(root).resolve()
     path = (root / transaction_id).resolve()
-    if path.parent != root or not path.is_dir() or not (path / "plan.json").is_file():
+    if path.parent != root or not path.is_dir() or not ((path / "plan.json").is_file() or _prepared_pending(path)):
         raise ValueError("transaction not found")
     if active_only:
         item = next((record for record in records(root) if record["id"] == transaction_id), None)
-        if not item or item["status"] not in ACTIVE:
+        if not item or item["status"] in TERMINAL:
             raise ValueError("transaction is not recoverable")
     return path
 
@@ -86,11 +125,12 @@ def begin(root, operation, pid):
     if pending:
         raise RuntimeError(f"incomplete transaction: {pending[0]['id']}")
     root = Path(root)
-    root.mkdir(parents=True, exist_ok=True)
+    _mkdirs(root)
     os.chmod(root, 0o700)
     transaction_id = f"{datetime.now(timezone.utc).strftime('%Y%m%dT%H%M%SZ')}-{secrets.token_hex(3)}"
     path = root / transaction_id
     path.mkdir(mode=0o700)
+    _sync_directory(root)
     atomic_json(path / "plan.json", {"schema_version": 1, "operation": operation[:80], "pid": int(pid), "started_at": utc_now()})
     atomic_json(path / "result.json", {"status": "in_progress"})
     return path
@@ -99,6 +139,8 @@ def begin(root, operation, pid):
 def mark(path, status, message=""):
     if status not in ACTIVE | TERMINAL:
         raise ValueError("unsupported transaction status")
+    if status in TERMINAL and _prepared_pending(path):
+        raise RuntimeError("Prepared update outcome UNKNOWN; terminal status is forbidden")
     value = {"status": status}
     if status in TERMINAL or status == "rollback_failed":
         value["finished_at"] = utc_now()
@@ -110,7 +152,9 @@ def mark(path, status, message=""):
 def prune(root, keep):
     terminal = [item for item in records(root) if item["status"] in TERMINAL]
     for item in terminal[max(0, keep):]:
-        shutil.rmtree(resolve(root, item["id"]))
+        path = resolve(root, item["id"])
+        if not _prepared_pending(path):
+            shutil.rmtree(path)
 
 
 def prune_backups(root, keep):
