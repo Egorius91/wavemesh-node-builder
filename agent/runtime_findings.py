@@ -160,13 +160,16 @@ class ReadOnlyPanel(PanelClient):
     def __init__(self, config: dict[str, Any]):
         super().__init__(config, timeout=3)
 
-    def call(self, method: str, path: str, payload=None):
+    def _allowed_path(self, path: str) -> bool:
         lookup = path.removeprefix("/panel/api/clients/get/") if path.startswith("/panel/api/clients/get/") else ""
         decoded = parse.unquote(lookup)
-        if method != "GET" or payload is not None or not (
+        return bool(
             path in {"/panel/api/clients/list", "/panel/api/inbounds/list"}
             or (EMAIL.fullmatch(decoded) and parse.quote(decoded, safe="") == lookup)
-        ):
+        )
+
+    def call(self, method: str, path: str, payload=None):
+        if method != "GET" or payload is not None or not self._allowed_path(path):
             raise FindingError("PANEL_OPERATION_FORBIDDEN")
         class NoRedirect(request.HTTPRedirectHandler):
             def redirect_request(self, *_args, **_kwargs):
