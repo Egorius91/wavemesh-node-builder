@@ -70,6 +70,33 @@ class PreparedJournal(unittest.TestCase):
         with self.assertRaises(RuntimeError):
             journal.admit(self.root)
 
+    def test_orphan_owner_facts_keep_debt_without_reading_payload(self):
+        for name in ("prepared.owner-request.json", "prepared.owner-result.json"):
+            for status in ("committed", "rolled_back"):
+                for kind in (("file", "dangling") if os.name == "posix" else ("file",)):
+                    with self.subTest(name=name, status=status, kind=kind):
+                        root = self.root / name / status / kind
+                        directory = journal.begin(root, "auto-prepared-reconcile", 123)
+                        journal.mark(directory, status)
+                        if kind == "file":
+                            journal.atomic_json(directory / name, {})
+                        else:
+                            (directory / name).symlink_to(directory / "absent")
+                        self.assertEqual(reader.prepared_status(directory), "active")
+                        with mock.patch.object(reader, "read_private", side_effect=AssertionError("orphan payload read")):
+                            self.assertEqual(reader.prepared_status(directory), "active")
+                            self.assertEqual(journal.records(root)[0]["status"], "rollback_failed")
+                            with self.assertRaises(RuntimeError):
+                                journal.admit(root)
+                            journal.prune(root, 0)
+                        self.assertTrue(directory.is_dir())
+
+    def test_verified_history_remains_valid_with_owner_request_fact(self):
+        directory = completed_fixture(self.root)
+        journal.atomic_json(directory / "prepared.owner-request.json", {})
+        self.assertEqual(reader.prepared_status(directory), "committed")
+        self.assertEqual(journal.incomplete(self.root), [])
+
     def test_valid_history_is_read_only_and_never_promotes_samples(self):
         directory = completed_fixture(self.root)
         before = {p.name: p.read_bytes() for p in directory.iterdir() if p.is_file()}

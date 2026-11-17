@@ -1,7 +1,7 @@
 {
   "schema": 1,
-  "status": "PRIVATE_OWNER_PROCESS_POSTIMAGE_AND_JOURNAL_PORTABLE_PASS_NATIVE_OPEN",
-  "at_utc": "2026-11-17T14:42:48.986100+00:00",
+  "status": "PRIVATE_OWNER_ADAPTER943_SOURCE_PASS_UNWIRED_NATIVE_OPEN",
+  "at_utc": "2026-11-17T16:07:38.991506+00:00",
   "upstream": {
     "repository": "https://github.com/MHSanaei/3x-ui",
     "tag": "v3.11.0",
@@ -9,12 +9,15 @@
     "license": "GPL-3.0",
     "license_sha256": "3972dc9744f6499f0f9b2dbf76696f2ae7ad8af9b23dde66d6af86c9dfb36986"
   },
-  "producer_commit": "0d0b7617b4b994747983bc42f9acb2040b6a4042",
+  "producer_commit": "8923d82aa33dda5cfe982846c806260f95b6a1f9",
   "patch": {
     "file": "producer.patch",
-    "sha256": "bd220e4403968cf0d39bf2d4887af322564663df288e87d673f36287432d3748"
+    "sha256": "a639be66a48e79474900535adbf710eed8dd88d462d93c11c9ba6859f450c719"
   },
   "changed_source_sha256": {
+    "internal/web/controller/api.go": "6af5ef866f944b09cb51a21c8ef0d67e27284f21b3969f85a9ad6aae29c3407f",
+    "internal/web/controller/xray_execution.go": "fd81468df9177ffc4c1a0472faf9f96436e17e0895bcfcdd30008f1a1b460fd1",
+    "internal/web/controller/xray_execution_test.go": "053845e2a3c9b7c230014c761b3e81dbb38e736d5d0eb0362087c987a8e32ef0",
     "internal/web/job/check_client_ip_job.go": "5921d724074f1dad18efb5d55327f6866bae7ecd86ffcbc5a33fae0b75d7b62d",
     "internal/web/runtime/local.go": "b68987abfc08a24926b8e5c4c92422412bdaafb3a5ef341d46a56ed3d787afde",
     "internal/web/runtime/local_api.go": "0ceefec338e70a32c7987b7fdb333be056bd30b49e41038c8bdcf5d0d383e5f5",
@@ -22,14 +25,16 @@
     "internal/web/service/node.go": "9687b7e25045ea1638c09c1c6137d2632967f2cf6cbe7d49e941d4db54c5e18f",
     "internal/web/service/tuic_relay_apply.go": "9a5c5ab1c383835433699ed68f4287acc7b044befaf7dc0d130903c798ffc01c",
     "internal/web/service/xray.go": "bf52fa109d6393a62815dfa169173b9dc1ce2f9c5a3bb48b877fe9624c1de79e",
-    "internal/web/service/xray_execution.go": "ffd3291eda83b5671b7c747a465c695605289f40aa42613eb778f122f5bd0daf",
+    "internal/web/service/xray_execution.go": "d50703caae8b78c139c0b07638f8fa83998d23c986133e0b42278377e9155f32",
+    "internal/web/service/xray_execution_context_test.go": "09fef63feb7b4913dcab16585e8f9e85b62ff8bd4d1dac320f4ed3562a2046a7",
     "internal/web/service/xray_execution_test.go": "6d261d8b0983e8b7ae078d884da60d27d2891b76d0f6b9659f5d17d18cd117d3",
     "internal/web/service/xray_setting.go": "9647b1ca8c72d326d04ba0b297235bc435c6ce6dc996dce961f2194a4ca089a9",
     "internal/web/web.go": "2cd9df2a547a16f5305305b39f54fdd31f2436634b1951c4ba684e28d36ae912",
-    "internal/xray/api.go": "1c06f2f89bf62bdc6ac78b9c1e8979e5e8deaeeb27531a280deb4049247c6fd4",
+    "internal/xray/api.go": "6c86698dc7020b4fba71478c97a755a95206dfd0756ab5598b194f2bb925d1ec",
     "internal/xray/config.go": "dec65d8e0ae6ae13bfac2f016ad2eaad5038594798398067736ecad99cf7a2d4",
-    "internal/xray/execution.go": "3dc9794d1c0f4705c0878e1f4db6ebd0f2597c5a70473adb9e0178f1684d229f",
-    "internal/xray/execution_api.go": "eb9805ccd40588918194cc6e1f19af8e6b5e406d71e4dbf0af9b1cf1960ac4b6",
+    "internal/xray/execution.go": "46f18587075a92df7265b029c2114c70cb1ce2d59375a52826063a015125abc9",
+    "internal/xray/execution_api.go": "00f834558b9f54386fdc3e1b108f99f9f3f2fee59ae6654bc744be78068793e3",
+    "internal/xray/execution_context_test.go": "8f360f2284fef2b840a94c3a4844c48a1cd0c34b0fa75073bdecd60e27cac524",
     "internal/xray/execution_identity_linux_test.go": "ab630afac4d684b71b25134684b50dbedc8ceb4355b1361fc2fda39fbc21f6f4",
     "internal/xray/execution_lifecycle_test.go": "0a63cbecd68dc116f7a3a6c63aa4e33127f89e4e60e2c8be48e95914b0add981",
     "internal/xray/execution_linux.go": "8929ddd757058faed5976d2c3b049b24510f66807ca648d24ee83d06e2ee1308",
@@ -54,9 +59,9 @@
     "tests/unit/test_prepared_channels.py": "25476f905139281ab15236e439ad03dc0ee6430d55eeda98f6b6ad0f86274e5b"
   },
   "previous_checkpoint": {
-    "producer_commit": "d8eea105ec2d41895c5119c86193b11afcbe9a7f",
-    "manifest_sha256": "48e77b9d2bd6c57b4a4fb748fea1360f6216746c60247e26eaf4ac97356cb38c",
-    "patch_sha256": "22b877ecf5454500c3966f6bb74b62791780166904a1bc42459226fa619f4ce2"
+    "producer_commit": "0d0b7617b4b994747983bc42f9acb2040b6a4042",
+    "manifest_sha256": "996fb2d24df31e791fb1b4dc107442f83e5e3399ffc803ee17525881359ce12a",
+    "patch_sha256": "bd220e4403968cf0d39bf2d4887af322564663df288e87d673f36287432d3748"
   },
   "proof": {
     "windows_race": {
@@ -493,11 +498,35 @@
         "file": ".tools\\pr4-process-postimage-20261117\\frozen-portable-results.json",
         "sha256": "54c8dfebf27f14fb54fd1b6dc1c5233ff4f60b9cdb34e1ec3ab9c206ce6a1126"
       },
-      "scope": "Real owned temporary files/SQLite; positive owner/collector mocked. Strict trusted result+raw process postimage, before/candidate guards, Root field preservation, no pre-sample relabel, retained origin/metadata-only recovery. No installed transport/caller or capability."
+      "scope": "Real owned temporary files/SQLite; positive owner/collector mocked. Strict trusted result+raw process postimage, before/candidate guards, Root field preservation, no pre-sample relabel, retained origin/metadata-only recovery. No installed transport/caller or capability.",
+      "native_later_accepted": {
+        "builder_head": "e1e5a700d1ac10ed1c7ff466ea280c740a3df4f6",
+        "root_ack": 942,
+        "proof": "PR4-PRIVATE-COMPLETION-NATIVE19-PASS.json",
+        "sha256": "09a137a60bfb7096613cee72a4585ea2d0c41528fbc12a253669b1140a91e09f",
+        "scope": "Historical exact e1 Linux15completion+4debt+Bash, owner/collector mocked; not new caller native proof"
+      }
+    },
+    "owner_adapter943": {
+      "source_head": "8923d82aa33dda5cfe982846c806260f95b6a1f9",
+      "source_ack": 943,
+      "go_focused_pass": 24,
+      "go_skip": 0,
+      "go_summary_sha256": "84f31c4e7e32a33731f5e5ee29ab4cee50ec89e2169df84fa916df993596b338",
+      "python_previous_reader_client8_and_affected_completion2_pass": 10,
+      "python_current_reader_client_integration_pass": 8,
+      "python_skip": 0,
+      "current_python_log_sha256": "288435c0a3ee43b24d966d15cedb73697dc664298f51e672acac1bec77f234f5",
+      "root_orphan_patch_sha256": "703ea0f78ed3ff7c34e9c21b9cff103bbd63d83aee7c47b324d667ddbfb168d7",
+      "root_orphan_native2_pass": "PR4-ORPHAN-READER-DELTA-PASS.json",
+      "root_orphan_native2_sha256": "311170a5595551c1af3610df37234d2037a1533601dfb4d75d5f0ea902efd0fb",
+      "native_current_api": "NOT_RUN",
+      "activation": "private caller source only; auto.sh and installation unwired",
+      "scope": "Windows CGO HTTP recorder/auth and mocked native RPC; real synthetic loopback client/files/SQLite. Not actual managed service/core or physical traffic."
     }
   },
   "remaining_gates": [
-    "Current producer0d0b7617 full native main and actual managed core/service/caller integration NOT RUN; historical35 binary is not this revision",
+    "Current producer8923d82aa33dda5cfe982846c806260f95b6a1f9 full native main and actual managed core/service/caller integration NOT RUN; historical35 binary is not this revision",
     "Installed transaction/caller integration under approved full producer release, not the synthetic ELF",
     "Reviewed installed full-producer release/manifest and target-node compatibility; the private Linux build is separately proven",
     "Real stock template compatibility and collector consuming the fresh private snapshot",
@@ -516,11 +545,13 @@
     "tests/fixtures/prepared-execution-go-json-vectors.json": "de1a7bdb8b57af0d0ceeffc24969a36136fe10e1aeca2ed99cea4b5944f98d3b"
   },
   "private_journal_reader_source_sha256": {
-    "scripts/lib/prepared_journal.py": "5f300366f4f52fe557fde37da4eaccc6ac1028220fc413f57b7fcd14b92f1aeb",
+    "scripts/lib/prepared_journal.py": "14b8d9956f0a034d7ef7f4ed65b00fcf536ae497cf877134dfa67d6565488166",
     "scripts/lib/transaction_state.py": "f0a2b781af9dca4eb16aa6ac0338d23560e85646347a4bc2b61553b8968f3e05",
     "scripts/lib/transaction.sh": "16749b772e946250562cd33bac3477b453a539b178c03bf9752772c3f28870a9",
-    "scripts/lib/prepared_completion.py": "454a8bba7ebd6bc7083858ca6eb03e9608f4629fec02ea17056c1e574d135ca8",
-    "tests/unit/test_prepared_journal.py": "8a344d5365caa39f9ef979371b63840134da02ea3a6223a7768b8e56d80510e5",
-    "tests/unit/test_prepared_completion.py": "267cdd340bc1edaf43098a467af4f52533bbca4ed2f76196aee65bca34d28ba6"
+    "scripts/lib/prepared_completion.py": "73092c095b41f1047b424418f95943534816dfa52657fcc7632771b3d1a4e005",
+    "tests/unit/test_prepared_journal.py": "45dce3bd8d04b0d60263572d99757e0ff48d443662b05512fb88c5435e7d2e66",
+    "tests/unit/test_prepared_completion.py": "c964a56d1ae31515688cfa7daac3a6772f5027f8d64ac3567b4ad57599bac4bb",
+    "scripts/lib/prepared_owner.py": "d1b78d830c264c6f413790d35bf01f3cc7b3a5220409fa233f96a20c58b24684",
+    "tests/unit/test_prepared_owner.py": "d4593a4a183acc5e5533b6e69a2e0762d04b4c989be7307ac0a4b4eab84ff93d"
   }
 }

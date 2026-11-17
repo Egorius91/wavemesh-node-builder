@@ -5,7 +5,7 @@ holding the existing node mutation lock. Caller-supplied verified/force CLI
 inputs are deliberately absent. Retention never settles the pending operation.
 """
 from pathlib import Path
-from contextlib import closing
+from contextlib import closing, contextmanager
 import copy
 import os
 import sqlite3
@@ -67,7 +67,8 @@ def _unowned(runtime, route_id):
     return result
 
 
-def _stored_template(path):
+@contextmanager
+def _database_reader(path):
     path = Path(path)
     info = path.lstat()
     if (not stat.S_ISREG(info.st_mode) or path.is_symlink() or info.st_nlink != 1
@@ -75,10 +76,40 @@ def _stored_template(path):
         raise ValueError("private admitted database required")
     with closing(sqlite3.connect(path.absolute().as_uri() + "?mode=ro", uri=True, timeout=0)) as database:
         database.execute("PRAGMA query_only=ON")
-        rows = database.execute("SELECT value FROM settings WHERE key=? LIMIT 2", ("xrayTemplateConfig",)).fetchall()
+        database.execute("BEGIN")
+        yield database
+
+
+def _template_row(database):
+    rows = database.execute("SELECT value FROM settings WHERE key=? LIMIT 2", ("xrayTemplateConfig",)).fetchall()
     if len(rows) != 1 or not isinstance(rows[0][0], str) or len(rows[0][0].encode()) > reader.LIMIT:
         raise ValueError("one bounded existing template required")
-    return reader.decode(rows[0][0])
+    reader.decode(rows[0][0])
+    return rows[0][0]
+
+
+def _stored_template_raw(path):
+    with _database_reader(path) as database:
+        return _template_row(database)
+
+
+def _stored_template(path):
+    return reader.decode(_stored_template_raw(path))
+
+
+def _approved_plan(intent, config):
+    route = next(route for route in config["routes"] if route["id"] == intent["route_id"])
+    plan = route["prepared_plan"]
+    if (plan["channel"]["engine"] != {"name": "xray", "version": "26.10.21", "sha256": execution.CORE}
+            or route.get("presentation", {}).get("published")):
+        raise ValueError("unpublished pinned prepared route required")
+    _, outbounds, binding = channels.bound_plan(config, intent["route_id"], plan)
+    expected = intent["expected"]
+    if (binding != intent["binding"] or expected["rule_tag"] != route["routing"]["rule_tag"]
+            or expected["inbound_tag"] != route["entry"]["inbound_tag"]
+            or expected["target"] not in {"wm-eu-only-block", *(item["tag"] for item in outbounds)}):
+        raise ValueError("approved selector binding required")
+    return plan
 
 
 def _current_execution(intent, config):
@@ -90,16 +121,8 @@ def _current_execution(intent, config):
             or view["effective_config_sha256"] != expected["after_sha256"]
             or view["selector_transitions"] != [reader.expected_transition(intent)]):
         raise ValueError("current execution is not this operation")
-    route = next(route for route in config["routes"] if route["id"] == intent["route_id"])
-    plan = route["prepared_plan"]
-    if (plan["channel"]["engine"] != {"name": "xray", "version": "26.10.21", "sha256": execution.CORE}
-            or route.get("presentation", {}).get("published")):
-        raise ValueError("unpublished pinned prepared route required")
-    _, outbounds, binding = channels.bound_plan(config, intent["route_id"], plan)
-    if (binding != intent["binding"] or expected["rule_tag"] != route["routing"]["rule_tag"]
-            or expected["inbound_tag"] != route["entry"]["inbound_tag"]
-            or expected["target"] not in {"wm-eu-only-block", *(item["tag"] for item in outbounds)}
-            or not reader.selector_matches(effective, expected)
+    plan = _approved_plan(intent, config)
+    if (not reader.selector_matches(effective, expected)
             or channels.health_config_fingerprint(config, intent["route_id"], plan, effective, view) != expected["normalized_sha256"]):
         raise ValueError("current execution does not bind the approved selector")
     return view

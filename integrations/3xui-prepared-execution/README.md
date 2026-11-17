@@ -38,7 +38,9 @@ mutex. Complete supported success can advance the attested view; errors, lost
 responses, unsupported effects, process changes, persistence failure and service
 hot/partial paths stay UNKNOWN. `SetConfig` cannot qualify a shadow. Service hot
 apply is deliberately conservative and needs a new cold generation; selector-only
-CAS is a separate owner-local method with no public mutating endpoint.
+CAS is a separate owner-local method. The ROOT943 source follow-up connects
+it to exactly one existing admin/session API route; see PRIVATE-OWNER-API.md.
+No ordinary Builder activation or additional UI/control endpoint is installed.
 
 Private execution snapshots and path observations use version 3. Every new sample
 must bind equal before/after/independently-current generation and epoch. Aв†’Bв†’A
@@ -94,8 +96,9 @@ uses exact expected generation/epoch and a conditional existing template row
 update, then atomically writes the desired process config inside the same owner
 callback as the single native call. Config.Clone preserves RawMessage bytes and
 panel-only TUIC metadata. Errors retain partial operation facts and require
-reconciliation; nil/no-op alone cannot claim commit. No public handler or Builder
-positive settlement dispatch is connected.The source90 checkpoint passed59 Windows/CGO checks, including the unchanged
+reconciliation; nil/no-op alone cannot claim commit. That historical0d source had no handler or Builder
+positive settlement dispatch. ROOT943 adds a private API/caller source path
+without ordinary auto wiring or installation.The source90 checkpoint passed59 Windows/CGO checks, including the unchanged
 inline-TLS refusal. The cold desired/actual compatibility correction passes4
 affected checks with explicit unchanged-source reuse; neither run has skips. This is not a real
 core/full-service/Linux persistence proof; the old35 full-main binary does not
@@ -111,3 +114,16 @@ payload after memory adoption. The private journal now checks that postimage
 against the bound trusted owner reply; it never substitutes consumed JSON or an
 old startup disk file. PRIVATE-JOURNAL.md records the exact three-candidate and
 server-postimage boundary, portable58 scope and explicit native/transport gates.
+
+
+ROOT943 owner API/caller source is specified in PRIVATE-OWNER-API.md: bounded
+strict request and exact owner-result body, same-owner full preimage hash,
+cancellation at both ownership boundaries, one native call, and a private
+one-send loopback client retaining reply/dispatch facts before local completion.
+Focused Windows Go24 PASS/no skips, new client8 PASS/no skips, affected metadata
+readback compatibility2 PASS. ROOT955 owns the orphan-fact reader guard and
+proved its new Windows2/Linux2 cases; only its exact patch is integrated here.
+Prior e1 journal native15+4/Bash and reader7/Agent1 remain scoped historical
+proof, not native acceptance of this new API/client. Current full main, actual
+service/core/caller, loopback ingress/public TLS and physical flow gates remain
+open. Source-manifest.json pins current commits/bytes and each proof's scope.

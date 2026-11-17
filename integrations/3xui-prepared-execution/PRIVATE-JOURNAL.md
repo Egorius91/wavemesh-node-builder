@@ -53,10 +53,15 @@ metadata/readback; no dispatch, restart, restore or process-file rewrite. A know
 result prefix is type-safe and cannot be overwritten by generic status handling.
 Private runtime postimage preserves the exact merged Root document for audit.
 
-58 current portable checks plus ordinary journal script pass. Six Linux-specific
-cases (including actual FD9/flock and directory/symlink barriers) are explicitly
-NOT RUN here. Positive collector/owner are mocked: not real managed service/core
-or installed caller proof. Source0d0b processHash5 Windows/CGO tests are separate.
+Historical5ff portable58 plus ordinary journal script passed. ROOT942 later
+accepted exact e1 Linux15 completion+4 debt+Bash and reader7/Agent1, without
+skips. These prove native FD9/flock/directory/symlink filesystem behavior with
+mocked collector/owner, not actual service/core/caller. ROOT955 orphan send/reply
+guard adds focused Windows2/Linux2 PASS, preserving valid completed history.
+Current ROOT943 adds the private unwired sender and SELECT-only exact raw
+template helper; new client8 and metadata compatibility2 pass on Windows.
+PRIVATE-OWNER-API.md records the protocol and remaining current API native gate.
+Source0d0b processHash5 Windows/CGO tests remain a separate historical scope.
 Root's health/Agent integration and grouped native packet must be accepted before
 any activation. Full producer/main,6004,physical flows/watchdog,capability and
 public/live/Node admission remain open. No publication or live action occurs here.

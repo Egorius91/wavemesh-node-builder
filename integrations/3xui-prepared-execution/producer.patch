@@ -1,3 +1,408 @@
+diff --git a/internal/web/controller/api.go b/internal/web/controller/api.go
+index 4c9038f1..a98175b2 100644
+--- a/internal/web/controller/api.go
++++ b/internal/web/controller/api.go
+@@ -227,6 +227,8 @@ func (a *APIController) initRouter(g *gin.RouterGroup) {
+ 	// /panel/api/xray/*.
+ 	a.settingController = NewSettingController(api)
+ 	a.xraySettingController = NewXraySettingController(api)
++	// Purpose-specific owner API; never registered on the panel UI router.
++	api.POST("/xray/executionSelector", a.xraySettingController.executionSelector)
+ 
+ 	// Subscription balancers — client-side balancers for the JSON sub output
+ 	NewSubBalancerController(api)
+diff --git a/internal/web/controller/xray_execution.go b/internal/web/controller/xray_execution.go
+new file mode 100644
+index 00000000..98a912a6
+--- /dev/null
++++ b/internal/web/controller/xray_execution.go
+@@ -0,0 +1,175 @@
++package controller
++
++import (
++	"bytes"
++	"context"
++	"encoding/json"
++	"errors"
++	"io"
++	"mime"
++	"net/http"
++	"regexp"
++	"strconv"
++	"strings"
++	"unicode/utf8"
++
++	"github.com/gin-gonic/gin"
++	"github.com/mhsanaei/3x-ui/v3/internal/web/service"
++	"github.com/mhsanaei/3x-ui/v3/internal/xray"
++)
++
++const executionRequestLimit = 4 << 20
++const executionDiagnosticHeader = "X-WaveMesh-Execution-Diagnostic"
++
++var executionRequestID = regexp.MustCompile(`^[A-Za-z0-9][A-Za-z0-9_.-]{0,127}$`)
++var executionRequestHash = regexp.MustCompile(`^[0-9a-f]{64}$`)
++var executionRequestUUID = regexp.MustCompile(`^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$`)
++var errExecutionRequest = errors.New("invalid execution request")
++
++type executionSelectorRequest struct {
++	SchemaVersion *int   `json:"schema_version"`
++	TransactionID string `json:"transaction_id"`
++	IntentSHA256  string `json:"intent_sha256"`
++	Expected      *struct {
++		Generation      string `json:"generation"`
++		Epoch           string `json:"epoch"`
++		EffectiveSHA256 string `json:"effective_config_sha256"`
++	} `json:"expected"`
++	TemplateBefore string `json:"template_before"`
++	RuleTag        string `json:"rule_tag"`
++	Target         string `json:"target"`
++}
++
++// encoding/json's struct decoder permits duplicate and case-folded keys. Check
++// tokens and exact object keys before typed decoding at this request boundary.
++func executionJSONValue(d *json.Decoder, depth int) error {
++	if depth > 32 {
++		return errExecutionRequest
++	}
++	token, err := d.Token()
++	if err != nil {
++		return errExecutionRequest
++	}
++	if delim, ok := token.(json.Delim); ok {
++		switch delim {
++		case '{':
++			seen := map[string]bool{}
++			for d.More() {
++				key, err := d.Token()
++				name, ok := key.(string)
++				if err != nil || !ok || seen[name] {
++					return errExecutionRequest
++				}
++				seen[name] = true
++				if err := executionJSONValue(d, depth+1); err != nil {
++					return err
++				}
++			}
++		case '[':
++			for d.More() {
++				if err := executionJSONValue(d, depth+1); err != nil {
++					return err
++				}
++			}
++		default:
++			return errExecutionRequest
++		}
++		if _, err := d.Token(); err != nil {
++			return errExecutionRequest
++		}
++	}
++	return nil
++}
++
++func executionStrictObject(raw []byte) error {
++	raw = bytes.TrimSpace(raw)
++	if len(raw) == 0 || raw[0] != '{' || !utf8.Valid(raw) {
++		return errExecutionRequest
++	}
++	d := json.NewDecoder(bytes.NewReader(raw))
++	d.UseNumber()
++	if err := executionJSONValue(d, 0); err != nil {
++		return err
++	}
++	if _, err := d.Token(); err != io.EOF {
++		return errExecutionRequest
++	}
++	return nil
++}
++
++func executionExactKeys(raw []byte, names ...string) bool {
++	var fields map[string]json.RawMessage
++	if json.Unmarshal(raw, &fields) != nil || len(fields) != len(names) {
++		return false
++	}
++	for _, name := range names {
++		if _, ok := fields[name]; !ok {
++			return false
++		}
++	}
++	return true
++}
++
++func decodeExecutionSelector(body io.Reader) (executionSelectorRequest, error) {
++	var request executionSelectorRequest
++	raw, err := io.ReadAll(io.LimitReader(body, executionRequestLimit+1))
++	if err != nil || len(raw) > executionRequestLimit || executionStrictObject(raw) != nil ||
++		!executionExactKeys(raw, "schema_version", "transaction_id", "intent_sha256", "expected", "template_before", "rule_tag", "target") {
++		return request, errExecutionRequest
++	}
++	var fields map[string]json.RawMessage
++	_ = json.Unmarshal(raw, &fields)
++	if !executionExactKeys(fields["expected"], "generation", "epoch", "effective_config_sha256") || json.Unmarshal(raw, &request) != nil {
++		return request, errExecutionRequest
++	}
++	if request.SchemaVersion == nil || *request.SchemaVersion != 1 || request.Expected == nil ||
++		!executionRequestID.MatchString(request.TransactionID) || !executionRequestHash.MatchString(request.IntentSHA256) ||
++		!executionRequestUUID.MatchString(request.Expected.Generation) || !executionRequestHash.MatchString(request.Expected.EffectiveSHA256) ||
++		!executionRequestID.MatchString(request.RuleTag) || !strings.HasPrefix(request.RuleTag, "wm-rule-") || len(request.RuleTag) <= len("wm-rule-") ||
++		!executionRequestID.MatchString(request.Target) || !(request.Target == "wm-eu-only-block" || strings.HasPrefix(request.Target, "wm-exit-path-") && len(request.Target) > len("wm-exit-path-")) ||
++		executionStrictObject([]byte(request.TemplateBefore)) != nil {
++		return request, errExecutionRequest
++	}
++	epoch, err := strconv.ParseUint(request.Expected.Epoch, 10, 64)
++	if err != nil || epoch == ^uint64(0) || strconv.FormatUint(epoch, 10) != request.Expected.Epoch {
++		return request, errExecutionRequest
++	}
++	return request, nil
++}
++
++func (a *XraySettingController) executionSelector(c *gin.Context) {
++	serveExecutionSelector(c, a.XrayService.ApplyExecutionSelectorContext)
++}
++
++func serveExecutionSelector(c *gin.Context, apply func(context.Context, xray.ExecutionExpected, string, string, string) (service.ExecutionPersistenceResult, error)) {
++	refuse := func(status int, diagnostic string) {
++		c.Header(executionDiagnosticHeader, diagnostic)
++		c.JSON(status, gin.H{"diagnostic": diagnostic})
++	}
++	if !xray.PreparedExecutionEnabled() {
++		refuse(http.StatusServiceUnavailable, "PREPARED_EXECUTION_DISABLED")
++		return
++	}
++	media, _, err := mime.ParseMediaType(c.GetHeader("Content-Type"))
++	if err != nil || media != "application/json" || c.Request.Context().Err() != nil {
++		refuse(http.StatusBadRequest, "INVALID_REQUEST")
++		return
++	}
++	request, err := decodeExecutionSelector(c.Request.Body)
++	if err != nil {
++		refuse(http.StatusBadRequest, "INVALID_REQUEST")
++		return
++	}
++	expected := xray.ExecutionExpected{Generation: request.Expected.Generation, Epoch: request.Expected.Epoch, EffectiveSHA256: request.Expected.EffectiveSHA256}
++	result, err := apply(c.Request.Context(), expected, request.TemplateBefore, request.RuleTag, request.Target)
++	status, diagnostic := http.StatusConflict, "OUTCOME_UNPROVEN"
++	if err == nil && result.KnownCommit {
++		status, diagnostic = http.StatusOK, "COMMITTED"
++	} else if err == nil && result.NoOp {
++		status, diagnostic = http.StatusOK, "NO_OP"
++	}
++	// The body is exactly the private journal's existing owner-result shape.
++	// Fixed diagnostics are headers, never raw service errors or config payload.
++	c.Header(executionDiagnosticHeader, diagnostic)
++	c.JSON(status, gin.H{"schema_version": 1, "transaction_id": request.TransactionID, "intent_sha256": request.IntentSHA256, "outcome": result})
++}
+diff --git a/internal/web/controller/xray_execution_test.go b/internal/web/controller/xray_execution_test.go
+new file mode 100644
+index 00000000..297a81c6
+--- /dev/null
++++ b/internal/web/controller/xray_execution_test.go
+@@ -0,0 +1,205 @@
++package controller
++
++import (
++	"context"
++	"crypto/tls"
++	"crypto/x509"
++	"encoding/json"
++	"errors"
++	"net/http"
++	"net/http/httptest"
++	"strings"
++	"testing"
++
++	"github.com/gin-gonic/gin"
++	"github.com/mhsanaei/3x-ui/v3/internal/database"
++	"github.com/mhsanaei/3x-ui/v3/internal/database/model"
++	"github.com/mhsanaei/3x-ui/v3/internal/util/crypto"
++	"github.com/mhsanaei/3x-ui/v3/internal/web/service"
++	"github.com/mhsanaei/3x-ui/v3/internal/xray"
++)
++
++func executionRequestFixture() map[string]any {
++	return map[string]any{"schema_version": 1, "transaction_id": "20261117T154000Z-unit", "intent_sha256": strings.Repeat("a", 64),
++		"expected":        map[string]any{"generation": "00000000-0000-4000-8000-000000000002", "epoch": "0", "effective_config_sha256": strings.Repeat("b", 64)},
++		"template_before": "{\n  \"sentinel\": \"exact raw template\"\n}\n", "rule_tag": "wm-rule-unit", "target": "wm-exit-path-unit"}
++}
++
++func executionRequestBytes(value any) string { raw, _ := json.Marshal(value); return string(raw) }
++
++func TestExecutionSelectorStrictBoundaryRejectsBeforeApply(t *testing.T) {
++	t.Setenv("XUI_PREPARED_ATTESTATION", "1")
++	valid := executionRequestBytes(executionRequestFixture())
++	cases := map[string]string{
++		"duplicate":         strings.Replace(valid, `"schema_version":1`, `"schema_version":1,"schema_version":1`, 1),
++		"escaped duplicate": strings.Replace(valid, `"schema_version":1`, `"schema_version":1,"schema_\u0076ersion":1`, 1),
++		"trailing":          valid + `{}`, "array": `[]`, "invalid utf8": valid[:len(valid)-1] + string([]byte{255}) + `}`,
++		"oversized": strings.Repeat(" ", executionRequestLimit+1) + valid,
++	}
++	for _, change := range []string{"unknown", "missing", "case-folded", "null-version", "float-version", "bool-version", "empty-transaction", "wrong-hash", "uuid-case", "epoch-leading-zero", "epoch-overflow", "epoch-last", "expected-unknown", "expected-duplicate", "template-duplicate", "template-trailing", "target-direct", "empty-rule", "deep-template"} {
++		value := executionRequestFixture()
++		expected := value["expected"].(map[string]any)
++		switch change {
++		case "unknown":
++			value["verified"] = true
++		case "missing":
++			delete(value, "intent_sha256")
++		case "case-folded":
++			value["Schema_Version"] = value["schema_version"]
++			delete(value, "schema_version")
++		case "null-version":
++			value["schema_version"] = nil
++		case "float-version":
++			cases[change] = strings.Replace(valid, `"schema_version":1`, `"schema_version":1.0`, 1)
++			continue
++		case "bool-version":
++			value["schema_version"] = true
++		case "empty-transaction":
++			value["transaction_id"] = ""
++		case "wrong-hash":
++			expected["effective_config_sha256"] = strings.Repeat("B", 64)
++		case "uuid-case":
++			expected["generation"] = "00000000-0000-4000-8000-00000000000A"
++		case "epoch-leading-zero":
++			expected["epoch"] = "00"
++		case "epoch-overflow":
++			expected["epoch"] = "18446744073709551616"
++		case "epoch-last":
++			expected["epoch"] = "18446744073709551615"
++		case "expected-unknown":
++			expected["verified"] = true
++		case "expected-duplicate":
++			cases[change] = strings.Replace(valid, `"epoch":"0"`, `"epoch":"0","epoch":"0"`, 1)
++			continue
++		case "template-duplicate":
++			value["template_before"] = `{"x":1,"x":2}`
++		case "template-trailing":
++			value["template_before"] = `{} {}`
++		case "target-direct":
++			value["target"] = "direct"
++		case "empty-rule":
++			value["rule_tag"] = "wm-rule-"
++		case "deep-template":
++			value["template_before"] = `{"x":` + strings.Repeat("[", 34) + `0` + strings.Repeat("]", 34) + `}`
++		}
++		cases[change] = executionRequestBytes(value)
++	}
++	for name, body := range cases {
++		t.Run(name, func(t *testing.T) {
++			engine := gin.New()
++			calls := 0
++			engine.POST("/", func(c *gin.Context) {
++				serveExecutionSelector(c, func(context.Context, xray.ExecutionExpected, string, string, string) (service.ExecutionPersistenceResult, error) {
++					calls++
++					return service.ExecutionPersistenceResult{}, nil
++				})
++			})
++			req := httptest.NewRequest(http.MethodPost, "/", strings.NewReader(body))
++			req.Header.Set("Content-Type", "application/json")
++			w := httptest.NewRecorder()
++			engine.ServeHTTP(w, req)
++			if calls != 0 || w.Code != 400 || strings.Contains(w.Body.String(), "outcome") {
++				t.Fatalf("invalid body reached apply or fabricated receipt: %d %d", calls, w.Code)
++			}
++		})
++	}
++}
++
++func TestExecutionSelectorRetainsBoundPartialOutcomeWithFixedDiagnostic(t *testing.T) {
++	t.Setenv("XUI_PREPARED_ATTESTATION", "1")
++	engine := gin.New()
++	calls := 0
++	engine.POST("/", func(c *gin.Context) {
++		serveExecutionSelector(c, func(ctx context.Context, expected xray.ExecutionExpected, template, rule, target string) (service.ExecutionPersistenceResult, error) {
++			calls++
++			if expected.EffectiveSHA256 != strings.Repeat("b", 64) || template != executionRequestFixture()["template_before"] || rule != "wm-rule-unit" || target != "wm-exit-path-unit" || ctx == nil {
++				t.Fatal("request binding lost")
++			}
++			return service.ExecutionPersistenceResult{NativeAttempted: true, NativeSucceeded: true, TemplatePersisted: true}, errors.New("private-error-template-credential")
++		})
++	})
++	req := httptest.NewRequest("POST", "/", strings.NewReader(executionRequestBytes(executionRequestFixture())))
++	req.Header.Set("Content-Type", "application/json")
++	w := httptest.NewRecorder()
++	engine.ServeHTTP(w, req)
++	var reply map[string]json.RawMessage
++	if json.Unmarshal(w.Body.Bytes(), &reply) != nil || len(reply) != 4 || calls != 1 || w.Code != 409 || w.Header().Get(executionDiagnosticHeader) != "OUTCOME_UNPROVEN" || strings.Contains(w.Body.String(), "private-error") || !strings.Contains(string(reply["outcome"]), `"TemplatePersisted":true`) {
++		t.Fatal("partial operation receipt lost or leaked data")
++	}
++}
++
++func TestExecutionSelectorDisabledOrCanceledRequestNeverCallsService(t *testing.T) {
++	for _, disabled := range []bool{true, false} {
++		t.Run(map[bool]string{true: "disabled", false: "canceled"}[disabled], func(t *testing.T) {
++			t.Setenv("XUI_PREPARED_ATTESTATION", map[bool]string{true: "0", false: "1"}[disabled])
++			engine := gin.New()
++			engine.POST("/", func(c *gin.Context) {
++				serveExecutionSelector(c, func(context.Context, xray.ExecutionExpected, string, string, string) (service.ExecutionPersistenceResult, error) {
++					t.Fatal("rejected context reached service")
++					return service.ExecutionPersistenceResult{}, nil
++				})
++			})
++			req := httptest.NewRequest("POST", "/", strings.NewReader(executionRequestBytes(executionRequestFixture())))
++			req.Header.Set("Content-Type", "application/json")
++			if !disabled {
++				ctx, cancel := context.WithCancel(req.Context())
++				cancel()
++				req = req.WithContext(ctx)
++			}
++			w := httptest.NewRecorder()
++			engine.ServeHTTP(w, req)
++			if strings.Contains(w.Body.String(), "outcome") || w.Code < 400 {
++				t.Fatal("rejection fabricated owner result")
++			}
++		})
++	}
++}
++
++func TestExecutionSelectorExistingAuthScopesAndSession(t *testing.T) {
++	t.Setenv("XUI_PREPARED_ATTESTATION", "1")
++	engine, a := newAPIAuthTestEngine(t)
++	calls := 0
++	api := engine.Group("/panel/api")
++	api.Use(a.checkAPIAuth)
++	api.Use(a.enforceTokenScope)
++	api.POST("/xray/executionSelector", func(c *gin.Context) {
++		serveExecutionSelector(c, func(context.Context, xray.ExecutionExpected, string, string, string) (service.ExecutionPersistenceResult, error) {
++			calls++
++			return service.ExecutionPersistenceResult{NoOp: true}, nil
++		})
++	})
++	for _, scope := range []string{model.ApiScopeAdmin, model.ApiScopeNodeSync, model.ApiScopeNodeAdmin, model.ApiScopeMonitor} {
++		plain := "synthetic-execution-" + scope
++		if err := database.GetDB().Create(&model.ApiToken{Name: scope, Token: crypto.HashTokenSHA256(plain), Enabled: true, Scope: scope}).Error; err != nil {
++			t.Fatal(err)
++		}
++		for _, mtls := range []bool{false, true} {
++			before := calls
++			req := httptest.NewRequest("POST", "/panel/api/xray/executionSelector", strings.NewReader(executionRequestBytes(executionRequestFixture())))
++			req.Header.Set("Content-Type", "application/json")
++			req.Header.Set("Authorization", "Bearer "+plain)
++			if mtls {
++				req.TLS = &tls.ConnectionState{VerifiedChains: [][]*x509.Certificate{{{}}}}
++			}
++			w := httptest.NewRecorder()
++			engine.ServeHTTP(w, req)
++			allowed := scope == model.ApiScopeAdmin && !mtls
++			if allowed && (w.Code != 200 || calls != before+1) || !allowed && (w.Code != 403 || calls != before) {
++				t.Fatalf("scope boundary changed: %s mtls=%v code=%d", scope, mtls, w.Code)
++			}
++		}
++	}
++	login := httptest.NewRecorder()
++	engine.ServeHTTP(login, httptest.NewRequest("GET", "/test-login", nil))
++	req := httptest.NewRequest("POST", "/panel/api/xray/executionSelector", strings.NewReader(executionRequestBytes(executionRequestFixture())))
++	req.Header.Set("Content-Type", "application/json")
++	for _, cookie := range login.Result().Cookies() {
++		req.AddCookie(cookie)
++	}
++	before := calls
++	w := httptest.NewRecorder()
++	engine.ServeHTTP(w, req)
++	if w.Code != 200 || calls != before+1 {
++		t.Fatal("existing authenticated session lost authority")
++	}
++}
 diff --git a/internal/web/job/check_client_ip_job.go b/internal/web/job/check_client_ip_job.go
 index eec1278e..6424d864 100644
 --- a/internal/web/job/check_client_ip_job.go
@@ -318,14 +723,15 @@ index 596986c3..6c941b94 100644
 +}
 diff --git a/internal/web/service/xray_execution.go b/internal/web/service/xray_execution.go
 new file mode 100644
-index 00000000..eb8d29c9
+index 00000000..62821905
 --- /dev/null
 +++ b/internal/web/service/xray_execution.go
-@@ -0,0 +1,235 @@
+@@ -0,0 +1,246 @@
 +package service
 +
 +import (
 +	"bytes"
++	"context"
 +	"encoding/json"
 +	"errors"
 +	"io"
@@ -351,13 +757,23 @@ index 00000000..eb8d29c9
 +	ProcessConfigSHA256 string
 +}
 +
-+// ApplyExecutionSelector is internal service-owned source only: no handler or
-+// credential exposes it. Actual, template and desired process configurations
-+// stay separate; only the same explicitly bound selector changes in each.
++// ApplyExecutionSelector preserves the internal caller's independent operation
++// context. Actual, template and desired process configurations stay separate;
++// only the same explicitly bound selector changes in each.
 +func (s *XrayService) ApplyExecutionSelector(expected xray.ExecutionExpected, templateBefore, ruleTag, target string) (ExecutionPersistenceResult, error) {
++	return s.ApplyExecutionSelectorContext(context.Background(), expected, templateBefore, ruleTag, target)
++}
++
++func (s *XrayService) ApplyExecutionSelectorContext(ctx context.Context, expected xray.ExecutionExpected, templateBefore, ruleTag, target string) (ExecutionPersistenceResult, error) {
 +	lock.Lock()
 +	defer lock.Unlock()
 +	var result ExecutionPersistenceResult
++	if ctx == nil {
++		return result, context.Canceled
++	}
++	if err := ctx.Err(); err != nil {
++		return result, err
++	}
 +	p := currentXrayProcess()
 +	if p == nil || !p.IsRunning() {
 +		return result, ErrXrayNotRunning
@@ -396,7 +812,7 @@ index 00000000..eb8d29c9
 +	if err != nil || !reflect.DeepEqual(candidate.template, normalized) {
 +		return result, errExecutionDesiredConflict
 +	}
-+	outcome, err := api.CompareAndApplyRoutingAndPersist(candidate.routing, expected, func() error {
++	outcome, err := api.CompareAndApplyRoutingAndPersistContext(ctx, candidate.routing, expected, func() error {
 +		return persistExecutionSelector(setting, p, row, prepared, candidate.desired, &result)
 +	})
 +	result.NativeAttempted, result.NativeSucceeded = outcome.NativeAttempted, outcome.NativeSucceeded
@@ -556,6 +972,48 @@ index 00000000..eb8d29c9
 +		}
 +	}
 +	return count == 1
++}
+diff --git a/internal/web/service/xray_execution_context_test.go b/internal/web/service/xray_execution_context_test.go
+new file mode 100644
+index 00000000..120769a0
+--- /dev/null
++++ b/internal/web/service/xray_execution_context_test.go
+@@ -0,0 +1,36 @@
++package service
++
++import (
++	"context"
++	"errors"
++	"testing"
++	"time"
++
++	"github.com/mhsanaei/3x-ui/v3/internal/xray"
++)
++
++func TestExecutionContextCanceledServiceWaiterStopsBeforeProcessOrStorage(t *testing.T) {
++	ctx, cancel := context.WithCancel(context.Background())
++	defer cancel()
++	done := make(chan error, 1)
++	lock.Lock()
++	go func() {
++		result, err := (&XrayService{}).ApplyExecutionSelectorContext(ctx, xray.ExecutionExpected{}, "", "wm-rule-unit", "wm-eu-only-block")
++		if result != (ExecutionPersistenceResult{}) {
++			done <- errors.New("canceled waiter reported effects")
++			return
++		}
++		done <- err
++	}()
++	select {
++	case <-done:
++		lock.Unlock()
++		t.Fatal("service ownership bypassed")
++	case <-time.After(20 * time.Millisecond):
++	}
++	cancel()
++	lock.Unlock()
++	if err := <-done; !errors.Is(err, context.Canceled) {
++		t.Fatalf("canceled waiter reached process/storage path: %v", err)
++	}
 +}
 diff --git a/internal/web/service/xray_execution_test.go b/internal/web/service/xray_execution_test.go
 new file mode 100644
@@ -897,7 +1355,7 @@ index aaee5dbc..24c77134 100644
  		RequestReconcile: func() { s.xrayService.SetToNeedReconcile() },
  	})
 diff --git a/internal/xray/api.go b/internal/xray/api.go
-index 0e0e68dd..9718dc29 100644
+index 0e0e68dd..de672eb5 100644
 --- a/internal/xray/api.go
 +++ b/internal/xray/api.go
 @@ -6,6 +6,7 @@ package xray
@@ -916,16 +1374,17 @@ index 0e0e68dd..9718dc29 100644
  	"strings"
  	"time"
  
-@@ -59,6 +61,8 @@ type XrayAPI struct {
+@@ -59,6 +61,9 @@ type XrayAPI struct {
  	grpcClient           *grpc.ClientConn
  	isConnected          bool
  	StatsLastValues      map[string]int64
 +	execution            *executionOwner
 +	ownedExecutionCall   bool
++	operationContext     context.Context
  }
  
  func getRequiredUserString(user map[string]any, key string) (string, error) {
-@@ -95,8 +99,38 @@ func (x *XrayAPI) Init(apiPort int) error {
+@@ -95,8 +100,38 @@ func (x *XrayAPI) Init(apiPort int) error {
  		return fmt.Errorf("invalid Xray API port: %d", apiPort)
  	}
  
@@ -966,7 +1425,7 @@ index 0e0e68dd..9718dc29 100644
  	if err != nil {
  		return fmt.Errorf("failed to connect to Xray API: %w", err)
  	}
-@@ -135,7 +169,7 @@ func (x *XrayAPI) Close() {
+@@ -135,7 +170,7 @@ func (x *XrayAPI) Close() {
  const handlerRPCTimeout = 10 * time.Second
  
  // AddInbound adds a new inbound configuration to the Xray core via gRPC.
@@ -975,7 +1434,7 @@ index 0e0e68dd..9718dc29 100644
  	if x.HandlerServiceClient == nil {
  		return common.NewError("xray HandlerServiceClient is not initialized")
  	}
-@@ -155,7 +189,7 @@ func (x *XrayAPI) AddInbound(inbound []byte) error {
+@@ -155,7 +190,7 @@ func (x *XrayAPI) AddInbound(inbound []byte) error {
  	}
  	inboundConfig := command.AddInboundRequest{Inbound: config}
  
@@ -984,7 +1443,7 @@ index 0e0e68dd..9718dc29 100644
  	defer cancel()
  	_, err = client.AddInbound(ctx, &inboundConfig)
  
-@@ -163,12 +197,12 @@ func (x *XrayAPI) AddInbound(inbound []byte) error {
+@@ -163,12 +198,12 @@ func (x *XrayAPI) AddInbound(inbound []byte) error {
  }
  
  // DelInbound removes an inbound configuration from the Xray core by tag.
@@ -999,7 +1458,7 @@ index 0e0e68dd..9718dc29 100644
  	defer cancel()
  	_, err := client.RemoveInbound(ctx, &command.RemoveInboundRequest{
  		Tag: tag,
-@@ -218,7 +252,7 @@ func validateWireguardRemoteDNS(settings *serial.TypedMessage) error {
+@@ -218,7 +253,7 @@ func validateWireguardRemoteDNS(settings *serial.TypedMessage) error {
  }
  
  // AddOutbound adds a new outbound configuration to the Xray core via gRPC.
@@ -1008,7 +1467,7 @@ index 0e0e68dd..9718dc29 100644
  	if x.HandlerServiceClient == nil {
  		return common.NewError("xray HandlerServiceClient is not initialized")
  	}
-@@ -238,7 +272,7 @@ func (x *XrayAPI) AddOutbound(outbound []byte) error {
+@@ -238,7 +273,7 @@ func (x *XrayAPI) AddOutbound(outbound []byte) error {
  		return err
  	}
  
@@ -1017,7 +1476,7 @@ index 0e0e68dd..9718dc29 100644
  	defer cancel()
  
  	_, err = client.AddOutbound(ctx, &command.AddOutboundRequest{Outbound: config})
-@@ -246,13 +280,13 @@ func (x *XrayAPI) AddOutbound(outbound []byte) error {
+@@ -246,13 +281,13 @@ func (x *XrayAPI) AddOutbound(outbound []byte) error {
  }
  
  // DelOutbound removes an outbound configuration from the Xray core by tag.
@@ -1033,7 +1492,7 @@ index 0e0e68dd..9718dc29 100644
  	defer cancel()
  
  	_, err := client.RemoveOutbound(ctx, &command.RemoveOutboundRequest{Tag: tag})
-@@ -263,7 +297,7 @@ func (x *XrayAPI) DelOutbound(tag string) error {
+@@ -263,7 +298,7 @@ func (x *XrayAPI) DelOutbound(tag string) error {
  // Xray core with the given routing section (the JSON value of the top-level
  // "routing" key) via the RoutingService gRPC API. Note that this cannot change
  // routing.domainStrategy/domainMatcher — those are fixed at process start.
@@ -1042,7 +1501,7 @@ index 0e0e68dd..9718dc29 100644
  	if x.RoutingServiceClient == nil {
  		return common.NewError("xray RoutingServiceClient is not initialized")
  	}
-@@ -274,7 +308,7 @@ func (x *XrayAPI) ApplyRoutingConfig(routing []byte) error {
+@@ -274,7 +309,7 @@ func (x *XrayAPI) ApplyRoutingConfig(routing []byte) error {
  		return err
  	}
  
@@ -1051,7 +1510,7 @@ index 0e0e68dd..9718dc29 100644
  	defer cancel()
  
  	_, err = (*x.RoutingServiceClient).AddRule(ctx, &routerService.AddRuleRequest{
-@@ -317,7 +351,7 @@ func (x *XrayAPI) GetBalancerInfo(tag string) (*BalancerInfo, error) {
+@@ -317,7 +352,7 @@ func (x *XrayAPI) GetBalancerInfo(tag string) (*BalancerInfo, error) {
  		return nil, common.NewError("xray RoutingServiceClient is not initialized")
  	}
  
@@ -1060,7 +1519,7 @@ index 0e0e68dd..9718dc29 100644
  	defer cancel()
  
  	resp, err := (*x.RoutingServiceClient).GetBalancerInfo(ctx, &routerService.GetBalancerInfoRequest{Tag: tag})
-@@ -339,12 +373,12 @@ func (x *XrayAPI) GetBalancerInfo(tag string) (*BalancerInfo, error) {
+@@ -339,12 +374,12 @@ func (x *XrayAPI) GetBalancerInfo(tag string) (*BalancerInfo, error) {
  
  // SetBalancerTarget forces a balancer to always pick the given outbound tag.
  // An empty target clears the override and hands control back to the strategy.
@@ -1075,7 +1534,7 @@ index 0e0e68dd..9718dc29 100644
  	defer cancel()
  
  	_, err := (*x.RoutingServiceClient).OverrideBalancerTarget(ctx, &routerService.OverrideBalancerTargetRequest{
-@@ -411,7 +445,7 @@ func (x *XrayAPI) TestRoute(req RouteTestRequest) (*RouteTestResult, error) {
+@@ -411,7 +446,7 @@ func (x *XrayAPI) TestRoute(req RouteTestRequest) (*RouteTestResult, error) {
  		}
  	}
  
@@ -1084,7 +1543,7 @@ index 0e0e68dd..9718dc29 100644
  	defer cancel()
  
  	resp, err := (*x.RoutingServiceClient).TestRoute(ctx, &routerService.TestRouteRequest{
-@@ -803,7 +837,7 @@ func masqueUserPassword(user map[string]any) (string, error) {
+@@ -803,7 +838,7 @@ func masqueUserPassword(user map[string]any) (string, error) {
  // any existing holder of the email: that is the one inbound whose validator
  // does not reject a duplicate email, and a later removal would then drop just
  // one of the two registrations, leaving a disabled client able to connect.
@@ -1093,7 +1552,7 @@ index 0e0e68dd..9718dc29 100644
  	userEmail, err := getRequiredUserString(user, "email")
  	if err != nil {
  		return err
-@@ -823,10 +857,10 @@ func (x *XrayAPI) AddUser(Protocol string, inboundTag string, user map[string]an
+@@ -823,10 +858,10 @@ func (x *XrayAPI) AddUser(Protocol string, inboundTag string, user map[string]an
  	client := *x.HandlerServiceClient
  
  	if account.Type == legacyShadowsocksAccountType {
@@ -1106,7 +1565,7 @@ index 0e0e68dd..9718dc29 100644
  	defer cancel()
  	_, err = client.AlterInbound(ctx, &command.AlterInboundRequest{
  		Tag: inboundTag,
-@@ -841,13 +875,13 @@ func (x *XrayAPI) AddUser(Protocol string, inboundTag string, user map[string]an
+@@ -841,13 +876,13 @@ func (x *XrayAPI) AddUser(Protocol string, inboundTag string, user map[string]an
  }
  
  // RemoveUser removes a user from an inbound in the Xray core by email.
@@ -1122,7 +1581,7 @@ index 0e0e68dd..9718dc29 100644
  	defer cancel()
  
  	op := &command.RemoveUserOperation{Email: email}
-@@ -876,7 +910,7 @@ func (x *XrayAPI) GetTraffic() ([]*Traffic, []*ClientTraffic, error) {
+@@ -876,7 +911,7 @@ func (x *XrayAPI) GetTraffic() ([]*Traffic, []*ClientTraffic, error) {
  		return nil, nil, common.NewError("xray api is not initialized")
  	}
  
@@ -1131,7 +1590,7 @@ index 0e0e68dd..9718dc29 100644
  	defer cancel()
  
  	if x.StatsServiceClient == nil {
-@@ -951,7 +985,7 @@ func (x *XrayAPI) GetOnlineUsers() ([]OnlineUser, error) {
+@@ -951,7 +986,7 @@ func (x *XrayAPI) GetOnlineUsers() ([]OnlineUser, error) {
  		return nil, common.NewError("xray StatsServiceClient is not initialized")
  	}
  
@@ -1194,10 +1653,10 @@ index 2cff1596..e8cc9a02 100644
  	if len(c.InboundConfigs) != len(other.InboundConfigs) {
 diff --git a/internal/xray/execution.go b/internal/xray/execution.go
 new file mode 100644
-index 00000000..b47a682c
+index 00000000..1ccdd94e
 --- /dev/null
 +++ b/internal/xray/execution.go
-@@ -0,0 +1,866 @@
+@@ -0,0 +1,881 @@
 +package xray
 +
 +import (
@@ -1242,6 +1701,8 @@ index 00000000..b47a682c
 +type ExecutionExpected struct {
 +	Generation string `json:"generation"`
 +	Epoch      string `json:"epoch"`
++	// Optional owner-local preimage binding. Snapshot/control DTOs stay unchanged.
++	EffectiveSHA256 string `json:"-"`
 +}
 +
 +type SelectorTransition struct {
@@ -1370,8 +1831,15 @@ index 00000000..b47a682c
 +}
 +
 +func (o *executionOwner) mutate(kind string, payload map[string]any, expected *ExecutionExpected, call func() error) error {
++	return o.mutateContext(nil, kind, payload, expected, call)
++}
++
++func (o *executionOwner) mutateContext(ctx context.Context, kind string, payload map[string]any, expected *ExecutionExpected, call func() error) error {
 +	o.mu.Lock()
 +	defer o.mu.Unlock()
++	if ctx != nil && ctx.Err() != nil {
++		return ctx.Err()
++	}
 +	valid := o.identityValidLocked()
 +	if !valid {
 +		return ErrExecutionConflict
@@ -1382,6 +1850,9 @@ index 00000000..b47a682c
 +		o.transition = nil
 +	}
 +	if expected != nil && (!valid || !o.qualified || expected.Generation != o.identity.Generation || expected.Epoch != strconv.FormatUint(o.epoch, 10)) {
++		return ErrExecutionConflict
++	}
++	if expected != nil && expected.EffectiveSHA256 != "" && expected.EffectiveSHA256 != executionDigest(o.config) {
 +		return ErrExecutionConflict
 +	}
 +	if expected != nil {
@@ -1399,6 +1870,9 @@ index 00000000..b47a682c
 +	}
 +	if err := o.validateControlMutation(kind, payload); err != nil {
 +		return err
++	}
++	if ctx != nil && ctx.Err() != nil {
++		return ctx.Err()
 +	}
 +	wasQualified := o.qualified
 +	beforeEpoch, beforeDigest := o.epoch, executionDigest(o.config)
@@ -2066,10 +2540,10 @@ index 00000000..b47a682c
 +}
 diff --git a/internal/xray/execution_api.go b/internal/xray/execution_api.go
 new file mode 100644
-index 00000000..49b8c44a
+index 00000000..dee2c2b8
 --- /dev/null
 +++ b/internal/xray/execution_api.go
-@@ -0,0 +1,159 @@
+@@ -0,0 +1,176 @@
 +package xray
 +
 +import (
@@ -2104,6 +2578,9 @@ index 00000000..49b8c44a
 +
 +func (x *XrayAPI) rpcContext() context.Context {
 +	ctx := context.Background()
++	if x.operationContext != nil {
++		ctx = x.operationContext
++	}
 +	if x.ownedExecutionCall {
 +		return context.WithValue(ctx, executionCallKey{}, x.execution)
 +	}
@@ -2119,7 +2596,7 @@ index 00000000..49b8c44a
 +	}
 +	local := *x
 +	local.ownedExecutionCall = true
-+	return x.execution.mutate(kind, payload, expected, func() error { return call(&local) })
++	return x.execution.mutateContext(x.operationContext, kind, payload, expected, func() error { return call(&local) })
 +}
 +
 +func objectPayload(data []byte) map[string]any {
@@ -2167,6 +2644,9 @@ index 00000000..49b8c44a
 +	if !s.Qualified || s.Identity.Generation != expected.Generation || s.Epoch != expected.Epoch || len(s.Overrides) != 0 {
 +		return nil, ErrExecutionConflict
 +	}
++	if expected.EffectiveSHA256 != "" && s.EffectiveSHA256 != expected.EffectiveSHA256 {
++		return nil, ErrExecutionConflict
++	}
 +	doc, err := executionDocument(s.Config)
 +	if err != nil {
 +		return nil, ErrExecutionSelector
@@ -2212,6 +2692,17 @@ index 00000000..49b8c44a
 +	}
 +	return outcome, err
 +}
++
++// The request context belongs only to this operation; legacy API calls retain
++// their independent bounds. Successful native effects still finish persistence.
++func (x *XrayAPI) CompareAndApplyRoutingAndPersistContext(ctx context.Context, data []byte, expected ExecutionExpected, persist func() error) (RoutingPersistenceOutcome, error) {
++	if ctx == nil {
++		return RoutingPersistenceOutcome{}, context.Canceled
++	}
++	local := *x
++	local.operationContext = ctx
++	return local.CompareAndApplyRoutingAndPersist(data, expected, persist)
++}
 +func (x *XrayAPI) applyRoutingExpected(data []byte, expected *ExecutionExpected) error {
 +	data = append([]byte(nil), data...)
 +	routing, _ := executionDocument(data)
@@ -2228,6 +2719,132 @@ index 00000000..49b8c44a
 +}
 +func (x *XrayAPI) RemoveUser(tag, email string) error {
 +	return x.withExecutionMutation("RemoveUser", map[string]any{"tag": tag, "email": email}, nil, func(c *XrayAPI) error { return c.removeUserRaw(tag, email) })
++}
+diff --git a/internal/xray/execution_context_test.go b/internal/xray/execution_context_test.go
+new file mode 100644
+index 00000000..3f863d3e
+--- /dev/null
++++ b/internal/xray/execution_context_test.go
+@@ -0,0 +1,120 @@
++package xray
++
++import (
++	"context"
++	"encoding/json"
++	"errors"
++	"strings"
++	"testing"
++	"time"
++
++	routerService "github.com/xtls/xray-core/app/router/command"
++	"google.golang.org/grpc"
++)
++
++func TestExecutionContextFullHashIsCheckedAtSnapshotAndOwner(t *testing.T) {
++	o := executionFixture(t)
++	before := o.snapshot("")
++	expected := ExecutionExpected{Generation: before.Identity.Generation, Epoch: before.Epoch, EffectiveSHA256: strings.Repeat("f", 64)}
++	native, persisted := 0, 0
++	api := persistenceAPI(o, func() error { native++; return nil })
++	if _, err := api.ExecutionRouting(expected); !errors.Is(err, ErrExecutionConflict) {
++		t.Fatal("wrong full hash escaped snapshot fence")
++	}
++	result, err := api.CompareAndApplyRoutingAndPersistContext(context.Background(), executionJSON(fixtureRouting(o, "wm-exit-path-unit")), expected, func() error { persisted++; return nil })
++	after := o.snapshot("")
++	if !errors.Is(err, ErrExecutionConflict) || result != (RoutingPersistenceOutcome{}) || native != 0 || persisted != 0 || !after.Qualified || after.Epoch != before.Epoch || after.EffectiveSHA256 != before.EffectiveSHA256 {
++		t.Fatal("wrong full hash had effects")
++	}
++	expected.EffectiveSHA256 = before.EffectiveSHA256
++	if _, err := api.ExecutionRouting(expected); err != nil {
++		t.Fatal(err)
++	}
++	raw, _ := json.Marshal(expected)
++	if strings.Contains(string(raw), "SHA") || strings.Contains(string(raw), "sha") {
++		t.Fatal("internal field changed legacy DTO")
++	}
++}
++
++func TestExecutionContextCanceledOwnerWaiterHasNoInvalidationOrEffects(t *testing.T) {
++	o := executionFixture(t)
++	before := o.snapshot("")
++	expected := ExecutionExpected{Generation: before.Identity.Generation, Epoch: before.Epoch, EffectiveSHA256: before.EffectiveSHA256}
++	data := executionJSON(fixtureRouting(o, "wm-exit-path-unit"))
++	native, persisted := 0, 0
++	api := persistenceAPI(o, func() error { native++; return nil })
++	ctx, cancel := context.WithCancel(context.Background())
++	defer cancel()
++	done := make(chan error, 1)
++	o.mu.Lock()
++	go func() {
++		_, err := api.CompareAndApplyRoutingAndPersistContext(ctx, data, expected, func() error { persisted++; return nil })
++		done <- err
++	}()
++	select {
++	case <-done:
++		o.mu.Unlock()
++		t.Fatal("operation bypassed owner lock")
++	case <-time.After(20 * time.Millisecond):
++	}
++	cancel()
++	o.mu.Unlock()
++	if err := <-done; !errors.Is(err, context.Canceled) {
++		t.Fatalf("canceled owner waiter returned %v", err)
++	}
++	after := o.snapshot("")
++	if native != 0 || persisted != 0 || !after.Qualified || after.Epoch != before.Epoch || after.EffectiveSHA256 != before.EffectiveSHA256 {
++		t.Fatal("canceled waiter invalidated owner or performed effects")
++	}
++}
++
++type executionContextClient struct {
++	routerService.RoutingServiceClient
++	call func(context.Context) error
++}
++
++func (c executionContextClient) AddRule(ctx context.Context, _ *routerService.AddRuleRequest, _ ...grpc.CallOption) (*routerService.AddRuleResponse, error) {
++	return &routerService.AddRuleResponse{}, c.call(ctx)
++}
++
++func TestExecutionContextNativeSuccessStillPersistsAfterCancellation(t *testing.T) {
++	o := executionFixture(t)
++	before := o.snapshot("")
++	ctx, cancel := context.WithCancel(context.Background())
++	defer cancel()
++	native, persisted := 0, 0
++	var client routerService.RoutingServiceClient = executionContextClient{call: func(actual context.Context) error {
++		native++
++		if actual.Done() == nil || actual.Err() != nil {
++			t.Fatal("request context did not reach native RPC")
++		}
++		cancel() // Native has succeeded; losing the response must not skip barriers.
++		if actual.Err() != context.Canceled {
++			t.Fatal("RPC did not share operation cancellation")
++		}
++		return nil
++	}}
++	api := &XrayAPI{execution: o, RoutingServiceClient: &client}
++	result, err := api.CompareAndApplyRoutingAndPersistContext(ctx, executionJSON(fixtureRouting(o, "wm-exit-path-unit")), ExecutionExpected{Generation: before.Identity.Generation, Epoch: before.Epoch, EffectiveSHA256: before.EffectiveSHA256}, func() error { persisted++; return nil })
++	if err != nil || native != 1 || persisted != 1 || !result.Persisted || !result.OwnerConfirmed || !o.snapshot("").Qualified || api.operationContext != nil {
++		t.Fatalf("successful effect lost persistence or contaminated legacy API: %+v %v", result, err)
++	}
++}
++
++func TestExecutionContextCanceledNativeOutcomeRemainsUnknown(t *testing.T) {
++	o := executionFixture(t)
++	before := o.snapshot("")
++	ctx, cancel := context.WithCancel(context.Background())
++	defer cancel()
++	native, persisted := 0, 0
++	var client routerService.RoutingServiceClient = executionContextClient{call: func(actual context.Context) error {
++		native++
++		cancel()
++		return actual.Err()
++	}}
++	api := &XrayAPI{execution: o, RoutingServiceClient: &client}
++	result, err := api.CompareAndApplyRoutingAndPersistContext(ctx, executionJSON(fixtureRouting(o, "wm-exit-path-unit")), ExecutionExpected{Generation: before.Identity.Generation, Epoch: before.Epoch}, func() error { persisted++; return nil })
++	if !errors.Is(err, context.Canceled) || native != 1 || persisted != 0 || !result.NativeAttempted || result.NativeSucceeded || result.OwnerConfirmed || o.snapshot("").Qualified {
++		t.Fatal("ambiguous native cancellation was replayed or accepted")
++	}
 +}
 diff --git a/internal/xray/execution_identity_linux_test.go b/internal/xray/execution_identity_linux_test.go
 new file mode 100644
