@@ -82,8 +82,13 @@ class PreparedJournal(unittest.TestCase):
         journal.prune(self.root, 0)
         self.assertTrue(directory.is_dir())
 
+    def test_redirected_transaction_is_refused_before_reading_payload(self):
+        with mock.patch.object(Path, "is_symlink", return_value=True), \
+                mock.patch.object(reader, "read_private", side_effect=AssertionError("followed redirected journal")):
+            self.assertEqual(reader.prepared_status(self.root / "redirected"), "active")
+
     def test_foreign_stale_duplicate_or_contradictory_proofs_stay_active(self):
-        for change in ("foreign", "lost-reply", "partial-owner", "stale-epoch", "wrong-after", "wrong-intent", "duplicate-key", "missing-artifact", "changed-candidate", "changed-runtime-post", "missing-origin"):
+        for change in ("foreign", "lost-reply", "partial-owner", "stale-epoch", "wrong-after", "wrong-intent", "duplicate-key", "missing-artifact", "changed-candidate", "changed-runtime-post", "missing-origin", "missing-origin-bad-result"):
             with self.subTest(change=change):
                 root = self.root / change
                 directory = completed_fixture(root)
@@ -109,9 +114,11 @@ class PreparedJournal(unittest.TestCase):
                     journal.atomic_json(directory / "prepared.xray.json", {"different": True})
                 elif change == "changed-runtime-post":
                     journal.atomic_json(directory / "prepared.runtime.post.json", {"prepared_routes": {}})
-                elif change == "missing-origin":
+                elif change in ("missing-origin", "missing-origin-bad-result"):
                     (directory / "prepared.apply.completed.json").unlink()
                 journal.atomic_json(directory / "result.json", result)
+                if change == "missing-origin-bad-result":
+                    (directory / "result.json").write_bytes(b"{broken-json")
                 if change == "duplicate-key":
                     data = (directory / "result.json").read_bytes()
                     (directory / "result.json").write_bytes(data.replace(b'"status": "committed"', b'"status": "bad", "status": "committed"'))

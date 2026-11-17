@@ -145,6 +145,8 @@ def known_owner_result(value):
 def prepared_status(directory):
     """None: ordinary journal; active: retain; committed: verified history only."""
     directory = Path(directory)
+    if directory.is_symlink():
+        return "active"
     pending, completed = directory / "prepared.apply.pending.json", directory / "prepared.apply.completed.json"
     if os.path.lexists(pending):
         return "active"
@@ -197,4 +199,14 @@ def prepared_status(directory):
             return "active"
         return "committed"
     except (OSError, ValueError, TypeError, KeyError, AttributeError, OverflowError, RecursionError):
-        return "active" if origin else None
+        if origin:
+            return "active"
+        # Losing both marker names cannot make an unreadable prepared result
+        # an ordinary snapshot rollback. Valid ordinary journals stay unchanged.
+        try:
+            plan = decode(read_private(directory / "plan.json"))
+            if str(plan.get("operation", "")).startswith("auto-prepared-"):
+                return "active"
+        except (OSError, ValueError, TypeError, RecursionError):
+            pass
+        return None
