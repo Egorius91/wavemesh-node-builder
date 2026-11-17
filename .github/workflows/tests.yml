@@ -35,6 +35,8 @@ jobs:
             python3 "$test"
           done
           python3 tests/e2e/test_multi_exit.py
+      - name: Native public Entry TLS verifier in a private network namespace
+        run: sudo -n unshare --net -- /usr/bin/python3 -B tests/native/test_public_entry_tls_native.py --require-native -v
       - name: Bash and adapter tests
         # Root ownership and permissions are part of the constrained pilot boundary.
         run: |
