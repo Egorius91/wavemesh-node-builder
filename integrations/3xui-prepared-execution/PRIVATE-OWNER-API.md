@@ -100,6 +100,17 @@ Known-reply metadata resumption uses `complete` separately, without a new send.
 ROOT owns the shared reader's orphan send/result guard and delivers its exact
 patch for private integration; no competing Agent/health writer is introduced.
 
+## Required follow-up before activation (ROOT958)
+
+Scoped943 tests passed, but final review identified two unaccepted invariants:
+a request canceled while waiting for the initial owner snapshot can still reach
+identity inspection; and literal loopback plus database token metadata does not
+authenticate the connected TCP listener before bearer transmission. The caller
+is unwired and has used only synthetic credentials. ROOT958 requires a purpose
+context snapshot path and reuse of private SO_PEERCRED/process/exec custody to
+bind the exact accepted TCP socket before any Authorization bytes. These fixes
+remain mandatory before native composition or installation.
+
 ## Compatibility and rollback limits
 
 Old internal method signatures, readonly control/DTOs, denied API scopes,

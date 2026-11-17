@@ -1,7 +1,7 @@
 {
   "schema": 1,
-  "status": "PRIVATE_OWNER_ADAPTER943_SOURCE_PASS_UNWIRED_NATIVE_OPEN",
-  "at_utc": "2026-11-17T16:07:38.991506+00:00",
+  "status": "PRIVATE_LOOPBACK948_SOURCE_PASS_INVARIANTS958_OPEN",
+  "at_utc": "2026-11-17T16:34:04.839100+00:00",
   "upstream": {
     "repository": "https://github.com/MHSanaei/3x-ui",
     "tag": "v3.11.0",
@@ -9,10 +9,10 @@
     "license": "GPL-3.0",
     "license_sha256": "3972dc9744f6499f0f9b2dbf76696f2ae7ad8af9b23dde66d6af86c9dfb36986"
   },
-  "producer_commit": "8923d82aa33dda5cfe982846c806260f95b6a1f9",
+  "producer_commit": "233edc08baebf66512642d1e213162de6c319825",
   "patch": {
     "file": "producer.patch",
-    "sha256": "a639be66a48e79474900535adbf710eed8dd88d462d93c11c9ba6859f450c719"
+    "sha256": "5865a17acfc3f5fc799e72d8de9376c3ab4e8dfa0f9713783ce1372d9bb5e1ac"
   },
   "changed_source_sha256": {
     "internal/web/controller/api.go": "6af5ef866f944b09cb51a21c8ef0d67e27284f21b3969f85a9ad6aae29c3407f",
@@ -25,6 +25,7 @@
     "internal/web/service/node.go": "9687b7e25045ea1638c09c1c6137d2632967f2cf6cbe7d49e941d4db54c5e18f",
     "internal/web/service/tuic_relay_apply.go": "9a5c5ab1c383835433699ed68f4287acc7b044befaf7dc0d130903c798ffc01c",
     "internal/web/service/xray.go": "bf52fa109d6393a62815dfa169173b9dc1ce2f9c5a3bb48b877fe9624c1de79e",
+    "internal/web/service/xray_builder_loopback_test.go": "1568e0184775100091824d41d8f23bbc6e2352bd325ec0bd3fa3b4c631d8ed8d",
     "internal/web/service/xray_execution.go": "d50703caae8b78c139c0b07638f8fa83998d23c986133e0b42278377e9155f32",
     "internal/web/service/xray_execution_context_test.go": "09fef63feb7b4913dcab16585e8f9e85b62ff8bd4d1dac320f4ed3562a2046a7",
     "internal/web/service/xray_execution_test.go": "6d261d8b0983e8b7ae078d884da60d27d2891b76d0f6b9659f5d17d18cd117d3",
@@ -32,19 +33,23 @@
     "internal/web/web.go": "2cd9df2a547a16f5305305b39f54fdd31f2436634b1951c4ba684e28d36ae912",
     "internal/xray/api.go": "6c86698dc7020b4fba71478c97a755a95206dfd0756ab5598b194f2bb925d1ec",
     "internal/xray/config.go": "dec65d8e0ae6ae13bfac2f016ad2eaad5038594798398067736ecad99cf7a2d4",
-    "internal/xray/execution.go": "46f18587075a92df7265b029c2114c70cb1ce2d59375a52826063a015125abc9",
+    "internal/xray/execution.go": "02986da58aa63a0992f44c81996b7f51d0886b3798b5d41ef85e3f56ea7978e2",
     "internal/xray/execution_api.go": "00f834558b9f54386fdc3e1b108f99f9f3f2fee59ae6654bc744be78068793e3",
     "internal/xray/execution_context_test.go": "8f360f2284fef2b840a94c3a4844c48a1cd0c34b0fa75073bdecd60e27cac524",
     "internal/xray/execution_identity_linux_test.go": "ab630afac4d684b71b25134684b50dbedc8ceb4355b1361fc2fda39fbc21f6f4",
     "internal/xray/execution_lifecycle_test.go": "0a63cbecd68dc116f7a3a6c63aa4e33127f89e4e60e2c8be48e95914b0add981",
     "internal/xray/execution_linux.go": "8929ddd757058faed5976d2c3b049b24510f66807ca648d24ee83d06e2ee1308",
+    "internal/xray/execution_loopback.go": "b18e01c4b5b910cbf6eff905d1ea50d4b2faf480513e67d1c8827ce572924dd0",
+    "internal/xray/execution_loopback_test.go": "c741ef5e502b2be292fea8ae9d3e56ab49587f621ed2bdce0ec665f163611cc7",
     "internal/xray/execution_native_linux_test.go": "d1df5e86221b84ce0032e07aaee6b3e0ce188e1cbb75015653f7566e115057aa",
     "internal/xray/execution_other.go": "4988e852af47f487b2232ba089db0363498a1f3b5833b626a78f15fd4df7d9b7",
     "internal/xray/execution_override_test.go": "15f50a1d62b97be709205331ee5de46e72d1b379d50851c89b475450b6bdd432",
     "internal/xray/execution_persist_test.go": "6b27b553037b5ec8c44e292b934ffc1b8acc1abc9bb133720f98559b187dc9b8",
     "internal/xray/execution_template_test.go": "a515ffa3d2fcb0037f5264ce5f26e5ec332fb755ca640673cab2841b7e17caee",
     "internal/xray/execution_test.go": "4f2522b334db1f61f7df2782e22a1a947438880a5997047a56d07d460ee55bbd",
-    "internal/xray/process.go": "5ee126e0455d621db7e4f790899433faf9858ad65b4889beafe752f5805e6b10"
+    "internal/xray/process.go": "5ee126e0455d621db7e4f790899433faf9858ad65b4889beafe752f5805e6b10",
+    "internal/xray/testdata/builder-getconfig-loopback.json": "5e5ab769b2a548afb8f210951f1734b1e39c3436ee2926b80fcf75e68bb05f00",
+    "internal/xray/testdata/builder-loopback-inbounds.json": "cd624c5e760fbfbfc3396773acdece1dab7534d99c74828251f4b6b220205213"
   },
   "stock_core": {
     "version": "26.10.21",
@@ -59,9 +64,9 @@
     "tests/unit/test_prepared_channels.py": "25476f905139281ab15236e439ad03dc0ee6430d55eeda98f6b6ad0f86274e5b"
   },
   "previous_checkpoint": {
-    "producer_commit": "0d0b7617b4b994747983bc42f9acb2040b6a4042",
-    "manifest_sha256": "996fb2d24df31e791fb1b4dc107442f83e5e3399ffc803ee17525881359ce12a",
-    "patch_sha256": "bd220e4403968cf0d39bf2d4887af322564663df288e87d673f36287432d3748"
+    "producer_commit": "8923d82aa33dda5cfe982846c806260f95b6a1f9",
+    "manifest_sha256": "d2a440687b57f110abc5fae22925836153e6a0b97e917bb2bca8157c47cc65bb",
+    "patch_sha256": "a639be66a48e79474900535adbf710eed8dd88d462d93c11c9ba6859f450c719"
   },
   "proof": {
     "windows_race": {
@@ -522,11 +527,28 @@
       "root_orphan_native2_sha256": "311170a5595551c1af3610df37234d2037a1533601dfb4d75d5f0ea902efd0fb",
       "native_current_api": "NOT_RUN",
       "activation": "private caller source only; auto.sh and installation unwired",
-      "scope": "Windows CGO HTTP recorder/auth and mocked native RPC; real synthetic loopback client/files/SQLite. Not actual managed service/core or physical traffic."
+      "scope": "Windows CGO HTTP recorder/auth and mocked native RPC; real synthetic loopback client/files/SQLite. Not actual managed service/core or physical traffic.",
+      "unaccepted_invariants958": [
+        "canceled owner snapshot waiter must stop before identity inspection",
+        "authenticate same accepted TCP peer as private verified Producer before sending bearer"
+      ]
+    },
+    "loopback_custody948": {
+      "source_head": "233edc08baebf66512642d1e213162de6c319825",
+      "source_ack": 948,
+      "immediate_base": "8923d82aa33dda5cfe982846c806260f95b6a1f9",
+      "actual_builder_fixture_sha256": "cd624c5e760fbfbfc3396773acdece1dab7534d99c74828251f4b6b220205213",
+      "actual_complete_getconfig_sha256": "5e5ab769b2a548afb8f210951f1734b1e39c3436ee2926b80fcf75e68bb05f00",
+      "red": "actual2cases refused before validator change",
+      "focused_pass": 6,
+      "skip": 0,
+      "summary_sha256": "a8e6abc32e00a1cea74448b8b38df45431e6959362e27c967b46b9fa5017c3b5",
+      "builder_rerender_pass": 1,
+      "scope": "WindowsCGO actual synthetic GetXrayConfig + validator, not Linux sealed qualification or public TLS"
     }
   },
   "remaining_gates": [
-    "Current producer8923d82aa33dda5cfe982846c806260f95b6a1f9 full native main and actual managed core/service/caller integration NOT RUN; historical35 binary is not this revision",
+    "ROOT958 snapshot cancellation and authenticated connected-peer custody before full current main and actual service/core/API/client composition",
     "Installed transaction/caller integration under approved full producer release, not the synthetic ELF",
     "Reviewed installed full-producer release/manifest and target-node compatibility; the private Linux build is separately proven",
     "Real stock template compatibility and collector consuming the fresh private snapshot",

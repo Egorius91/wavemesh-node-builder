@@ -48,8 +48,9 @@ cannot reuse an earlier sample. Only a bounded, complete chain of native selecto
 receipts for the one owned unconditional rule can preserve hysteresis. Cold
 launch resets prepared selectors to blackhole. Public channel v1 is unchanged.
 
-Supported attestation input is intentionally bounded: VLESS/XHTTP/TLS/stream-one
-managed ingress, inline inputs, canonical integral JSON numbers and the reserved
+Supported attestation input is intentionally bounded: existing VLESS/XHTTP/TLS/stream-one
+and ROOT948 exact generated literal-loopback managed ingress (custody only,
+PRIVATE-LOOPBACK-CUSTODY.md), inline inputs, canonical integral JSON numbers and the reserved
 private native API boundary. External certificate/script/geodata files, geoip or
 geosite references, environment expansion, fractional/exponent numbers and other
 ingress combinations fail managed admission. This is a material prerequisite;
@@ -77,7 +78,8 @@ authorized by this source checkpoint.
 
 
 Current source follow-up adds only the exact inert wm-api-rule label and a private
-read-only consumer. security:none remains unsupported; it is not converted to TLS.
+read-only consumer. security:none was unsupported at that historical source; ROOT948 adds only
+the exact generated managed loopback class and does not convert it to TLS.
 PRIVATE-CONSUMER.md specifies trust, fresh readback, canonical hash bounds, the
 source/native proof and outstanding full-build/integration gates. There is no
 production producer approval or installed consumer/transaction integration.
@@ -127,3 +129,10 @@ Prior e1 journal native15+4/Bash and reader7/Agent1 remain scoped historical
 proof, not native acceptance of this new API/client. Current full main, actual
 service/core/caller, loopback ingress/public TLS and physical flow gates remain
 open. Source-manifest.json pins current commits/bytes and each proof's scope.
+
+ROOT948 actual Builder->GetXrayConfig full fixture is RED on8923 then source
+PASS6/no skips plus Builder rerender1. Full serialized inputs, dynamic client
+normalization and exact allowed keys/types are in PRIVATE-LOOPBACK-CUSTODY.md.
+ROOT958 snapshot-context and connected-peer custody are still required before
+any caller activation/full main admission; loopback+DB authority alone does not
+authenticate a TCP listener. No real credentials have been used.

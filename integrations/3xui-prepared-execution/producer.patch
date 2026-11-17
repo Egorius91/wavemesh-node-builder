@@ -721,6 +721,146 @@ index 596986c3..6c941b94 100644
 +	}
 +	return p.GetAPIEndpoint()
 +}
+diff --git a/internal/web/service/xray_builder_loopback_test.go b/internal/web/service/xray_builder_loopback_test.go
+new file mode 100644
+index 00000000..0abf48f6
+--- /dev/null
++++ b/internal/web/service/xray_builder_loopback_test.go
+@@ -0,0 +1,134 @@
++package service
++
++import (
++	"bytes"
++	"encoding/json"
++	"flag"
++	"os"
++	"path/filepath"
++	"testing"
++
++	"github.com/mhsanaei/3x-ui/v3/internal/database"
++	"github.com/mhsanaei/3x-ui/v3/internal/database/model"
++)
++
++// Fixture regeneration is test-only, writes one fixed testdata path, and never
++// changes production config or installs an input-validator bypass.
++var updateBuilderLoopbackFixture = flag.Bool("update-builder-loopback-fixture", false, "regenerate synthetic GetXrayConfig golden")
++
++func TestExecutionActualBuilderGetXrayConfigSerialization(t *testing.T) {
++	t.Cleanup(SetXrayProcessForTest(nil))
++	directory := filepath.Join("..", "..", "xray", "testdata")
++	raw, err := os.ReadFile(filepath.Join(directory, "builder-loopback-inbounds.json"))
++	if err != nil {
++		t.Fatal(err)
++	}
++	var fixture struct {
++		Cases []struct {
++			Name    string                     `json:"name"`
++			Payload map[string]json.RawMessage `json:"payload"`
++		} `json:"cases"`
++	}
++	if err := json.Unmarshal(raw, &fixture); err != nil || len(fixture.Cases) != 2 {
++		t.Fatal("actual Builder payload fixture missing")
++	}
++	generated := map[string]json.RawMessage{}
++	for _, item := range fixture.Cases {
++		t.Run(item.Name, func(t *testing.T) {
++			setupSettingTestDB(t)
++			// The existing panel accepts these JSON sections as raw strings.
++			// Preserve every field in the actual Builder payload; GetXrayConfig,
++			// ClientService and GenXrayInboundConfig own all normalization.
++			payload := map[string]json.RawMessage{}
++			for key, value := range item.Payload {
++				payload[key] = value
++			}
++			for _, key := range []string{"settings", "streamSettings", "sniffing", "allocate"} {
++				if value, ok := payload[key]; ok {
++					payload[key], _ = json.Marshal(string(value))
++				}
++			}
++			encoded, _ := json.Marshal(payload)
++			var inbound model.Inbound
++			if err := json.Unmarshal(encoded, &inbound); err != nil {
++				t.Fatal(err)
++			}
++			if err := database.GetDB().Create(&inbound).Error; err != nil {
++				t.Fatal(err)
++			}
++			clients, err := ParseInboundSettingsClients(inbound.Settings)
++			if err != nil {
++				t.Fatal(err)
++			}
++			var clientService ClientService
++			if err := clientService.SyncInbound(nil, inbound.Id, clients); err != nil {
++				t.Fatal(err)
++			}
++			template := map[string]any{
++				"log":       map[string]any{"loglevel": "none", "access": "none", "error": "none"},
++				"api":       map[string]any{"tag": "api", "services": []string{"HandlerService", "RoutingService", "StatsService"}},
++				"inbounds":  []any{map[string]any{"tag": "api", "protocol": "tunnel", "listen": "127.0.0.1", "port": 62789, "settings": map[string]any{"address": "127.0.0.1"}}},
++				"outbounds": []any{map[string]any{"tag": "wm-eu-only-block", "protocol": "blackhole"}, map[string]any{"tag": "wm-exit-path-unit", "protocol": "freedom"}},
++				"routing":   map[string]any{"rules": []any{map[string]any{"type": "field", "ruleTag": "wm-api-rule", "inboundTag": []string{"api"}, "outboundTag": "api"}, map[string]any{"type": "field", "ruleTag": "wm-rule-fixture", "inboundTag": []string{inbound.Tag}, "outboundTag": "wm-eu-only-block"}}},
++			}
++			stored, _ := json.Marshal(template)
++			var settings SettingService
++			if err := settings.saveSetting("xrayTemplateConfig", string(stored)); err != nil {
++				t.Fatal(err)
++			}
++			config, err := (&XrayService{}).GetXrayConfig()
++			if err != nil {
++				t.Fatal(err)
++			}
++			encoded, err = json.Marshal(config)
++			if err != nil {
++				t.Fatal(err)
++			}
++			if bytes.Contains(encoded, []byte("externalProxy")) {
++				t.Fatal("owner failed to strip panel-only proxy")
++			}
++			count := -1
++			for _, ib := range config.InboundConfigs {
++				if ib.Tag == inbound.Tag {
++					var fields struct {
++						Clients []map[string]any `json:"clients"`
++					}
++					if json.Unmarshal(ib.Settings, &fields) != nil {
++						t.Fatal("bad normalized settings")
++					}
++					count = len(fields.Clients)
++					for _, c := range fields.Clients {
++						if len(c) != 2 || c["email"] != "fixture-1" || c["id"] != "00000000-0000-4000-8000-000000000001" {
++							t.Fatal("actual dynamic client normalization changed")
++						}
++					}
++				}
++			}
++			if item.Name == "prepared-unpublished-empty" && count != 0 || item.Name == "managed-dynamic-clients" && count != 1 {
++				t.Fatalf("unexpected generated client count %d", count)
++			}
++			generated[item.Name] = encoded
++		})
++	}
++	if t.Failed() {
++		return
++	}
++	encoded, err := json.MarshalIndent(generated, "", "  ")
++	if err != nil {
++		t.Fatal(err)
++	}
++	encoded = append(encoded, '\n')
++	path := filepath.Join(directory, "builder-getconfig-loopback.json")
++	if *updateBuilderLoopbackFixture {
++		if err := os.WriteFile(path, encoded, 0600); err != nil {
++			t.Fatal(err)
++		}
++	}
++	expected, err := os.ReadFile(path)
++	if err != nil {
++		t.Fatal(err)
++	}
++	if !bytes.Equal(encoded, expected) {
++		t.Fatal("actual complete GetXrayConfig output drifted; inspect/regenerate test-only golden")
++	}
++}
 diff --git a/internal/web/service/xray_execution.go b/internal/web/service/xray_execution.go
 new file mode 100644
 index 00000000..62821905
@@ -1653,10 +1793,10 @@ index 2cff1596..e8cc9a02 100644
  	if len(c.InboundConfigs) != len(other.InboundConfigs) {
 diff --git a/internal/xray/execution.go b/internal/xray/execution.go
 new file mode 100644
-index 00000000..1ccdd94e
+index 00000000..27d087ec
 --- /dev/null
 +++ b/internal/xray/execution.go
-@@ -0,0 +1,881 @@
+@@ -0,0 +1,884 @@
 +package xray
 +
 +import (
@@ -2223,6 +2363,9 @@ index 00000000..1ccdd94e
 +			continue
 +		}
 +		stream, ok := ib["streamSettings"].(map[string]any)
++		if ok && stream["security"] == "none" && executionManagedLoopbackIngress(ib) {
++			continue // Exact consumed-config custody only, never public TLS proof.
++		}
 +		if ib["protocol"] != "vless" || !ok || stream["network"] != "xhttp" || stream["security"] != "tls" {
 +			return errors.New("unsupported managed ingress")
 +		}
@@ -3371,6 +3514,248 @@ index 00000000..fbde8034
 +}
 +
 +func executionRequested() bool { return os.Getenv("XUI_PREPARED_ATTESTATION") == "1" }
+diff --git a/internal/xray/execution_loopback.go b/internal/xray/execution_loopback.go
+new file mode 100644
+index 00000000..e81a855e
+--- /dev/null
++++ b/internal/xray/execution_loopback.go
+@@ -0,0 +1,113 @@
++package xray
++
++import (
++	"encoding/json"
++	"regexp"
++	"strings"
++
++	"github.com/google/uuid"
++)
++
++var executionLoopbackTag = regexp.MustCompile(`^wm-route-[A-Za-z0-9][A-Za-z0-9_.-]{0,118}$`)
++var executionLoopbackEmail = regexp.MustCompile(`^[A-Za-z0-9_.@+-]{1,256}$`)
++var executionLoopbackPath = regexp.MustCompile(`^/api/(?:[A-Za-z0-9_-]+/)+$`)
++var executionLoopbackHostLabel = regexp.MustCompile(`^[A-Za-z0-9](?:[A-Za-z0-9-]{0,61}[A-Za-z0-9])?$`)
++
++func executionObjectKeys(value map[string]any, names ...string) bool {
++	if len(value) != len(names) {
++		return false
++	}
++	for _, name := range names {
++		if _, ok := value[name]; !ok {
++			return false
++		}
++	}
++	return true
++}
++
++// Only the exact runtime_state -> GetXrayConfig generated class. This admits
++// immutable custody of a local transport, with no public TLS/profile semantics.
++func executionManagedLoopbackIngress(ib map[string]any) bool {
++	if !executionObjectKeys(ib, "listen", "port", "protocol", "settings", "streamSettings", "tag", "sniffing") || ib["listen"] != "127.0.0.1" || ib["protocol"] != "vless" {
++		return false
++	}
++	tag, ok := ib["tag"].(string)
++	if !ok || len(tag) > 128 || !executionLoopbackTag.MatchString(tag) {
++		return false
++	}
++	port, ok := ib["port"].(json.Number)
++	if !ok {
++		return false
++	}
++	number, err := port.Int64()
++	if err != nil || number < 1 || number > 65535 {
++		return false
++	}
++	settings, ok := ib["settings"].(map[string]any)
++	if !ok || !executionObjectKeys(settings, "clients", "decryption", "fallbacks") || settings["decryption"] != "none" {
++		return false
++	}
++	fallbacks, ok := settings["fallbacks"].([]any)
++	if !ok || len(fallbacks) != 0 {
++		return false
++	}
++	clients, ok := settings["clients"].([]any)
++	if !ok {
++		return false
++	}
++	ids, emails := map[string]bool{}, map[string]bool{}
++	for _, value := range clients {
++		client, ok := value.(map[string]any)
++		if !ok || !executionObjectKeys(client, "email", "id") {
++			return false
++		}
++		email, ok := client["email"].(string)
++		if !ok || !executionLoopbackEmail.MatchString(email) || emails[email] {
++			return false
++		}
++		id, ok := client["id"].(string)
++		if !ok {
++			return false
++		}
++		parsed, err := uuid.Parse(id)
++		if err != nil || parsed == uuid.Nil || parsed.String() != id || ids[id] {
++			return false
++		}
++		ids[id], emails[email] = true, true
++	}
++	stream, ok := ib["streamSettings"].(map[string]any)
++	if !ok || !executionObjectKeys(stream, "network", "security", "xhttpSettings") || stream["network"] != "xhttp" || stream["security"] != "none" {
++		return false
++	}
++	xhttp, ok := stream["xhttpSettings"].(map[string]any)
++	if !ok || !executionObjectKeys(xhttp, "path", "host", "mode") || xhttp["mode"] != "stream-one" {
++		return false
++	}
++	path, ok := xhttp["path"].(string)
++	if !ok || len(path) > 256 || !executionLoopbackPath.MatchString(path) {
++		return false
++	}
++	host, ok := xhttp["host"].(string)
++	if !ok || len(host) == 0 || len(host) > 253 {
++		return false
++	}
++	for _, label := range strings.Split(host, ".") {
++		if !executionLoopbackHostLabel.MatchString(label) {
++			return false
++		}
++	}
++	sniffing, ok := ib["sniffing"].(map[string]any)
++	if !ok || !executionObjectKeys(sniffing, "enabled", "destOverride", "metadataOnly", "routeOnly") || sniffing["enabled"] != true || sniffing["metadataOnly"] != false || sniffing["routeOnly"] != false {
++		return false
++	}
++	destinations, ok := sniffing["destOverride"].([]any)
++	if !ok || len(destinations) != 4 {
++		return false
++	}
++	for index, name := range []string{"http", "tls", "quic", "fakedns"} {
++		if destinations[index] != name {
++			return false
++		}
++	}
++	return true
++}
+diff --git a/internal/xray/execution_loopback_test.go b/internal/xray/execution_loopback_test.go
+new file mode 100644
+index 00000000..2f699774
+--- /dev/null
++++ b/internal/xray/execution_loopback_test.go
+@@ -0,0 +1,117 @@
++package xray
++
++import (
++	"encoding/json"
++	"os"
++	"testing"
++)
++
++func builderLoopbackConfigs(t *testing.T) map[string]json.RawMessage {
++	t.Helper()
++	raw, err := os.ReadFile("testdata/builder-getconfig-loopback.json")
++	if err != nil {
++		t.Fatal(err)
++	}
++	var cases map[string]json.RawMessage
++	if json.Unmarshal(raw, &cases) != nil || len(cases) != 2 {
++		t.Fatal("actual complete GetXrayConfig golden missing")
++	}
++	return cases
++}
++
++func TestExecutionActualBuilderLoopbackCustodyInput(t *testing.T) {
++	for name, raw := range builderLoopbackConfigs(t) {
++		t.Run(name, func(t *testing.T) {
++			doc, err := executionDocument(raw)
++			if err != nil {
++				t.Fatal(err)
++			}
++			if err := validateExecutionInputs(doc); err != nil {
++				t.Fatalf("actual Builder/GetXrayConfig ingress refused: %v", err)
++			}
++		})
++	}
++}
++
++func TestExecutionLoopbackGeneratedClassRefusesOtherInputs(t *testing.T) {
++	raw := builderLoopbackConfigs(t)["managed-dynamic-clients"]
++	for _, change := range []string{"missing-listen", "wildcard", "public", "hostname", "ipv6", "port-zero", "port-high", "port-string", "tag-empty", "tag-foreign", "protocol", "network", "mode", "decryption", "path-empty", "path-traversal", "path-query", "host-empty", "host-url", "host-control", "tls-settings", "reality-settings", "external-proxy", "extra-transport", "extra-top", "client-flow", "client-reverse", "client-bad-id", "client-duplicate", "client-enable", "fallback", "sniffing-metadata"} {
++		t.Run(change, func(t *testing.T) {
++			doc, _ := executionDocument(raw)
++			ib := doc["inbounds"].([]any)[1].(map[string]any)
++			stream := ib["streamSettings"].(map[string]any)
++			settings := ib["settings"].(map[string]any)
++			xhttp := stream["xhttpSettings"].(map[string]any)
++			client := settings["clients"].([]any)[0].(map[string]any)
++			switch change {
++			case "missing-listen":
++				delete(ib, "listen")
++			case "wildcard":
++				ib["listen"] = "0.0.0.0"
++			case "public":
++				ib["listen"] = "192.0.2.1"
++			case "hostname":
++				ib["listen"] = "localhost"
++			case "ipv6":
++				ib["listen"] = "::1"
++			case "port-zero":
++				ib["port"] = json.Number("0")
++			case "port-high":
++				ib["port"] = json.Number("65536")
++			case "port-string":
++				ib["port"] = "21090"
++			case "tag-empty":
++				ib["tag"] = "wm-route-"
++			case "tag-foreign":
++				ib["tag"] = "foreign"
++			case "protocol":
++				ib["protocol"] = "vmess"
++			case "network":
++				stream["network"] = "tcp"
++			case "mode":
++				xhttp["mode"] = "auto"
++			case "decryption":
++				settings["decryption"] = "external"
++			case "path-empty":
++				xhttp["path"] = ""
++			case "path-traversal":
++				xhttp["path"] = "/api/../"
++			case "path-query":
++				xhttp["path"] = "/api/path/?q=1"
++			case "host-empty":
++				xhttp["host"] = ""
++			case "host-url":
++				xhttp["host"] = "https://example.invalid/"
++			case "host-control":
++				xhttp["host"] = "example.invalid\n"
++			case "tls-settings":
++				stream["tlsSettings"] = map[string]any{}
++			case "reality-settings":
++				stream["realitySettings"] = map[string]any{}
++			case "external-proxy":
++				stream["externalProxy"] = []any{}
++			case "extra-transport":
++				stream["tcpSettings"] = map[string]any{}
++			case "extra-top":
++				ib["proxySettings"] = map[string]any{}
++			case "client-flow":
++				client["flow"] = "xtls-rprx-vision"
++			case "client-reverse":
++				client["reverse"] = map[string]any{}
++			case "client-bad-id":
++				client["id"] = "invalid"
++			case "client-duplicate":
++				settings["clients"] = append(settings["clients"].([]any), client)
++			case "client-enable":
++				client["enable"] = true
++			case "fallback":
++				settings["fallbacks"] = []any{map[string]any{"dest": 443}}
++			case "sniffing-metadata":
++				ib["sniffing"].(map[string]any)["metadataOnly"] = true
++			}
++			if validateExecutionInputs(doc) == nil {
++				t.Fatal("unsupported generated-class variant admitted")
++			}
++		})
++	}
++}
 diff --git a/internal/xray/execution_native_linux_test.go b/internal/xray/execution_native_linux_test.go
 new file mode 100644
 index 00000000..980bdb7d
@@ -4722,3 +5107,337 @@ index a9d8c9ce..a45c7340 100644
  	if !p.IsRunning() {
  		return ErrXrayNotRunning
  	}
+diff --git a/internal/xray/testdata/builder-getconfig-loopback.json b/internal/xray/testdata/builder-getconfig-loopback.json
+new file mode 100644
+index 00000000..39c208cd
+--- /dev/null
++++ b/internal/xray/testdata/builder-getconfig-loopback.json
+@@ -0,0 +1,187 @@
++{
++  "managed-dynamic-clients": {
++    "log": {
++      "access": "none",
++      "error": "none",
++      "loglevel": "none"
++    },
++    "routing": {
++      "rules": [
++        {
++          "inboundTag": [
++            "api"
++          ],
++          "outboundTag": "api",
++          "ruleTag": "wm-api-rule",
++          "type": "field"
++        },
++        {
++          "inboundTag": [
++            "wm-route-auto-europe"
++          ],
++          "outboundTag": "wm-eu-only-block",
++          "ruleTag": "wm-rule-fixture",
++          "type": "field"
++        }
++      ]
++    },
++    "inbounds": [
++      {
++        "listen": "127.0.0.1",
++        "port": 62789,
++        "protocol": "tunnel",
++        "settings": {
++          "address": "127.0.0.1"
++        },
++        "tag": "api"
++      },
++      {
++        "listen": "127.0.0.1",
++        "port": 21090,
++        "protocol": "vless",
++        "settings": {
++          "clients": [
++            {
++              "email": "fixture-1",
++              "id": "00000000-0000-4000-8000-000000000001"
++            }
++          ],
++          "decryption": "none",
++          "fallbacks": []
++        },
++        "streamSettings": {
++          "network": "xhttp",
++          "security": "none",
++          "xhttpSettings": {
++            "host": "ru-entry.example.com",
++            "mode": "stream-one",
++            "path": "/api/auto/abcdefghijklmnop/"
++          }
++        },
++        "tag": "wm-route-auto-europe",
++        "sniffing": {
++          "enabled": true,
++          "destOverride": [
++            "http",
++            "tls",
++            "quic",
++            "fakedns"
++          ],
++          "metadataOnly": false,
++          "routeOnly": false
++        }
++      }
++    ],
++    "outbounds": [
++      {
++        "protocol": "blackhole",
++        "tag": "wm-eu-only-block"
++      },
++      {
++        "protocol": "freedom",
++        "tag": "wm-exit-path-unit"
++      }
++    ],
++    "policy": null,
++    "api": {
++      "services": [
++        "HandlerService",
++        "RoutingService",
++        "StatsService"
++      ],
++      "tag": "api"
++    },
++    "stats": null,
++    "metrics": null
++  },
++  "prepared-unpublished-empty": {
++    "log": {
++      "access": "none",
++      "error": "none",
++      "loglevel": "none"
++    },
++    "routing": {
++      "rules": [
++        {
++          "inboundTag": [
++            "api"
++          ],
++          "outboundTag": "api",
++          "ruleTag": "wm-api-rule",
++          "type": "field"
++        },
++        {
++          "inboundTag": [
++            "wm-route-auto-europe"
++          ],
++          "outboundTag": "wm-eu-only-block",
++          "ruleTag": "wm-rule-fixture",
++          "type": "field"
++        }
++      ]
++    },
++    "inbounds": [
++      {
++        "listen": "127.0.0.1",
++        "port": 62789,
++        "protocol": "tunnel",
++        "settings": {
++          "address": "127.0.0.1"
++        },
++        "tag": "api"
++      },
++      {
++        "listen": "127.0.0.1",
++        "port": 21090,
++        "protocol": "vless",
++        "settings": {
++          "clients": [],
++          "decryption": "none",
++          "fallbacks": []
++        },
++        "streamSettings": {
++          "network": "xhttp",
++          "security": "none",
++          "xhttpSettings": {
++            "host": "ru-entry.example.com",
++            "mode": "stream-one",
++            "path": "/api/auto/abcdefghijklmnop/"
++          }
++        },
++        "tag": "wm-route-auto-europe",
++        "sniffing": {
++          "enabled": true,
++          "destOverride": [
++            "http",
++            "tls",
++            "quic",
++            "fakedns"
++          ],
++          "metadataOnly": false,
++          "routeOnly": false
++        }
++      }
++    ],
++    "outbounds": [
++      {
++        "protocol": "blackhole",
++        "tag": "wm-eu-only-block"
++      },
++      {
++        "protocol": "freedom",
++        "tag": "wm-exit-path-unit"
++      }
++    ],
++    "policy": null,
++    "api": {
++      "services": [
++        "HandlerService",
++        "RoutingService",
++        "StatsService"
++      ],
++      "tag": "api"
++    },
++    "stats": null,
++    "metrics": null
++  }
++}
+diff --git a/internal/xray/testdata/builder-loopback-inbounds.json b/internal/xray/testdata/builder-loopback-inbounds.json
+new file mode 100644
+index 00000000..65893f22
+--- /dev/null
++++ b/internal/xray/testdata/builder-loopback-inbounds.json
+@@ -0,0 +1,135 @@
++{
++  "schema_version": 1,
++  "generator": "runtime_state.inbound_payload after prepared_channels.stage",
++  "cases": [
++    {
++      "name": "prepared-unpublished-empty",
++      "payload": {
++        "up": 0,
++        "down": 0,
++        "total": 0,
++        "remark": "--!wm-route-auto-europe",
++        "tag": "wm-route-auto-europe",
++        "enable": true,
++        "expiryTime": 0,
++        "listen": "127.0.0.1",
++        "port": 21090,
++        "protocol": "vless",
++        "settings": {
++          "clients": [],
++          "decryption": "none",
++          "fallbacks": []
++        },
++        "streamSettings": {
++          "network": "xhttp",
++          "security": "none",
++          "xhttpSettings": {
++            "path": "/api/auto/abcdefghijklmnop/",
++            "host": "ru-entry.example.com",
++            "mode": "stream-one"
++          },
++          "externalProxy": [
++            {
++              "dest": "ru-entry.example.com",
++              "port": 443,
++              "remark": "Auto",
++              "forceTls": "tls",
++              "sni": "ru-entry.example.com",
++              "fingerprint": "randomized"
++            }
++          ]
++        },
++        "sniffing": {
++          "enabled": true,
++          "destOverride": [
++            "http",
++            "tls",
++            "quic",
++            "fakedns"
++          ],
++          "metadataOnly": false,
++          "routeOnly": false
++        },
++        "allocate": {
++          "strategy": "always"
++        }
++      }
++    },
++    {
++      "name": "managed-dynamic-clients",
++      "payload": {
++        "up": 0,
++        "down": 0,
++        "total": 0,
++        "remark": "Auto",
++        "tag": "wm-route-auto-europe",
++        "enable": true,
++        "expiryTime": 0,
++        "listen": "127.0.0.1",
++        "port": 21090,
++        "protocol": "vless",
++        "settings": {
++          "clients": [
++            {
++              "id": "00000000-0000-4000-8000-000000000001",
++              "email": "fixture-1",
++              "enable": true,
++              "flow": "",
++              "limitIp": 0,
++              "totalGB": 0,
++              "expiryTime": 0,
++              "tgId": 0,
++              "subId": "synthetic-sub-1"
++            },
++            {
++              "id": "00000000-0000-4000-8000-000000000002",
++              "email": "fixture-2",
++              "enable": false,
++              "flow": "",
++              "limitIp": 0,
++              "totalGB": 0,
++              "expiryTime": 0,
++              "tgId": 0,
++              "subId": "synthetic-sub-2"
++            }
++          ],
++          "decryption": "none",
++          "fallbacks": []
++        },
++        "streamSettings": {
++          "network": "xhttp",
++          "security": "none",
++          "xhttpSettings": {
++            "path": "/api/auto/abcdefghijklmnop/",
++            "host": "ru-entry.example.com",
++            "mode": "stream-one"
++          },
++          "externalProxy": [
++            {
++              "dest": "ru-entry.example.com",
++              "port": 443,
++              "remark": "Auto",
++              "forceTls": "tls",
++              "sni": "ru-entry.example.com",
++              "fingerprint": "randomized"
++            }
++          ]
++        },
++        "sniffing": {
++          "enabled": true,
++          "destOverride": [
++            "http",
++            "tls",
++            "quic",
++            "fakedns"
++          ],
++          "metadataOnly": false,
++          "routeOnly": false
++        },
++        "allocate": {
++          "strategy": "always"
++        }
++      }
++    }
++  ]
++}
