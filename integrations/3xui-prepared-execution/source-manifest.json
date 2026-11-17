@@ -1,7 +1,7 @@
 {
   "schema": 1,
-  "status": "PRIVATE_FULL_NATIVE_BUILD_PASS_RUNTIME_TLS_PHYSICAL_GATES_OPEN",
-  "at_utc": "2026-11-17T09:28:43.690619+00:00",
+  "status": "PRIVATE_SOURCE_NO_IMPLICIT_RETRY_PASS_CURRENT_FULL_BUILD_NOT_RUN",
+  "at_utc": "2026-11-17T10:45:09.701449+00:00",
   "upstream": {
     "repository": "https://github.com/MHSanaei/3x-ui",
     "tag": "v3.11.0",
@@ -9,15 +9,16 @@
     "license": "GPL-3.0",
     "license_sha256": "3972dc9744f6499f0f9b2dbf76696f2ae7ad8af9b23dde66d6af86c9dfb36986"
   },
-  "producer_commit": "35c57fe48f5df242ea79592d2e17b2dcae926932",
+  "producer_commit": "b6b6f40eee3c106e0ac4b86c6df069c4d6cd85d3",
   "patch": {
     "file": "producer.patch",
-    "sha256": "4fea956be428283de9d2d0e2de9e10739bec79b11e7b83d407dfca9a9d9ab5d8"
+    "sha256": "edfb4cb726c7cbaf4c176d5020583208470a0c938a18b392c9b61d55feb27f6b"
   },
   "changed_source_sha256": {
     "internal/web/job/check_client_ip_job.go": "5921d724074f1dad18efb5d55327f6866bae7ecd86ffcbc5a33fae0b75d7b62d",
-    "internal/web/runtime/local.go": "91edc9fc8d83cb06872c529eac5ac987a959362c4a8670d4579f0dc3946989a2",
+    "internal/web/runtime/local.go": "b68987abfc08a24926b8e5c4c92422412bdaafb3a5ef341d46a56ed3d787afde",
     "internal/web/runtime/local_api.go": "0ceefec338e70a32c7987b7fdb333be056bd30b49e41038c8bdcf5d0d383e5f5",
+    "internal/web/runtime/local_api_test.go": "7b4818bbfd8438edc568bbade1ce5ab5cebaaf484df319e99dcd4fac78424f20",
     "internal/web/service/node.go": "9687b7e25045ea1638c09c1c6137d2632967f2cf6cbe7d49e941d4db54c5e18f",
     "internal/web/service/tuic_relay_apply.go": "9a5c5ab1c383835433699ed68f4287acc7b044befaf7dc0d130903c798ffc01c",
     "internal/web/service/xray.go": "bf52fa109d6393a62815dfa169173b9dc1ce2f9c5a3bb48b877fe9624c1de79e",
@@ -48,9 +49,9 @@
     "tests/unit/test_prepared_channels.py": "25476f905139281ab15236e439ad03dc0ee6430d55eeda98f6b6ad0f86274e5b"
   },
   "previous_checkpoint": {
-    "producer_commit": "e3c7fc18928bfbe16de4e0ffa163935e166ca0e1",
-    "manifest_sha256": "c228af1303e0cf19e1ee2db41a6d30aed43534b48a21fe0eebfde70cccf06471",
-    "patch_sha256": "687585876d292d1cddbadf31683cb181bf6757e6b7e414d182a6ba84dafb1364"
+    "producer_commit": "35c57fe48f5df242ea79592d2e17b2dcae926932",
+    "manifest_sha256": "f0118321a95823d0c71d516a1382a0544492a4a57901ea4243dd3df1f1b4d8a4",
+    "patch_sha256": "4fea956be428283de9d2d0e2de9e10739bec79b11e7b83d407dfca9a9d9ab5d8"
   },
   "proof": {
     "windows_race": {
@@ -254,7 +255,7 @@
       "scope": "Private in-memory candidate only. Exact expected generation/epoch is future CAS context, not actual atomic apply or persistence proof."
     },
     "full_private_producer_build": {
-      "status": "PASS_BUILD_ONLY_NO_RELEASE_APPROVAL",
+      "status": "HISTORICAL_35_BUILD_PASS_CURRENT_SOURCE_NOT_BUILT",
       "producer_head": "35c57fe48f5df242ea79592d2e17b2dcae926932",
       "builder_source_tested": "8dd43aaf18039f78cc2a1b1033382f22c490e88c",
       "binary_sha256": "2a45079b9ae10cc41706f9d4f41355a4448580c1e555eeaf893a1234a8cf5072",
@@ -299,10 +300,45 @@
       "full_runtime_acceptance": false,
       "public_tls_acceptance": false,
       "physical_flow_acceptance": false,
-      "portability": "Ubuntu24.04/gcc13.3/glibc2.39 build; static/portable release and working-node compatibility NOT VERIFIED."
-    }
+      "portability": "Ubuntu24.04/gcc13.3/glibc2.39 build; static/portable release and working-node compatibility NOT VERIFIED.",
+      "applies_to_current_producer": false,
+      "current_source_build": "NOT_RUN",
+      "reason": "Current b6 changes Local.withAPI; old full main artifact remains exact source35 only."
+    },
+    "no_implicit_rpc_retry": {
+      "status": "PASS_SCOPED_WINDOWS_CGO_UNIT_ONLY",
+      "source_head": "b6b6f40eee3c106e0ac4b86c6df069c4d6cd85d3",
+      "ack": 850,
+      "changed_files": [
+        "internal/web/runtime/local.go",
+        "internal/web/runtime/local_api_test.go"
+      ],
+      "top_level_pass": 5,
+      "fail": 0,
+      "skip": 0,
+      "platform": "Windows/amd64 Go1.27.4 CGO1 existing llvm-mingw",
+      "log": {
+        "file": ".tools\\pr4-native-retry-20261117\\fixed-pool.log",
+        "sha256": "f4f9e6c50b9d6eb1f7e6d4286a92a391224d3c61915a432e3653c08f1bf1ad4d"
+      },
+      "baseline_red": {
+        "file": "PR4-NO-RETRY-BASELINE-RED-20261117.json",
+        "sha256": "6101cbf81ef0f27474918dfa58de9e35b66a15ddf941d62583974a23f5ee31b6"
+      },
+      "build_preflight_failure": {
+        "file": "PR4-NO-RETRY-BASELINE-CGO0-FAILURE.json",
+        "sha256": "8bf12c817547413aab63cb05eeba67b370a2aa3f388448645d924d7940a3c1d5"
+      },
+      "artifact_roundtrip": {
+        "file": "PR4-NO-RETRY-ARTIFACT-ROUNDTRIP-20261117.json",
+        "sha256": "b5e246b7fce487806214f27a6f843b512462b4c59efb3d964adf6458f4e013c3"
+      },
+      "limits": "Synthetic callback and loopback fake gRPC pooling/restart tests only. No full producer build/runtime, managed UDS RPC or Linux acceptance for this delta."
+    },
+    "evidence_reuse_boundary": "Earlier component proofs retain their explicit source/hash scope only; unchanged owner/compiler/reader bytes not rerun. No whole-source/full-app runtime acceptance transferred to b6."
   },
   "remaining_gates": [
+    "Current producer b6 full native build and managed-runtime/RPC proof NOT RUN; old source35 binary is not this revision",
     "Installed transaction/caller integration under approved full producer release, not the synthetic ELF",
     "Reviewed installed full-producer release/manifest and target-node compatibility; the private Linux build is separately proven",
     "Real stock template compatibility and collector consuming the fresh private snapshot",

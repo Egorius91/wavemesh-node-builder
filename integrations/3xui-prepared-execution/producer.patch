@@ -18,7 +18,7 @@ index eec1278e..6424d864 100644
  		logger.Warningf("[LIMIT_IP] Failed to init Xray API for disconnection: %v", err)
  		return
 diff --git a/internal/web/runtime/local.go b/internal/web/runtime/local.go
-index f130921c..2a93ce7c 100644
+index f130921c..284cd4a1 100644
 --- a/internal/web/runtime/local.go
 +++ b/internal/web/runtime/local.go
 @@ -23,6 +23,7 @@ import (
@@ -49,15 +49,24 @@ index f130921c..2a93ce7c 100644
  	if err != nil {
  		return err
  	}
-@@ -57,7 +63,7 @@ func (l *Local) withAPI(fn func(api *xray.XrayAPI) error) error {
- 	// A pooled channel keeps grpc-go's reconnect backoff after a core restart and fails fast for
- 	// seconds; drop it and dial again, as a client per call did.
- 	evictLocalAPIClient(api)
--	api, err = localAPIForPort(port)
-+	api, err = localAPIForEndpoint(endpoint)
- 	if err != nil {
+@@ -54,14 +60,10 @@ func (l *Local) withAPI(fn func(api *xray.XrayAPI) error) error {
+ 	if status.Code(err) != codes.Unavailable {
  		return err
  	}
+-	// A pooled channel keeps grpc-go's reconnect backoff after a core restart and fails fast for
+-	// seconds; drop it and dial again, as a client per call did.
++	// Unavailable can follow a completed mutation. Drop the failed channel so
++	// the next independent operation reconnects, without repeating this effect.
+ 	evictLocalAPIClient(api)
+-	api, err = localAPIForPort(port)
+-	if err != nil {
+-		return err
+-	}
+-	return fn(api)
++	return err
+ }
+ 
+ func (l *Local) AddInbound(_ context.Context, ib *model.Inbound) error {
 diff --git a/internal/web/runtime/local_api.go b/internal/web/runtime/local_api.go
 index 2a3c40d9..fb1558cb 100644
 --- a/internal/web/runtime/local_api.go
@@ -111,6 +120,48 @@ index 2a3c40d9..fb1558cb 100644
 -	localAPIPort = 0
 +	localAPIEndpoint = xray.APIEndpoint{}
  }
+diff --git a/internal/web/runtime/local_api_test.go b/internal/web/runtime/local_api_test.go
+index f52b3bf7..a0c24cf8 100644
+--- a/internal/web/runtime/local_api_test.go
++++ b/internal/web/runtime/local_api_test.go
+@@ -115,3 +115,37 @@ func TestLocalWithAPIRecoversAfterTheCoreRestarts(t *testing.T) {
+ 		t.Fatalf("the first call after the core restarted must succeed: %v", err)
+ 	}
+ }
++
++// A transport failure can follow a completed mutation. Reconnecting must not
++// repeat the effect; only the next independent operation gets a fresh client.
++func TestLocalWithAPIDoesNotRepeatUnknownMutation(t *testing.T) {
++	local := NewLocal(LocalDeps{APIPort: func() int { return 63217 }})
++	t.Cleanup(func() {
++		localAPIMu.Lock()
++		client := localAPIClient
++		localAPIMu.Unlock()
++		if client != nil {
++			evictLocalAPIClient(client)
++		}
++	})
++	lost := status.Error(codes.Unavailable, "synthetic mutation applied; reply lost")
++	effects := 0
++	var first *xray.XrayAPI
++	err := local.withAPI(func(api *xray.XrayAPI) error { first = api; effects++; return lost })
++	if effects != 1 {
++		t.Fatalf("unknown mutation callback ran %d times; want exactly one", effects)
++	}
++	if err != lost {
++		t.Fatalf("original unknown outcome changed: got %v, want %v", err, lost)
++	}
++	if first.HandlerServiceClient != nil {
++		t.Fatal("failed client was not evicted")
++	}
++	var next *xray.XrayAPI
++	if err := local.withAPI(func(api *xray.XrayAPI) error { next = api; return nil }); err != nil {
++		t.Fatal(err)
++	}
++	if next == first {
++		t.Fatal("next independent call reused the failed client")
++	}
++}
 diff --git a/internal/web/service/node.go b/internal/web/service/node.go
 index 0b644209..6f96139b 100644
 --- a/internal/web/service/node.go
