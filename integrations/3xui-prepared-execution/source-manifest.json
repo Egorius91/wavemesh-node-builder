@@ -1,7 +1,7 @@
 {
   "schema": 1,
-  "status": "PRIVATE_SOURCE_NO_IMPLICIT_RETRY_PASS_CURRENT_FULL_BUILD_NOT_RUN",
-  "at_utc": "2026-11-17T10:45:09.701449+00:00",
+  "status": "PRIVATE_OWNER_BARRIER_SOURCE_PASS_CURRENT_FULL_BUILD_NOT_RUN",
+  "at_utc": "2026-11-17T12:24:11.638446+00:00",
   "upstream": {
     "repository": "https://github.com/MHSanaei/3x-ui",
     "tag": "v3.11.0",
@@ -9,10 +9,10 @@
     "license": "GPL-3.0",
     "license_sha256": "3972dc9744f6499f0f9b2dbf76696f2ae7ad8af9b23dde66d6af86c9dfb36986"
   },
-  "producer_commit": "b6b6f40eee3c106e0ac4b86c6df069c4d6cd85d3",
+  "producer_commit": "90f920be36d3a515a05638d269d91686f90269cf",
   "patch": {
     "file": "producer.patch",
-    "sha256": "edfb4cb726c7cbaf4c176d5020583208470a0c938a18b392c9b61d55feb27f6b"
+    "sha256": "123785ee72dcac4f0043f3b19fc73c6f9d5e9c1808e5c30eb0e75a5116ce9783"
   },
   "changed_source_sha256": {
     "internal/web/job/check_client_ip_job.go": "5921d724074f1dad18efb5d55327f6866bae7ecd86ffcbc5a33fae0b75d7b62d",
@@ -22,19 +22,24 @@
     "internal/web/service/node.go": "9687b7e25045ea1638c09c1c6137d2632967f2cf6cbe7d49e941d4db54c5e18f",
     "internal/web/service/tuic_relay_apply.go": "9a5c5ab1c383835433699ed68f4287acc7b044befaf7dc0d130903c798ffc01c",
     "internal/web/service/xray.go": "bf52fa109d6393a62815dfa169173b9dc1ce2f9c5a3bb48b877fe9624c1de79e",
+    "internal/web/service/xray_execution.go": "4f69d54d0699827d0994d055bb58aa0678ee50fa0058df03be1058b531018ab6",
+    "internal/web/service/xray_execution_test.go": "9203582a04dfd203883560cdec3172bc3807ef2edd63430a015ef4a171469a23",
+    "internal/web/service/xray_setting.go": "9647b1ca8c72d326d04ba0b297235bc435c6ce6dc996dce961f2194a4ca089a9",
     "internal/web/web.go": "2cd9df2a547a16f5305305b39f54fdd31f2436634b1951c4ba684e28d36ae912",
     "internal/xray/api.go": "1c06f2f89bf62bdc6ac78b9c1e8979e5e8deaeeb27531a280deb4049247c6fd4",
+    "internal/xray/config.go": "dec65d8e0ae6ae13bfac2f016ad2eaad5038594798398067736ecad99cf7a2d4",
     "internal/xray/execution.go": "3dc9794d1c0f4705c0878e1f4db6ebd0f2597c5a70473adb9e0178f1684d229f",
-    "internal/xray/execution_api.go": "d4501b6767dc6d7bb1728e81d3f5138f923a526276e3b45500420ad989f2ebdc",
+    "internal/xray/execution_api.go": "eb9805ccd40588918194cc6e1f19af8e6b5e406d71e4dbf0af9b1cf1960ac4b6",
     "internal/xray/execution_identity_linux_test.go": "ab630afac4d684b71b25134684b50dbedc8ceb4355b1361fc2fda39fbc21f6f4",
     "internal/xray/execution_lifecycle_test.go": "0a63cbecd68dc116f7a3a6c63aa4e33127f89e4e60e2c8be48e95914b0add981",
     "internal/xray/execution_linux.go": "8929ddd757058faed5976d2c3b049b24510f66807ca648d24ee83d06e2ee1308",
     "internal/xray/execution_native_linux_test.go": "d1df5e86221b84ce0032e07aaee6b3e0ce188e1cbb75015653f7566e115057aa",
     "internal/xray/execution_other.go": "4988e852af47f487b2232ba089db0363498a1f3b5833b626a78f15fd4df7d9b7",
     "internal/xray/execution_override_test.go": "15f50a1d62b97be709205331ee5de46e72d1b379d50851c89b475450b6bdd432",
+    "internal/xray/execution_persist_test.go": "61ae223aeb6f56d111b1751d85bc3db3946ecb58bbd4f02a345688685ff7a51f",
     "internal/xray/execution_template_test.go": "a515ffa3d2fcb0037f5264ce5f26e5ec332fb755ca640673cab2841b7e17caee",
     "internal/xray/execution_test.go": "4f2522b334db1f61f7df2782e22a1a947438880a5997047a56d07d460ee55bbd",
-    "internal/xray/process.go": "60e410aa60785871e597bf211f5f715d130170f32c32bdfce527bb3f900d6744"
+    "internal/xray/process.go": "fa00910ae4a10c132ed86331d24a01cdebea96b8123e6e316756cf3a988cbbd7"
   },
   "stock_core": {
     "version": "26.10.21",
@@ -49,9 +54,9 @@
     "tests/unit/test_prepared_channels.py": "25476f905139281ab15236e439ad03dc0ee6430d55eeda98f6b6ad0f86274e5b"
   },
   "previous_checkpoint": {
-    "producer_commit": "35c57fe48f5df242ea79592d2e17b2dcae926932",
-    "manifest_sha256": "f0118321a95823d0c71d516a1382a0544492a4a57901ea4243dd3df1f1b4d8a4",
-    "patch_sha256": "4fea956be428283de9d2d0e2de9e10739bec79b11e7b83d407dfca9a9d9ab5d8"
+    "producer_commit": "b6b6f40eee3c106e0ac4b86c6df069c4d6cd85d3",
+    "manifest_sha256": "390fdb33769ef0c888b049ff23446d0cd079f4c6334c1af10e8d466ad182ffb9",
+    "patch_sha256": "edfb4cb726c7cbaf4c176d5020583208470a0c938a18b392c9b61d55feb27f6b"
   },
   "proof": {
     "windows_race": {
@@ -303,7 +308,7 @@
       "portability": "Ubuntu24.04/gcc13.3/glibc2.39 build; static/portable release and working-node compatibility NOT VERIFIED.",
       "applies_to_current_producer": false,
       "current_source_build": "NOT_RUN",
-      "reason": "Current b6 changes Local.withAPI; old full main artifact remains exact source35 only."
+      "reason": "Current90f920be changes runtime retry, owner/service persistence and Config clone; old full main artifact remains exact source35 only."
     },
     "no_implicit_rpc_retry": {
       "status": "PASS_SCOPED_WINDOWS_CGO_UNIT_ONLY",
@@ -335,10 +340,33 @@
       },
       "limits": "Synthetic callback and loopback fake gRPC pooling/restart tests only. No full producer build/runtime, managed UDS RPC or Linux acceptance for this delta."
     },
-    "evidence_reuse_boundary": "Earlier component proofs retain their explicit source/hash scope only; unchanged owner/compiler/reader bytes not rerun. No whole-source/full-app runtime acceptance transferred to b6."
+    "evidence_reuse_boundary": "Earlier component proofs retain only their original exact source/hash scope. Current59 source regressions are not current full build, Linux runtime, service composition or public TLS acceptance.",
+    "owner_persistence_barrier": {
+      "status": "PASS_SCOPED_WINDOWS_SOURCE_ONLY",
+      "source_head": "90f920be36d3a515a05638d269d91686f90269cf",
+      "source_ack": 870,
+      "top_level_pass": 59,
+      "fail": 0,
+      "skip": 0,
+      "source_unchanged": true,
+      "platform": "Windows amd64 Go1.27.4 CGO1 existing offline cache; source callbacks/temporary SQLite, not real Xray/native/full service",
+      "summary": {
+        "file": ".tools\\pr4-owner-barrier-20261117\\focused-summary.json",
+        "sha256": "afc3a1c68a8f26157bf3d3a1344a7c289965d98bb520c3f2f2b8725a1c789f7f"
+      },
+      "log": {
+        "file": ".tools\\pr4-owner-barrier-20261117\\focused.jsonl",
+        "sha256": "6b54e4e3b3fcd465338fa2b752fcfb87e534c181c6a6707aea0f36feb2983a04"
+      },
+      "artifact_roundtrip": {
+        "file": "PR4-OWNER-BARRIER-ARTIFACT-ROUNDTRIP-20261117.json",
+        "sha256": "fb3086047c5003f93f19e915186d737394a4f3eb556bb67a01de8ed4b521df79"
+      },
+      "limits": "Owner fake RoutingService callbacks + actual temporary SQLite/file persistence. Real core, managed UDS, full app/service composition, native directory fsync/current full build NOT RUN. No handler/wire/capability enabled."
+    }
   },
   "remaining_gates": [
-    "Current producer b6 full native build and managed-runtime/RPC proof NOT RUN; old source35 binary is not this revision",
+    "Current producer90f920be full native build and managed service/RPC/persistence proof NOT RUN; historical source35 binary is not this revision",
     "Installed transaction/caller integration under approved full producer release, not the synthetic ELF",
     "Reviewed installed full-producer release/manifest and target-node compatibility; the private Linux build is separately proven",
     "Real stock template compatibility and collector consuming the fresh private snapshot",

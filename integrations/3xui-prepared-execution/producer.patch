@@ -316,6 +316,499 @@ index 596986c3..6c941b94 100644
 +	}
 +	return p.GetAPIEndpoint()
 +}
+diff --git a/internal/web/service/xray_execution.go b/internal/web/service/xray_execution.go
+new file mode 100644
+index 00000000..2fa12679
+--- /dev/null
++++ b/internal/web/service/xray_execution.go
+@@ -0,0 +1,213 @@
++package service
++
++import (
++	"bytes"
++	"encoding/json"
++	"errors"
++	"io"
++	"reflect"
++	"strings"
++
++	"github.com/mhsanaei/3x-ui/v3/internal/database/model"
++	"github.com/mhsanaei/3x-ui/v3/internal/xray"
++)
++
++var errExecutionDesiredConflict = errors.New("execution desired selector conflict")
++var errExecutionOutcomeUnknown = errors.New("execution persistence outcome requires reconciliation")
++
++// ExecutionPersistenceResult describes this operation, never public readiness.
++// Any attempted native call without KnownCommit must be reconciled, not retried.
++type ExecutionPersistenceResult struct {
++	NativeAttempted   bool
++	NativeSucceeded   bool
++	TemplatePersisted bool
++	ConfigPersisted   bool
++	KnownCommit       bool
++	NoOp              bool
++}
++
++// ApplyExecutionSelector is internal service-owned source only: no handler or
++// credential exposes it. Actual, template and desired process configurations
++// stay separate; only the same explicitly bound selector changes in each.
++func (s *XrayService) ApplyExecutionSelector(expected xray.ExecutionExpected, templateBefore, ruleTag, target string) (ExecutionPersistenceResult, error) {
++	lock.Lock()
++	defer lock.Unlock()
++	var result ExecutionPersistenceResult
++	p := currentXrayProcess()
++	if p == nil || !p.IsRunning() {
++		return result, ErrXrayNotRunning
++	}
++	setting := &XraySettingService{}
++	row, err := setting.executionTemplate()
++	if err != nil {
++		return result, err
++	}
++	if row.Value != templateBefore {
++		return result, errExecutionTemplateConflict
++	}
++	// Preserve panel-only metadata and unrelated RawMessage bytes.
++	desired := p.CloneConfig()
++	processBytes, err := json.Marshal(desired)
++	if err != nil || bytes.Equal(processBytes, []byte("null")) {
++		return result, errExecutionDesiredConflict
++	}
++	processDoc, err := executionServiceDocument(processBytes)
++	if err != nil {
++		return result, err
++	}
++	templateDoc, err := executionServiceDocument([]byte(templateBefore))
++	if err != nil {
++		return result, err
++	}
++	var api xray.XrayAPI
++	if err := api.InitEndpoint(p.GetAPIEndpoint()); err != nil {
++		return result, err
++	}
++	defer api.Close()
++	actualRouting, err := api.ExecutionRouting(expected)
++	if err != nil {
++		return result, err
++	}
++	actual, err := executionServiceDocument(actualRouting)
++	if err != nil {
++		return result, err
++	}
++	actualBefore, binding, err := replaceExecutionSelector(actual, ruleTag, target)
++	if err != nil {
++		return result, err
++	}
++	var desiredTargets []string
++	for _, doc := range []map[string]any{templateDoc, processDoc} {
++		routing, ok := doc["routing"].(map[string]any)
++		if !ok || !executionTargetExists(doc, target) {
++			return result, errExecutionDesiredConflict
++		}
++		before, desiredBinding, err := replaceExecutionSelector(routing, ruleTag, target)
++		if err != nil || !reflect.DeepEqual(binding, desiredBinding) {
++			return result, errExecutionDesiredConflict
++		}
++		desiredTargets = append(desiredTargets, before)
++	}
++	if actualBefore == target {
++		if desiredTargets[0] != target || desiredTargets[1] != target {
++			// Native no-op cannot silently reconcile divergent persisted state.
++			return result, errExecutionDesiredConflict
++		}
++		result.NoOp = true
++		return result, nil
++	}
++	// A stale persisted selector is not permission to overwrite a different
++	// version of the desired configuration with the actual/native document.
++	if desiredTargets[0] != actualBefore || desiredTargets[1] != actualBefore {
++		return result, errExecutionDesiredConflict
++	}
++	templateAfter, _ := json.Marshal(templateDoc)
++	prepared, err := setting.prepareXraySetting(string(templateAfter))
++	if err != nil {
++		return result, err
++	}
++	normalized, err := executionServiceDocument([]byte(prepared))
++	if err != nil || !reflect.DeepEqual(templateDoc, normalized) {
++		return result, errExecutionDesiredConflict
++	}
++	processRouting, _ := json.Marshal(processDoc["routing"])
++	desired.RouterConfig = processRouting
++	nativeAfter, _ := json.Marshal(actual)
++	outcome, err := api.CompareAndApplyRoutingAndPersist(nativeAfter, expected, func() error {
++		return persistExecutionSelector(setting, p, row, prepared, desired, &result)
++	})
++	result.NativeAttempted, result.NativeSucceeded = outcome.NativeAttempted, outcome.NativeSucceeded
++	result.KnownCommit = err == nil && outcome.Persisted && outcome.OwnerConfirmed && result.TemplatePersisted && result.ConfigPersisted
++	if err == nil && !result.KnownCommit {
++		err = errExecutionOutcomeUnknown
++	}
++	return result, err
++}
++
++// Called only after the single native RPC returned success. Failure leaves the
++// operation unknown; there is no restore, restart or compensating write here.
++func persistExecutionSelector(setting *XraySettingService, p *xray.Process, before *model.Setting, after string, desired *xray.Config, result *ExecutionPersistenceResult) error {
++	if err := setting.compareExecutionTemplate(before.Id, before.Value, after); err != nil {
++		return err
++	}
++	result.TemplatePersisted = true
++	if err := p.PersistExecutionConfig(desired); err != nil {
++		return err
++	}
++	result.ConfigPersisted = true
++	return nil
++}
++
++func executionServiceDocument(data []byte) (map[string]any, error) {
++	d := json.NewDecoder(bytes.NewReader(data))
++	d.UseNumber()
++	var doc map[string]any
++	if err := d.Decode(&doc); err != nil || doc == nil {
++		return nil, errExecutionDesiredConflict
++	}
++	var trailing any
++	if err := d.Decode(&trailing); err != io.EOF {
++		return nil, errExecutionDesiredConflict
++	}
++	return doc, nil
++}
++
++// Operates only on a detached copy; refuses duplicates and ambiguous rules.
++func replaceExecutionSelector(routing map[string]any, tag, target string) (string, map[string]any, error) {
++	if !strings.HasPrefix(tag, "wm-rule-") || !executionSelectorTarget(target) {
++		return "", nil, errExecutionDesiredConflict
++	}
++	rules, ok := routing["rules"].([]any)
++	if !ok {
++		return "", nil, errExecutionDesiredConflict
++	}
++	var selected map[string]any
++	for _, raw := range rules {
++		rule, ok := raw.(map[string]any)
++		if !ok {
++			return "", nil, errExecutionDesiredConflict
++		}
++		if rule["ruleTag"] == tag {
++			if selected != nil {
++				return "", nil, errExecutionDesiredConflict
++			}
++			selected = rule
++		}
++	}
++	if selected == nil || len(selected) != 4 || selected["type"] != "field" {
++		return "", nil, errExecutionDesiredConflict
++	}
++	inbounds, ok := selected["inboundTag"].([]any)
++	if !ok || len(inbounds) != 1 {
++		return "", nil, errExecutionDesiredConflict
++	}
++	inbound, ok := inbounds[0].(string)
++	before, ok2 := selected["outboundTag"].(string)
++	if !ok || !ok2 || !strings.HasPrefix(inbound, "wm-route-") || !executionSelectorTarget(before) {
++		return "", nil, errExecutionDesiredConflict
++	}
++	selected["outboundTag"] = target
++	return before, map[string]any{"ruleTag": tag, "inboundTag": inbound}, nil
++}
++
++func executionSelectorTarget(tag string) bool {
++	return tag == "wm-eu-only-block" || strings.HasPrefix(tag, "wm-exit-path-")
++}
++
++func executionTargetExists(doc map[string]any, target string) bool {
++	items, ok := doc["outbounds"].([]any)
++	if !ok {
++		return false
++	}
++	count := 0
++	for _, raw := range items {
++		outbound, ok := raw.(map[string]any)
++		if !ok {
++			return false
++		}
++		if outbound["tag"] == target {
++			count++
++		}
++	}
++	return count == 1
++}
+diff --git a/internal/web/service/xray_execution_test.go b/internal/web/service/xray_execution_test.go
+new file mode 100644
+index 00000000..f22d3b35
+--- /dev/null
++++ b/internal/web/service/xray_execution_test.go
+@@ -0,0 +1,188 @@
++package service
++
++import (
++	"encoding/json"
++	"errors"
++	"os"
++	"path/filepath"
++	"reflect"
++	"testing"
++
++	"github.com/mhsanaei/3x-ui/v3/internal/database"
++	"github.com/mhsanaei/3x-ui/v3/internal/database/dbtest"
++	"github.com/mhsanaei/3x-ui/v3/internal/database/model"
++	"github.com/mhsanaei/3x-ui/v3/internal/util/json_util"
++	"github.com/mhsanaei/3x-ui/v3/internal/xray"
++)
++
++func TestExecutionTemplateConditionalUpdatePreservesConcurrentWriter(t *testing.T) {
++	t.Setenv("XUI_DB_TYPE", "sqlite")
++	dbtest.InitDB(t, filepath.Join(t.TempDir(), "synthetic.db"))
++	db := database.GetDB()
++	if err := db.Where("key = ?", "xrayTemplateConfig").Delete(&model.Setting{}).Error; err != nil {
++		t.Fatal(err)
++	}
++	setting := &XraySettingService{}
++	if _, err := setting.executionTemplate(); !errors.Is(err, errExecutionTemplateConflict) {
++		t.Fatal("missing row was accepted")
++	}
++	if err := setting.compareExecutionTemplate(0, "missing", "candidate"); !errors.Is(err, errExecutionTemplateConflict) {
++		t.Fatal("missing row was created")
++	}
++	row := model.Setting{Key: "xrayTemplateConfig", Value: "original"}
++	if err := db.Create(&row).Error; err != nil {
++		t.Fatal(err)
++	}
++	sentinel := model.Setting{Key: "unrelated", Value: "sentinel"}
++	if err := db.Create(&sentinel).Error; err != nil {
++		t.Fatal(err)
++	}
++	if err := db.Model(&row).Update("value", "newer-ui-value").Error; err != nil {
++		t.Fatal(err)
++	}
++	if err := setting.compareExecutionTemplate(row.Id, "original", "candidate"); !errors.Is(err, errExecutionTemplateConflict) {
++		t.Fatal("concurrent writer was overwritten")
++	}
++	got, err := setting.executionTemplate()
++	if err != nil || got.Value != "newer-ui-value" {
++		t.Fatal("newer row not preserved")
++	}
++	if err := setting.compareExecutionTemplate(row.Id, got.Value, "candidate"); err != nil {
++		t.Fatal(err)
++	}
++	if err := db.First(&sentinel, sentinel.Id).Error; err != nil || sentinel.Value != "sentinel" {
++		t.Fatal("unrelated setting changed")
++	}
++	// Key is indexed, not unique. Refuse duplicates atomically rather than
++	// updating both rows and only then discovering RowsAffected != 1.
++	duplicate := model.Setting{Key: "xrayTemplateConfig", Value: "candidate"}
++	if err := db.Create(&duplicate).Error; err != nil {
++		t.Fatal(err)
++	}
++	if _, err := setting.executionTemplate(); !errors.Is(err, errExecutionTemplateConflict) {
++		t.Fatal("duplicate template accepted")
++	}
++	if err := setting.compareExecutionTemplate(row.Id, "candidate", "unsafe"); !errors.Is(err, errExecutionTemplateConflict) {
++		t.Fatal("duplicate update accepted")
++	}
++	var rows []model.Setting
++	if err := db.Where("key = ?", row.Key).Find(&rows).Error; err != nil {
++		t.Fatal(err)
++	}
++	if len(rows) != 2 || rows[0].Value != "candidate" || rows[1].Value != "candidate" {
++		t.Fatal("duplicate refusal changed a row")
++	}
++}
++
++func TestExecutionPersistencePartialFailuresDoNotAdvanceDesiredShadow(t *testing.T) {
++	t.Setenv("XUI_DB_TYPE", "sqlite")
++	dbtest.InitDB(t, filepath.Join(t.TempDir(), "synthetic.db"))
++	db := database.GetDB()
++	if err := db.Where("key = ?", "xrayTemplateConfig").Delete(&model.Setting{}).Error; err != nil {
++		t.Fatal(err)
++	}
++	row := model.Setting{Key: "xrayTemplateConfig", Value: "before"}
++	if err := db.Create(&row).Error; err != nil {
++		t.Fatal(err)
++	}
++	setting := &XraySettingService{}
++	old := &xray.Config{RouterConfig: json_util.RawMessage(`{"rules":[]}`)}
++	desired := &xray.Config{RouterConfig: json_util.RawMessage(`{"rules":[{"outboundTag":"wm-exit-path-unit"}]}`)}
++	dir := t.TempDir()
++	path := filepath.Join(dir, "config.json")
++	p := xray.NewTestProcess(old, path)
++	if err := os.WriteFile(path, []byte("sentinel"), 0600); err != nil {
++		t.Fatal(err)
++	}
++	if err := db.Model(&row).Update("value", "newer").Error; err != nil {
++		t.Fatal(err)
++	}
++	before := model.Setting{Id: row.Id, Key: row.Key, Value: "before"}
++	var result ExecutionPersistenceResult
++	err := persistExecutionSelector(setting, p, &before, "after", desired, &result)
++	data, _ := os.ReadFile(path)
++	if !errors.Is(err, errExecutionTemplateConflict) || result.TemplatePersisted || result.ConfigPersisted || string(data) != "sentinel" || p.GetConfig() != old {
++		t.Fatal("DB conflict wrote file or shadow")
++	}
++	before.Value = "newer"
++	// A file error after DB success is partial/unknown, never implicit rollback.
++	p = xray.NewTestProcess(old, filepath.Join(dir, "absent", "config.json"))
++	err = persistExecutionSelector(setting, p, &before, "after", desired, &result)
++	stored, readErr := setting.executionTemplate()
++	if err == nil || readErr != nil || stored.Value != "after" || !result.TemplatePersisted || result.ConfigPersisted || result.KnownCommit || p.GetConfig() != old {
++		t.Fatal("partial persistence was hidden or compensated")
++	}
++	p = xray.NewTestProcess(old, path)
++	result = ExecutionPersistenceResult{}
++	if err := persistExecutionSelector(setting, p, stored, "final", desired, &result); err != nil {
++		t.Fatal(err)
++	}
++	if !result.TemplatePersisted || !result.ConfigPersisted || result.KnownCommit || !p.GetConfig().Equals(desired) {
++		t.Fatal("persistence alone claimed native commit or lost desired bytes")
++	}
++	if err := db.Migrator().DropTable(&model.Setting{}); err != nil {
++		t.Fatal(err)
++	}
++	result = ExecutionPersistenceResult{}
++	if err := persistExecutionSelector(setting, p, stored, "bad", desired, &result); err == nil || result.TemplatePersisted || result.ConfigPersisted {
++		t.Fatal("DB error accepted")
++	}
++}
++
++func TestExecutionSelectorCopyRetainsUnrelatedRoutingAndRejectsAmbiguity(t *testing.T) {
++	const raw = `{"rules":[{"ruleTag":"sentinel","type":"field","domain":["example.invalid"],"outboundTag":"direct"},{"ruleTag":"wm-rule-unit","type":"field","inboundTag":["wm-route-unit"],"outboundTag":"wm-eu-only-block"}],"domainStrategy":"AsIs","sentinel":{"keep":42}}`
++	doc, err := executionServiceDocument([]byte(raw))
++	if err != nil {
++		t.Fatal(err)
++	}
++	beforeSentinel, _ := json.Marshal(doc["rules"].([]any)[0])
++	before, binding, err := replaceExecutionSelector(doc, "wm-rule-unit", "wm-exit-path-unit")
++	afterSentinel, _ := json.Marshal(doc["rules"].([]any)[0])
++	if err != nil || before != "wm-eu-only-block" || binding["inboundTag"] != "wm-route-unit" || string(beforeSentinel) != string(afterSentinel) || doc["domainStrategy"] != "AsIs" || doc["sentinel"] == nil {
++		t.Fatal("selector delta changed unrelated state")
++	}
++	for _, kind := range []string{"duplicate", "extra-field", "multiple-inbounds", "foreign-target", "malformed", "trailing"} {
++		t.Run(kind, func(t *testing.T) {
++			input := raw
++			if kind == "malformed" {
++				input = "null"
++			}
++			if kind == "trailing" {
++				input = raw + "{}"
++			}
++			d, err := executionServiceDocument([]byte(input))
++			if kind == "malformed" || kind == "trailing" {
++				if err == nil {
++					t.Fatal("ambiguous document accepted")
++				}
++				return
++			}
++			rules := d["rules"].([]any)
++			rule := rules[1].(map[string]any)
++			target := "wm-exit-path-unit"
++			switch kind {
++			case "duplicate":
++				d["rules"] = append(rules, rule)
++			case "extra-field":
++				rule["network"] = "tcp"
++			case "multiple-inbounds":
++				rule["inboundTag"] = []any{"wm-route-unit", "other"}
++			case "foreign-target":
++				target = "direct"
++			}
++			if _, _, err = replaceExecutionSelector(d, "wm-rule-unit", target); err == nil {
++				t.Fatal("unsupported selector accepted")
++			}
++		})
++	}
++}
++
++func TestExecutionServiceWithoutRunningProcessHasNoEffects(t *testing.T) {
++	previous, _ := xrayState.snapshot()
++	xrayState.replace(nil)
++	t.Cleanup(func() { xrayState.replace(previous) })
++	result, err := (&XrayService{}).ApplyExecutionSelector(xray.ExecutionExpected{}, "", "wm-rule-unit", "wm-exit-path-unit")
++	if !errors.Is(err, ErrXrayNotRunning) || !reflect.DeepEqual(result, ExecutionPersistenceResult{}) {
++		t.Fatal("missing process reached mutation")
++	}
++}
+diff --git a/internal/web/service/xray_setting.go b/internal/web/service/xray_setting.go
+index 7d41f1a9..d0344647 100644
+--- a/internal/web/service/xray_setting.go
++++ b/internal/web/service/xray_setting.go
+@@ -4,12 +4,14 @@ import (
+ 	_ "embed"
+ 	"encoding/base64"
+ 	"encoding/json"
++	"errors"
+ 	"slices"
+ 	"strconv"
+ 	"strings"
+ 
+ 	"github.com/mhsanaei/3x-ui/v3/internal/amneziawg"
+ 	"github.com/mhsanaei/3x-ui/v3/internal/database"
++	"github.com/mhsanaei/3x-ui/v3/internal/database/model"
+ 	"github.com/mhsanaei/3x-ui/v3/internal/util/common"
+ 	"github.com/mhsanaei/3x-ui/v3/internal/xray"
+ )
+@@ -26,6 +28,14 @@ const (
+ )
+ 
+ func (s *XraySettingService) SaveXraySetting(newXraySettings string) error {
++	prepared, err := s.prepareXraySetting(newXraySettings)
++	if err != nil {
++		return err
++	}
++	return s.saveSetting("xrayTemplateConfig", prepared)
++}
++
++func (s *XraySettingService) prepareXraySetting(newXraySettings string) (string, error) {
+ 	// The frontend round-trips the whole getXraySetting response back
+ 	// through the textarea, so if it has ever received a wrapped
+ 	// payload (see UnwrapXrayTemplateConfig) it sends that same wrapper
+@@ -33,7 +43,7 @@ func (s *XraySettingService) SaveXraySetting(newXraySettings string) error {
+ 	// garbage the next read can't recover from without this same call.
+ 	newXraySettings = UnwrapXrayTemplateConfig(newXraySettings)
+ 	if err := s.CheckXrayConfig(newXraySettings); err != nil {
+-		return err
++		return "", err
+ 	}
+ 	if hoisted, err := EnsureStatsRouting(newXraySettings); err == nil {
+ 		newXraySettings = hoisted
+@@ -44,7 +54,35 @@ func (s *XraySettingService) SaveXraySetting(newXraySettings string) error {
+ 	if spelled, changed, err := database.RewriteDNSOutboundQTypeZero(newXraySettings); err == nil && changed {
+ 		newXraySettings = spelled
+ 	}
+-	return s.saveSetting("xrayTemplateConfig", newXraySettings)
++	return newXraySettings, nil
++}
++
++var errExecutionTemplateConflict = errors.New("execution template preimage conflict")
++
++// The prevalidated selector candidate may replace exactly the existing row.
++// No database transaction or writer lock is held across the native RPC.
++func (s *XraySettingService) executionTemplate() (*model.Setting, error) {
++	var rows []model.Setting
++	if err := database.GetDB().Where("key = ?", "xrayTemplateConfig").Limit(2).Find(&rows).Error; err != nil {
++		return nil, err
++	}
++	if len(rows) != 1 {
++		return nil, errExecutionTemplateConflict
++	}
++	return &rows[0], nil
++}
++
++func (s *XraySettingService) compareExecutionTemplate(id int, before, after string) error {
++	result := database.GetDB().Model(&model.Setting{}).
++		Where("id = ? AND key = ? AND value = ? AND (SELECT COUNT(*) FROM settings WHERE key = ?) = 1",
++			id, "xrayTemplateConfig", before, "xrayTemplateConfig").Update("value", after)
++	if result.Error != nil {
++		return result.Error
++	}
++	if result.RowsAffected != 1 {
++		return errExecutionTemplateConflict
++	}
++	return nil
+ }
+ 
+ func (s *XraySettingService) CheckXrayConfig(XrayTemplateConfig string) error {
 diff --git a/internal/web/web.go b/internal/web/web.go
 index aaee5dbc..24c77134 100644
 --- a/internal/web/web.go
@@ -573,6 +1066,58 @@ index 0e0e68dd..9718dc29 100644
  	defer cancel()
  
  	resp, err := (*x.StatsServiceClient).GetUsersStats(ctx, &statsService.GetUsersStatsRequest{})
+diff --git a/internal/xray/config.go b/internal/xray/config.go
+index 2cff1596..e8cc9a02 100644
+--- a/internal/xray/config.go
++++ b/internal/xray/config.go
+@@ -2,6 +2,7 @@ package xray
+ 
+ import (
+ 	"bytes"
++	"slices"
+ 
+ 	"github.com/mhsanaei/3x-ui/v3/internal/util/json_util"
+ )
+@@ -27,6 +28,39 @@ type Config struct {
+ 	Env              json_util.RawMessage `json:"env,omitempty"`
+ }
+ 
++// Clone preserves RawMessage bytes and panel-only inbound metadata. A JSON
++// round trip would reformat RawMessages and discard fields marked json:"-".
++func (c *Config) Clone() *Config {
++	if c == nil {
++		return nil
++	}
++	next := *c
++	next.LogConfig = slices.Clone(c.LogConfig)
++	next.RouterConfig = slices.Clone(c.RouterConfig)
++	next.DNSConfig = slices.Clone(c.DNSConfig)
++	next.OutboundConfigs = slices.Clone(c.OutboundConfigs)
++	next.Transport = slices.Clone(c.Transport)
++	next.Policy = slices.Clone(c.Policy)
++	next.API = slices.Clone(c.API)
++	next.Stats = slices.Clone(c.Stats)
++	next.Reverse = slices.Clone(c.Reverse)
++	next.FakeDNS = slices.Clone(c.FakeDNS)
++	next.Observatory = slices.Clone(c.Observatory)
++	next.BurstObservatory = slices.Clone(c.BurstObservatory)
++	next.Metrics = slices.Clone(c.Metrics)
++	next.Geodata = slices.Clone(c.Geodata)
++	next.Env = slices.Clone(c.Env)
++	next.InboundConfigs = slices.Clone(c.InboundConfigs)
++	for i := range next.InboundConfigs {
++		inbound := &next.InboundConfigs[i]
++		inbound.Listen = slices.Clone(inbound.Listen)
++		inbound.Settings = slices.Clone(inbound.Settings)
++		inbound.StreamSettings = slices.Clone(inbound.StreamSettings)
++		inbound.Sniffing = slices.Clone(inbound.Sniffing)
++	}
++	return &next
++}
++
+ // Equals compares two Config instances for deep equality.
+ func (c *Config) Equals(other *Config) bool {
+ 	if len(c.InboundConfigs) != len(other.InboundConfigs) {
 diff --git a/internal/xray/execution.go b/internal/xray/execution.go
 new file mode 100644
 index 00000000..b47a682c
@@ -1447,10 +1992,10 @@ index 00000000..b47a682c
 +}
 diff --git a/internal/xray/execution_api.go b/internal/xray/execution_api.go
 new file mode 100644
-index 00000000..b418fdac
+index 00000000..49b8c44a
 --- /dev/null
 +++ b/internal/xray/execution_api.go
-@@ -0,0 +1,94 @@
+@@ -0,0 +1,159 @@
 +package xray
 +
 +import (
@@ -1527,6 +2072,71 @@ index 00000000..b418fdac
 +// CompareAndApplyRouting is owner-local; no public mutating endpoint exposes it.
 +func (x *XrayAPI) CompareAndApplyRouting(data []byte, expected ExecutionExpected) error {
 +	return x.applyRoutingExpected(data, &expected)
++}
++
++// RoutingPersistenceOutcome records only this call's effects. It is not a
++// snapshot qualification or a durable server receipt.
++type RoutingPersistenceOutcome struct {
++	NativeAttempted bool
++	NativeSucceeded bool
++	Persisted       bool
++	OwnerConfirmed  bool
++}
++
++// ExecutionRouting returns a detached actual routing preimage for the internal
++// owning service. The subsequent CAS still rechecks the exact generation/epoch.
++func (x *XrayAPI) ExecutionRouting(expected ExecutionExpected) ([]byte, error) {
++	if x.execution == nil {
++		return nil, ErrExecutionConflict
++	}
++	s := x.execution.snapshot("")
++	if !s.Qualified || s.Identity.Generation != expected.Generation || s.Epoch != expected.Epoch || len(s.Overrides) != 0 {
++		return nil, ErrExecutionConflict
++	}
++	doc, err := executionDocument(s.Config)
++	if err != nil {
++		return nil, ErrExecutionSelector
++	}
++	routing, ok := doc["routing"].(map[string]any)
++	if !ok {
++		return nil, ErrExecutionSelector
++	}
++	return executionJSON(routing), nil
++}
++
++// CompareAndApplyRoutingAndPersist holds the existing execution owner across
++// one native call and persistence. The callback must not reenter that owner.
++// Legacy mutators retain their existing semantics and do not use this entry.
++func (x *XrayAPI) CompareAndApplyRoutingAndPersist(data []byte, expected ExecutionExpected, persist func() error) (RoutingPersistenceOutcome, error) {
++	var outcome RoutingPersistenceOutcome
++	if persist == nil {
++		return outcome, fmt.Errorf("execution persistence callback required")
++	}
++	data = append([]byte(nil), data...)
++	routing, err := executionDocument(data)
++	if err != nil {
++		return outcome, ErrExecutionSelector
++	}
++	err = x.withExecutionMutation("ApplyRoutingConfig", map[string]any{"routing": routing}, &expected, func(c *XrayAPI) error {
++		outcome.NativeAttempted = true
++		if err := c.applyRoutingConfigRaw(data); err != nil {
++			return err
++		}
++		outcome.NativeSucceeded = true
++		if err := persist(); err != nil {
++			return err
++		}
++		outcome.Persisted = true
++		return nil
++	})
++	if err == nil && outcome.Persisted {
++		s := x.execution.snapshot("")
++		doc, _ := executionDocument(s.Config)
++		outcome.OwnerConfirmed = s.Qualified && len(s.Overrides) == 0 && s.Identity.Generation == expected.Generation &&
++			s.Transition != nil && s.Transition.FromEpoch == expected.Epoch && s.Transition.ToEpoch == s.Epoch &&
++			executionDigest(doc["routing"]) == executionDigest(routing)
++	}
++	return outcome, err
 +}
 +func (x *XrayAPI) applyRoutingExpected(data []byte, expected *ExecutionExpected) error {
 +	data = append([]byte(nil), data...)
@@ -2639,6 +3249,234 @@ index 00000000..9907178b
 +		})
 +	}
 +}
+diff --git a/internal/xray/execution_persist_test.go b/internal/xray/execution_persist_test.go
+new file mode 100644
+index 00000000..f1c56bce
+--- /dev/null
++++ b/internal/xray/execution_persist_test.go
+@@ -0,0 +1,222 @@
++package xray
++
++import (
++	"context"
++	"encoding/json"
++	"errors"
++	"os"
++	"path/filepath"
++	"testing"
++	"time"
++
++	routerService "github.com/xtls/xray-core/app/router/command"
++	"google.golang.org/grpc"
++)
++
++type persistenceRoutingClient struct {
++	routerService.RoutingServiceClient
++	call func() error
++}
++
++func (c persistenceRoutingClient) AddRule(_ context.Context, req *routerService.AddRuleRequest, _ ...grpc.CallOption) (*routerService.AddRuleResponse, error) {
++	if req.ShouldAppend {
++		return nil, errors.New("unexpected append")
++	}
++	return &routerService.AddRuleResponse{}, c.call()
++}
++
++func persistenceAPI(o *executionOwner, call func() error) *XrayAPI {
++	var client routerService.RoutingServiceClient = persistenceRoutingClient{call: call}
++	return &XrayAPI{execution: o, RoutingServiceClient: &client}
++}
++
++func TestExecutionPersistBarrierBlocksSnapshotUntilBothStagesComplete(t *testing.T) {
++	for _, fail := range []bool{false, true} {
++		t.Run(map[bool]string{false: "success", true: "persist-error"}[fail], func(t *testing.T) {
++			o := executionFixture(t)
++			before := o.snapshot("")
++			expected := ExecutionExpected{Generation: before.Identity.Generation, Epoch: before.Epoch}
++			nativeEntered, nativeRelease := make(chan struct{}), make(chan struct{})
++			persistEntered, persistRelease := make(chan struct{}), make(chan struct{})
++			nativeCount, persistCount := 0, 0
++			api := persistenceAPI(o, func() error { nativeCount++; close(nativeEntered); <-nativeRelease; return nil })
++			type completed struct {
++				outcome RoutingPersistenceOutcome
++				err     error
++			}
++			done := make(chan completed, 1)
++			data := executionJSON(fixtureRouting(o, "wm-exit-path-unit"))
++			go func() {
++				outcome, err := api.CompareAndApplyRoutingAndPersist(data, expected, func() error {
++					persistCount++
++					close(persistEntered)
++					<-persistRelease
++					if fail {
++						return errors.New("synthetic persistence failure")
++					}
++					return nil
++				})
++				done <- completed{outcome, err}
++			}()
++			<-nativeEntered
++			snapshots := make(chan ExecutionSnapshot, 1)
++			attempted := make(chan struct{})
++			go func() { close(attempted); snapshots <- o.snapshot("during-native-and-persist") }()
++			<-attempted
++			select {
++			case <-snapshots:
++				t.Fatal("snapshot escaped native barrier")
++			case <-time.After(20 * time.Millisecond):
++			}
++			close(nativeRelease)
++			<-persistEntered
++			select {
++			case <-snapshots:
++				t.Fatal("snapshot escaped persistence barrier")
++			case <-time.After(20 * time.Millisecond):
++			}
++			close(persistRelease)
++			result := <-done
++			snapshot := <-snapshots
++			if nativeCount != 1 || persistCount != 1 || !result.outcome.NativeAttempted || !result.outcome.NativeSucceeded {
++				t.Fatalf("incorrect call accounting: %+v native=%d persist=%d", result, nativeCount, persistCount)
++			}
++			if fail {
++				if result.err == nil || result.outcome.Persisted || result.outcome.OwnerConfirmed || snapshot.Qualified || snapshot.Config != nil {
++					t.Fatal("failed persistence became qualified")
++				}
++			} else if result.err != nil || !result.outcome.Persisted || !result.outcome.OwnerConfirmed || !snapshot.Qualified || snapshot.Transition == nil {
++				t.Fatalf("completed barrier not confirmed: %+v", result)
++			}
++		})
++	}
++}
++
++func TestExecutionPersistRefusalsAndNoOpHaveNoCallbacks(t *testing.T) {
++	for _, kind := range []string{"stale", "generation", "nil-persist", "no-op", "unsupported", "no-owner"} {
++		t.Run(kind, func(t *testing.T) {
++			o := executionFixture(t)
++			before := o.snapshot("")
++			expected := ExecutionExpected{Generation: before.Identity.Generation, Epoch: before.Epoch}
++			calls := 0
++			api := persistenceAPI(o, func() error { calls++; return nil })
++			persist := func() error { calls++; return nil }
++			routing := fixtureRouting(o, "wm-exit-path-unit")
++			switch kind {
++			case "stale":
++				expected.Epoch = "99"
++			case "generation":
++				expected.Generation = "different"
++			case "nil-persist":
++				persist = nil
++			case "no-op":
++				routing = fixtureRouting(o, "wm-eu-only-block")
++			case "unsupported":
++				routing["domainStrategy"] = "IPIfNonMatch"
++			case "no-owner":
++				api.execution = nil
++			}
++			outcome, err := api.CompareAndApplyRoutingAndPersist(executionJSON(routing), expected, persist)
++			if calls != 0 || outcome != (RoutingPersistenceOutcome{}) {
++				t.Fatalf("refusal dispatched: %s %+v count=%d", kind, outcome, calls)
++			}
++			if (kind == "no-op") != (err == nil) {
++				t.Fatalf("unexpected refusal/no-op: %s %v", kind, err)
++			}
++			if after := o.snapshot(""); after.Epoch != before.Epoch || after.EffectiveSHA256 != before.EffectiveSHA256 {
++				t.Fatal("refusal mutated owner")
++			}
++		})
++	}
++}
++
++func TestExecutionPersistNativeFailureIsSingleCallWithoutPersistence(t *testing.T) {
++	o := executionFixture(t)
++	before := o.snapshot("")
++	count := 0
++	failure := errors.New("synthetic lost native reply")
++	api := persistenceAPI(o, func() error { count++; return failure })
++	outcome, err := api.CompareAndApplyRoutingAndPersist(executionJSON(fixtureRouting(o, "wm-exit-path-unit")), ExecutionExpected{Generation: before.Identity.Generation, Epoch: before.Epoch}, func() error { t.Fatal("persist after native failure"); return nil })
++	if !errors.Is(err, failure) || count != 1 || !outcome.NativeAttempted || outcome.NativeSucceeded || outcome.Persisted || outcome.OwnerConfirmed || o.snapshot("").Qualified {
++		t.Fatalf("unknown native outcome: %+v %v count=%d", outcome, err, count)
++	}
++}
++
++func TestPersistExecutionConfigIsDetachedAndCannotReenterOwnerOnFailure(t *testing.T) {
++	o := executionFixture(t)
++	old := &Config{}
++	p := NewTestProcess(old, filepath.Join(t.TempDir(), "missing", "config.json"))
++	p.execution = o
++	done := make(chan error, 1)
++	go func() {
++		done <- o.mutate("ApplyRoutingConfig", map[string]any{"routing": fixtureRouting(o, "wm-exit-path-unit")}, nil, func() error { return p.PersistExecutionConfig(&Config{}) })
++	}()
++	select {
++	case err := <-done:
++		if err == nil || p.GetConfig() != old || o.snapshot("").Qualified {
++			t.Fatal("failed file write advanced shadow/owner")
++		}
++	case <-time.After(time.Second):
++		t.Fatal("owner reentrant persistence deadlock")
++	}
++	path := filepath.Join(t.TempDir(), "config.json")
++	p = NewTestProcess(old, path)
++	var desired Config
++	if err := json.Unmarshal(executionJSON(o.config), &desired); err != nil {
++		t.Fatal(err)
++	}
++	desired.InboundConfigs[1].TuicRelay = true
++	desired.InboundConfigs[1].TuicInboundID = 42
++	desired.RouterConfig = append([]byte(" \n"), desired.RouterConfig...)
++	if err := p.PersistExecutionConfig(&desired); err != nil {
++		t.Fatal(err)
++	}
++	if !p.GetConfig().Equals(&desired) || !p.GetConfig().InboundConfigs[1].TuicRelay || p.GetConfig().InboundConfigs[1].TuicInboundID != 42 {
++		t.Fatal("clone reformatted RawMessages or dropped panel-only inbound metadata")
++	}
++	frozen, _ := os.ReadFile(path)
++	desired.RouterConfig[0] = 'X'
++	desired.InboundConfigs[1].Settings[0] = 'X'
++	after, _ := os.ReadFile(path)
++	if string(frozen) != string(after) || p.GetConfig().RouterConfig[0] == 'X' || p.GetConfig().InboundConfigs[1].Settings[0] == 'X' {
++		t.Fatal("persisted config aliases caller")
++	}
++}
++
++func TestExecutionPersistenceIdentityLossDoesNotClaimCurrentOwnerCommit(t *testing.T) {
++	o := executionFixture(t)
++	before := o.snapshot("")
++	count := 0
++	api := persistenceAPI(o, func() error { count++; return nil })
++	outcome, err := api.CompareAndApplyRoutingAndPersist(executionJSON(fixtureRouting(o, "wm-exit-path-unit")), ExecutionExpected{Generation: before.Identity.Generation, Epoch: before.Epoch}, func() error {
++		o.checkIdentity = func() error { return errors.New("synthetic process replacement") }
++		return nil
++	})
++	if err != nil || count != 1 || !outcome.Persisted || !outcome.NativeSucceeded || outcome.OwnerConfirmed || o.snapshot("").Qualified {
++		t.Fatalf("identity loss incorrectly qualified persistence: %+v %v count=%d", outcome, err, count)
++	}
++}
++
++func TestExecutionRoutingPreimageIsDetachedAndFenced(t *testing.T) {
++	o := executionFixture(t)
++	api := persistenceAPI(o, func() error { t.Fatal("read dispatched native call"); return nil })
++	expected := ExecutionExpected{Generation: o.identity.Generation, Epoch: "0"}
++	data, err := api.ExecutionRouting(expected)
++	if err != nil || len(data) == 0 {
++		t.Fatal("routing preimage unavailable")
++	}
++	data[0] = 'X'
++	fresh, err := api.ExecutionRouting(expected)
++	if err != nil || fresh[0] == 'X' {
++		t.Fatal("routing preimage aliases owner")
++	}
++	o.overrides["unit-balancer"] = "wm-exit-path-unit"
++	if _, err := api.ExecutionRouting(expected); !errors.Is(err, ErrExecutionConflict) {
++		t.Fatal("override preimage accepted")
++	}
++	delete(o.overrides, "unit-balancer")
++	o.invalidate("synthetic change")
++	if _, err := api.ExecutionRouting(expected); !errors.Is(err, ErrExecutionConflict) {
++		t.Fatal("stale/unqualified preimage accepted")
++	}
++}
 diff --git a/internal/xray/execution_template_test.go b/internal/xray/execution_template_test.go
 new file mode 100644
 index 00000000..6a23c71f
@@ -3001,7 +3839,7 @@ index 00000000..2f0f8db8
 +	}
 +}
 diff --git a/internal/xray/process.go b/internal/xray/process.go
-index a9d8c9ce..7bed589a 100644
+index a9d8c9ce..c8d8a9e0 100644
 --- a/internal/xray/process.go
 +++ b/internal/xray/process.go
 @@ -6,6 +6,7 @@ import (
@@ -3028,7 +3866,20 @@ index a9d8c9ce..7bed589a 100644
  
  	version string
  	apiPort int
-@@ -334,7 +338,11 @@ func (p *Process) PersistConfig() error {
+@@ -312,6 +316,12 @@ func (p *Process) GetConfig() *Config {
+ 	return p.config
+ }
+ 
++func (p *Process) CloneConfig() *Config {
++	p.mu.RLock()
++	defer p.mu.RUnlock()
++	return p.config.Clone()
++}
++
+ // SetConfig replaces the stored configuration snapshot after the running
+ // process has been reconciled with it through the gRPC API (hot apply), so
+ // later change detection compares against what is actually running.
+@@ -334,7 +344,37 @@ func (p *Process) PersistConfig() error {
  	if path == "" {
  		path = GetConfigPath()
  	}
@@ -3038,10 +3889,36 @@ index a9d8c9ce..7bed589a 100644
 +		p.invalidateExecution("persistence_failed")
 +	}
 +	return err
++}
++
++// PersistExecutionConfig is for the existing owner-held persistence callback.
++// Unlike PersistConfig it must not invalidate/reenter the execution owner on
++// error: mutate already invalidated it before invoking the native operation.
++// Only a successful atomic write advances the detached desired snapshot.
++func (p *Process) PersistExecutionConfig(config *Config) error {
++	if config == nil {
++		return common.NewError("execution desired config required")
++	}
++	frozen := config.Clone()
++	data, err := json.MarshalIndent(frozen, "", "  ")
++	if err != nil {
++		return err
++	}
++	p.mu.RLock()
++	path := p.configPath
++	p.mu.RUnlock()
++	if path == "" {
++		path = GetConfigPath()
++	}
++	if err := writeFileAtomic(path, data, 0o600); err != nil {
++		return err
++	}
++	p.SetConfig(frozen)
++	return nil
  }
  
  // GetOnlineClients returns the union of locally-online clients and
-@@ -613,9 +621,14 @@ func (p *process) refreshVersion() {
+@@ -613,9 +653,14 @@ func (p *process) refreshVersion() {
  
  // Start launches the Xray process with the current configuration.
  func (p *process) Start() (err error) {
@@ -3056,7 +3933,7 @@ index a9d8c9ce..7bed589a 100644
  
  	defer func() {
  		if err != nil {
-@@ -712,6 +725,7 @@ func (p *process) startCommand(cmd *exec.Cmd) error {
+@@ -712,6 +757,7 @@ func (p *process) startCommand(cmd *exec.Cmd) error {
  	p.done = make(chan struct{})
  	p.exitErr = nil
  	done := p.done
@@ -3064,7 +3941,7 @@ index a9d8c9ce..7bed589a 100644
  	p.mu.Unlock()
  	p.intentionalStop.Store(false)
  
-@@ -725,7 +739,7 @@ func (p *process) startCommand(cmd *exec.Cmd) error {
+@@ -725,7 +771,7 @@ func (p *process) startCommand(cmd *exec.Cmd) error {
  
  	attachChildLifetime(cmd)
  
@@ -3073,7 +3950,7 @@ index a9d8c9ce..7bed589a 100644
  	return nil
  }
  
-@@ -735,10 +749,13 @@ func (p *process) setExitErr(err error) {
+@@ -735,10 +781,13 @@ func (p *process) setExitErr(err error) {
  	p.mu.Unlock()
  }
  
@@ -3088,7 +3965,7 @@ index a9d8c9ce..7bed589a 100644
  	p.logWriter.Flush()
  	if err == nil || p.intentionalStop.Load() {
  		return
-@@ -762,6 +779,20 @@ func (p *process) waitForCommand(cmd *exec.Cmd, done chan struct{}) {
+@@ -762,6 +811,20 @@ func (p *process) waitForCommand(cmd *exec.Cmd, done chan struct{}) {
  
  // Stop terminates the running Xray process.
  func (p *process) Stop() error {

@@ -86,3 +86,16 @@ native epoch adapter correction. Exact current reader bytes and qualified/unknow
 Go-wire goldens are pinned. Private consumer output remains in memory; no
 production release approval or public/physical/installed readiness follows from
 this component proof. The independently closed native slot is released to ROOT.
+
+
+Current internal producer source90f920be adds an owner-held selector persistence
+barrier. The service builds separate actual/template/process selector copies,
+uses exact expected generation/epoch and a conditional existing template row
+update, then atomically writes the desired process config inside the same owner
+callback as the single native call. Config.Clone preserves RawMessage bytes and
+panel-only TUIC metadata. Errors retain partial operation facts and require
+reconciliation; nil/no-op alone cannot claim commit. No public handler or Builder
+positive settlement dispatch is connected.59 Windows/CGO source checks pass,
+including the unchanged inline-TLS refusal, with zero skips. This is not a real
+core/full-service/Linux persistence proof; the old35 full-main binary does not
+contain this revision. See the current manifest owner_persistence_barrier scope.
