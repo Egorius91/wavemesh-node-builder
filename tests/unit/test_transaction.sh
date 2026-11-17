@@ -109,4 +109,37 @@ if python3 "$WM_TRANSACTION_TOOL" check --root "$WM_TRANSACTION_ROOT"; then exit
 python3 "$WM_TRANSACTION_TOOL" prune --root "$WM_TRANSACTION_ROOT" --keep 0
 [[ -f "$transaction/prepared.apply.pending.json" ]]
 trap 'rm -rf "$tmp"' EXIT
+
+# Pending presence is authoritative even when JSON is malformed or the marker
+# is a dangling symlink. Stop before recovery checks or any restore/restart.
+for pending_kind in malformed dangling; do
+  transaction="$tmp/prepared-${pending_kind}"
+  mkdir -p "$transaction"
+  printf '{}\n' > "$transaction/plan.json"
+  if [[ "$pending_kind" == dangling ]]; then
+    ln -s "$transaction/absent-target.json" "$transaction/prepared.apply.pending.json"
+    [[ -L "$transaction/prepared.apply.pending.json" && ! -e "$transaction/prepared.apply.pending.json" ]]
+  else
+    printf '{broken-json\n' > "$transaction/prepared.apply.pending.json"
+  fi
+  (
+    effect="$transaction/unsafe-effect"
+    wm_transaction_assert_xray_recovery() { printf 'recovery\n' >> "$effect"; return 0; }
+    wm_atomic_install_json() { printf 'restore\n' >> "$effect"; }
+    wm_load_config() { printf 'load\n' >> "$effect"; }
+    wm_xray_apply_template() { printf 'POST\n' >> "$effect"; }
+    systemctl() { printf 'restart\n' >> "$effect"; }
+    nginx() { printf 'nginx\n' >> "$effect"; }
+    if wm_transaction_rollback "$transaction" "pending ${pending_kind}"; then exit 73; fi
+    [[ ! -e "$effect" ]]
+  )
+  python3 - "$transaction" <<'PY'
+import json, os, sys
+from pathlib import Path
+transaction = Path(sys.argv[1])
+assert os.path.lexists(transaction / "prepared.apply.pending.json")
+assert json.loads((transaction / "result.json").read_text(encoding="utf-8"))["status"] == "rollback_failed"
+assert not (transaction / "unsafe-effect").exists()
+PY
+done
 echo "transaction shell tests: OK"
