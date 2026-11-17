@@ -14,6 +14,7 @@ import hashlib
 import json
 import logging
 import os
+import re
 from pathlib import Path
 import secrets
 import shlex
@@ -38,7 +39,7 @@ except ImportError:  # Preserve bearer-only compatibility during staged upgrades
     NodeMtlsRuntime = None  # type: ignore[assignment,misc]
     MtlsRuntimeError = RuntimeError  # type: ignore[assignment,misc]
 
-AGENT_VERSION = "0.6.0-mtls-primary"
+AGENT_VERSION = "0.7.0-placement-v2"
 DEFAULT_ENV_PATH = Path("/etc/wavemesh-agent/agent.env")
 DEFAULT_RUNTIME_PATH = Path("/etc/wavemesh-agent/runtime.json")
 NODE_CONFIG_PATH = Path("/etc/wavemesh-node/config.json")
@@ -447,16 +448,20 @@ class NodeAgent:
             if not command:
                 return
             command_id, attempt, command_type, payload = validate_access_command(
-                command, self.config.node_id
+                command, self.config.node_id, self.config.tenant_id
             )
+            if payload.get("schema_version") in {2, 3} and not self.placement_runtime_ready(payload["schema_version"]):
+                raise AgentError("Placement runtime is not installed")
             self.mtls_runtime.api_json(
                 "POST",
                 f"internal/v1/nodes/{self.config.node_id}/commands/{command_id}/started",
-                {},
+                {"attempt": attempt} if payload.get("schema_version") in {2, 3} else {},
                 expected=(204,),
             )
             material = self.execute_access_runtime(command_type, payload)
             material_path = (
+                f"internal/v1/nodes/{self.config.node_id}/accesses/{payload['access_id']}/placements/{payload['placement_id']}/materialize"
+                if payload.get("schema_version") in {2, 3} else
                 f"internal/v1/nodes/{self.config.node_id}/replacements/{payload['replacement_id']}/materialize"
                 if command_type == "access.prepare_replacement" else
                 f"internal/v1/nodes/{self.config.node_id}/accesses/{payload['access_id']}/materialize"
@@ -497,6 +502,8 @@ class NodeAgent:
     ) -> dict[str, Any]:
         if not self.config.access_runtime_path.is_file():
             raise AgentError("Access runtime is not installed")
+        if payload.get("schema_version") == 3 and not self.placement_runtime_ready(3):
+            raise AgentError("Budgeted access runtime protocol is unsupported")
         work_root = self.config.env_path.parent
         work_root.mkdir(parents=True, exist_ok=True)
         with tempfile.TemporaryDirectory(prefix=".access-command.", dir=work_root) as directory:
@@ -527,7 +534,10 @@ class NodeAgent:
             if completed.returncode != 0 or not output_path.is_file():
                 raise AgentError("Access runtime failed")
             material = read_json_file(output_path, default={})
-            validate_access_material(material, payload["desired_version"])
+            if payload.get("schema_version") in {2, 3}:
+                validate_placement_material(material, payload)
+            else:
+                validate_access_material(material, payload["desired_version"])
             return material
 
     def cleanup_replaced_access_runtime(self, payload: dict[str, Any]) -> None:
@@ -824,6 +834,8 @@ class NodeAgent:
             "command_execution": command_ready,
             "access_lifecycle": command_ready,
             "access_entitlements_v2": command_ready,
+            "access_placements_v2": command_ready and self.placement_runtime_ready(),
+            "access_quota_v3": command_ready and self.placement_runtime_ready(3),
             "access_replacement_prepare_v1": command_ready,
             "node_role": node_role,
             "cascade_routes_total": len(state.get("routes") or []),
@@ -842,6 +854,25 @@ class NodeAgent:
             "capabilities": capabilities,
             "sent_at": format_timestamp(datetime.now(timezone.utc)),
         }
+
+    def placement_runtime_ready(self, schema: int = 2) -> bool:
+        """Read-only installed-runtime probe, cached by actual artifact bytes."""
+        try:
+            path = self.config.access_runtime_path
+            digest = hashlib.sha256(path.read_bytes()).hexdigest()
+            cached = getattr(self, "_placement_runtime_probe", None)
+            if cached is not None and cached[0] == digest:
+                result = cached[1]
+            else:
+                result = run_json_command(["/usr/bin/python3", str(path), "--capabilities"], timeout=10)
+                self._placement_runtime_probe = (digest, result)
+            v2 = {"access_command_schemas": [1, 2], "placement_fence": 3, "disable_absent": True, "unknown_effect_barrier": 1}
+            v3 = {"access_command_schemas": [1, 2, 3], "placement_fence": 5, "disable_absent": True,
+                  "unknown_effect_barrier": 1, "traffic_budget": 1, "counter_observations": 1,
+                  "quota_protocol_version": 2}
+            return schema == 2 and result in (v2, v3) or schema == 3 and result == v3
+        except Exception:
+            return False
 
     def send_heartbeat(self, payload: dict[str, Any] | None = None) -> None:
         self.api_json(
@@ -1213,6 +1244,7 @@ def safe_id(value: Any, name: str) -> str:
 def validate_access_command(
     command: dict[str, Any],
     node_id: str,
+    tenant_id: str | None = None,
 ) -> tuple[str, int, str, dict[str, Any]]:
     command_type = command.get("type")
     if command_type not in {
@@ -1222,7 +1254,8 @@ def validate_access_command(
         "access.prepare_replacement",
     }:
         raise AgentError("Unsupported Node command type")
-    if command.get("target_node_id") != node_id or command.get("schema_version") != 1:
+    schema = command.get("schema_version")
+    if command.get("target_node_id") != node_id or type(schema) is not int or schema not in {1, 2, 3}:
         raise AgentError("Node command target or schema is invalid")
     command_id = safe_id(command.get("command_id"), "command_id")
     attempt = safe_int(command.get("attempt"), 1, 1_000_000)
@@ -1239,6 +1272,12 @@ def validate_access_command(
     }
     if command_type == "access.prepare_replacement":
         required.add("replacement_id")
+    if schema in {2, 3}:
+        if command_type == "access.prepare_replacement" or not tenant_id or command.get("tenant_id") != tenant_id:
+            raise AgentError("Placement command tenant or operation is invalid")
+        required.update({"placement_id", "generation", "entitlement_revision", "plan_hash", "command_id"})
+        if schema == 3:
+            required.update({"traffic_budget", "quota_protocol_version"})
     if not isinstance(payload, dict) or set(payload) != required:
         raise AgentError("Node command payload is invalid")
     if command_type == "access.prepare_replacement":
@@ -1261,7 +1300,115 @@ def validate_access_command(
     quota = payload.get("quota_bytes")
     if not isinstance(quota, str) or not quota.isdigit() or int(quota) > 9_223_372_036_854_775_807:
         raise AgentError("Access quota is invalid")
-    return command_id, attempt, str(command_type), dict(payload)
+    result = dict(payload)
+    if schema in {2, 3}:
+        if any(type(value) is not int for value in (command.get("attempt"), payload.get("desired_version"), payload.get("device_limit"))):
+            raise AgentError("Placement command integer fields are invalid")
+        placement = payload.get("placement_id")
+        if not isinstance(placement, str) or not re.fullmatch(r"(?:legacy:)?[A-Za-z0-9_-]{1,128}", placement):
+            raise AgentError("Placement command identity is invalid")
+        for name in ("generation", "entitlement_revision"):
+            value = payload.get(name)
+            if type(value) is not int or not 1 <= value <= 2_147_483_647:
+                raise AgentError("Placement command revision is invalid")
+        if payload.get("command_id") != command_id or not isinstance(payload.get("plan_hash"), str) or not re.fullmatch(r"[a-f0-9]{64}", payload["plan_hash"]):
+            raise AgentError("Placement command binding is invalid")
+        expected = command.get("expected_version")
+        if type(expected) is not int or not 0 <= expected < desired_version:
+            raise AgentError("Placement command expected version is invalid")
+        result.update(schema_version=schema, tenant_id=tenant_id, node_id=node_id, expected_version=expected)
+        if schema == 3:
+            if type(payload.get("quota_protocol_version")) is not int or payload["quota_protocol_version"] != 2:
+                raise AgentError("Placement quota protocol is unsupported")
+            budget = validate_traffic_budget(payload["traffic_budget"])
+            cap = traffic_bytes(quota)
+            if payload["enabled"] and (budget is None and cap != 0 or budget is not None and (cap == 0 or traffic_bytes(budget["credit_bytes"]) > cap)):
+                raise AgentError("Enabled finite access requires bounded reserved credit")
+    return command_id, attempt, str(command_type), result
+
+
+def traffic_bytes(value: Any) -> int:
+    if not isinstance(value, str) or not re.fullmatch(r"0|[1-9][0-9]{0,18}", value) or int(value) > 9_223_372_036_854_775_807:
+        raise AgentError("Placement traffic quantity is invalid")
+    return int(value)
+
+
+def validate_traffic_budget(value: Any) -> dict[str, Any] | None:
+    if value is None:
+        return None
+    fields = {"epoch_id", "baseline_receipt_id", "credit_receipt_id", "credit_revision", "counter_baseline_bytes",
+              "counter_identity_hash", "counter_source_receipt_id", "credit_bytes"}
+    if not isinstance(value, dict) or set(value) != fields:
+        raise AgentError("Placement traffic budget shape is invalid")
+    if not isinstance(value["epoch_id"], str) or not re.fullmatch(r"[a-f0-9]{8}-[a-f0-9]{4}-4[a-f0-9]{3}-[89ab][a-f0-9]{3}-[a-f0-9]{12}", value["epoch_id"]):
+        raise AgentError("Placement meter epoch is invalid")
+    for name in ("baseline_receipt_id", "credit_receipt_id"):
+        if not isinstance(value[name], str) or not re.fullmatch(r"[A-Za-z0-9_-]{1,128}", value[name]):
+            raise AgentError("Placement credit receipt is invalid")
+    if type(value["credit_revision"]) is not int or not 1 <= value["credit_revision"] <= 2_147_483_647:
+        raise AgentError("Placement credit revision is invalid")
+    base, credit = traffic_bytes(value["counter_baseline_bytes"]), traffic_bytes(value["credit_bytes"])
+    if credit == 0 or base + credit > 9_223_372_036_854_775_807:
+        raise AgentError("Placement credit is invalid")
+    identity, source = value["counter_identity_hash"], value["counter_source_receipt_id"]
+    if identity is None:
+        if base != 0 or source is not None:
+            raise AgentError("New placement meter must start at zero")
+    elif (not isinstance(identity, str) or not re.fullmatch(r"[a-f0-9]{64}", identity) or
+          not isinstance(source, str) or not re.fullmatch(r"[A-Za-z0-9_-]{1,128}", source)):
+        raise AgentError("Placement counter source is invalid")
+    return dict(value)
+
+
+def validate_placement_material(material: dict[str, Any], payload: dict[str, Any]) -> None:
+    common = {"schema_version", "desired_version", "placement_id", "generation", "entitlement_revision", "plan_hash", "command_id", "client_exists", "enabled"}
+    if payload["schema_version"] == 3:
+        common.update({"quota_protocol_version", "traffic_budget", "traffic_counters", "quota_history_complete"})
+        if type(material.get("quota_protocol_version")) is not int or material["quota_protocol_version"] != 2:
+            raise AgentError("Placement quota material protocol is unsupported")
+        if type(material.get("quota_history_complete")) is not bool or payload["enabled"] and not material["quota_history_complete"]:
+            raise AgentError("Placement quota history is unverified")
+        if material.get("traffic_budget") != payload["traffic_budget"]:
+            raise AgentError("Placement material credit binding is invalid")
+        validate_traffic_budget(material.get("traffic_budget"))
+        counters = material.get("traffic_counters")
+        if not isinstance(counters, list) or len(counters) > 1_000_000:
+            raise AgentError("Placement traffic observations are invalid")
+        seen = set()
+        for counter in counters:
+            if not isinstance(counter, dict) or set(counter) != {"identity_hash", "up_bytes", "down_bytes"}:
+                raise AgentError("Placement traffic observation shape is invalid")
+            identity = counter["identity_hash"]
+            if not isinstance(identity, str) or not re.fullmatch(r"[a-f0-9]{64}", identity) or identity in seen:
+                raise AgentError("Placement traffic identity is invalid")
+            seen.add(identity)
+            if traffic_bytes(counter["up_bytes"]) + traffic_bytes(counter["down_bytes"]) > 9_223_372_036_854_775_807:
+                raise AgentError("Placement traffic observation overflows")
+        if payload["enabled"]:
+            identity = hashlib.sha256(json.dumps([material.get("panel_email"), material.get("client_uuid"), material.get("sub_id")],
+                                                 separators=(",", ":"), ensure_ascii=False).encode()).hexdigest()
+            if identity not in seen or payload["traffic_budget"] is not None and payload["traffic_budget"]["counter_identity_hash"] not in (None, identity):
+                raise AgentError("Enabled placement counter identity is missing")
+            if payload["traffic_budget"] is not None:
+                counter = next(row for row in counters if row["identity_hash"] == identity)
+                used = traffic_bytes(counter["up_bytes"]) + traffic_bytes(counter["down_bytes"])
+                base = traffic_bytes(payload["traffic_budget"]["counter_baseline_bytes"])
+                if not base <= used < base + traffic_bytes(payload["traffic_budget"]["credit_bytes"]):
+                    raise AgentError("Enabled placement has no usable credit")
+        elif len(counters) != material.get("disabled_identity_count"):
+            raise AgentError("Placement deny traffic inventory is incomplete")
+    for key in common - {"client_exists", "traffic_budget", "traffic_counters", "quota_history_complete"}:
+        if material.get(key) != payload.get(key) or type(material.get(key)) is not type(payload.get(key)):
+            raise AgentError("Placement material binding is invalid")
+    if type(material.get("client_exists")) is not bool:
+        raise AgentError("Placement material existence proof is invalid")
+    legacy = {"desired_version", "panel_email", "client_uuid", "sub_id", "primary_inbound_id", "protocol", "subscription_url"}
+    if payload["enabled"]:
+        if not material["client_exists"] or set(material) != common | legacy:
+            raise AgentError("Placement profile material is incomplete")
+        validate_access_material({k: material[k] for k in legacy}, payload["desired_version"])
+    elif set(material) != common | {"disabled_identity_count", "inventory_hash"} or type(material.get("disabled_identity_count")) is not int or not int(material["client_exists"]) <= material["disabled_identity_count"] <= 1_000_000 or not isinstance(material.get("inventory_hash"), str) or not re.fullmatch(r"[a-f0-9]{64}", material["inventory_hash"]):
+        raise AgentError("Placement disable material is invalid")
 
 
 def validate_access_material(material: dict[str, Any], desired_version: int) -> None:
