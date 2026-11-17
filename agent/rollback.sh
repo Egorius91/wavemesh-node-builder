@@ -148,6 +148,11 @@ for label in node_expired_identity.py node_recovery.py; do
 done
 restore_or_remove acceptance.py "$INSTALL_DIR/acceptance.py" 0755 0755
 restore_or_remove access_runtime.py "$INSTALL_DIR/access_runtime.py" 0755 0755
+# Old backups predate this dependency. Their Agent does not consume prepared
+# completion; retain the installed reader when there is no historical record.
+if [[ -e "$backup_dir/prepared_journal.py" || -L "$backup_dir/prepared_journal.py" || -e "$backup_dir/prepared_journal.py.absent" || -L "$backup_dir/prepared_journal.py.absent" ]]; then
+  restore_or_remove prepared_journal.py "$INSTALL_DIR/prepared_journal.py" 0644 0755
+fi
 # Historical backups predate this optional collector. Private evidence is never
 # rewound/deleted with code: old Agent versions simply leave it untouched.
 if [[ -e "$backup_dir/runtime_findings.py" || -e "$backup_dir/runtime_findings.py.absent" ]]; then

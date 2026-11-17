@@ -58,9 +58,9 @@ class InstalledRecoveryDependencyTests(unittest.TestCase):
         self.installed = self.scratch / "installed"
         self.installed.mkdir()
         text = (ROOT / "agent/install.sh").read_text()
-        sources = dict(re.findall(r'^([A-Z_]+)="\$PROJECT_DIR/agent/([^"\n]+)"$', text, re.M))
+        sources = dict(re.findall(r'^([A-Z_]+)="\$PROJECT_DIR/([^"\n]+)"$', text, re.M))
         for name, destination in re.findall(r'^atomic_install_file "\$([A-Z_]+)" "\$INSTALL_DIR/([^"\n]+)"', text, re.M):
-            shutil.copyfile(ROOT / "agent" / sources[name], self.installed / destination)
+            shutil.copyfile(ROOT / sources[name], self.installed / destination)
 
     def test_installed_delivery_reaches_expiry_dependency_without_source_path(self):
         result = prove(self.installed, self.scratch)

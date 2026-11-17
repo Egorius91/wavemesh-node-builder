@@ -112,7 +112,7 @@ PY
   if [[ -f "$transaction/xray.before.json" ]]; then
     snapshot="$transaction/xray.before.json"
     declare -F wm_xray_assert_log_policy >/dev/null || return 1
-    wm_xray_assert_log_policy "$snapshot" || return 1
+    wm_xray_assert_log_policy "$snapshot" "$transaction/config.before.json" || return 1
   fi
   [[ "$role" != "exit" || -n "$snapshot" ]] || return 1
   if [[ "$role" == "entry" || "$role" == "exit" || -n "$snapshot" ]]; then
@@ -164,8 +164,19 @@ wm_transaction_wait_xui() {
 wm_transaction_rollback() {
   local transaction="$1" message="${2:-automatic rollback}" failed=0 db="" nginx_conf="${WM_NGINX_MANAGED_CONF:-/etc/nginx/wavemesh-managed-locations.conf}"
   trap - EXIT INT TERM HUP
+  if [[ -e "$transaction/prepared.apply.pending.json" || -L "$transaction/prepared.apply.pending.json" ||
+        -e "$transaction/prepared.apply.completed.json" || -L "$transaction/prepared.apply.completed.json" ]] ||
+      ! python3 "$WM_TRANSACTION_TOOL" prepared-guard --transaction "$transaction"; then
+    python3 "$WM_TRANSACTION_TOOL" mark --transaction "$transaction" --status rollback_failed --message "Prepared origin retained; reconcile journal before any snapshot restore" || true
+    wm_warn "Rollback stopped: prepared origin is retained; snapshot restore is forbidden"
+    return 1
+  fi
+  if [[ -e "$transaction/prepared.no-effect.json" ]]; then
+    python3 "$WM_TRANSACTION_TOOL" mark --transaction "$transaction" --status rolled_back --message "Prepared validation stopped before configuration mutation; no restore dispatched"
+    return $?
+  fi
   if ! wm_transaction_assert_xray_recovery "$transaction"; then
-    python3 "$WM_TRANSACTION_TOOL" mark --transaction "$transaction" --status rollback_failed --message "Xray snapshot rejected by private log policy" || true
+    python3 "$WM_TRANSACTION_TOOL" mark --transaction "$transaction" --status rollback_failed --message "Xray snapshot rejected by recovery policy" || true
     wm_warn "Rollback stopped: Xray recovery policy could not be proven; protected snapshots were retained"
     return 1
   fi

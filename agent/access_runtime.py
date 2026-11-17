@@ -15,11 +15,19 @@ import re
 import secrets
 import stat
 import subprocess
+import sys
 import tempfile
 import time
 from typing import Any
 from urllib import error, parse, request
 import uuid
+
+# The installed Agent receives these same Builder-owned source bytes. Source
+# checkouts use that library directly; there is one journal schema validator.
+source_library = Path(__file__).resolve().parents[1] / "scripts/lib"
+if source_library.is_dir():
+    sys.path.insert(0, str(source_library))
+from prepared_journal import prepared_status
 
 SAFE_ID = re.compile(r"^[A-Za-z0-9_-]{8,128}$")
 DAY_MILLISECONDS = 24 * 60 * 60 * 1000
@@ -58,17 +66,21 @@ def node_mutation_lock(path: Path | None = None):
             os.close(fd)
 
 
-def assert_no_pending_node_transaction(root: Path) -> None:
+def assert_no_pending_node_transaction(root: Path) -> list[Path]:
     """A dead CLI releases flock but its pending rollback still fences Agent writes."""
     if root.is_symlink():
         raise ProvisionError("Node transaction state is unsafe")
     if not root.exists():
-        return
+        return []
     if not root.is_dir():
         raise ProvisionError("Node transaction state is unsafe")
+    committed = []
     for directory in root.iterdir():
         if directory.is_symlink() or not directory.is_dir():
             raise ProvisionError("Node transaction state is unsafe")
+        prepared = prepared_status(directory)
+        if prepared == "active":
+            raise ProvisionError("Node transaction reconciliation required")
         try:
             plan = load_private_state(directory / "plan.json")
             result = load_private_state(directory / "result.json")
@@ -80,6 +92,11 @@ def assert_no_pending_node_transaction(root: Path) -> None:
                 or plan["schema_version"] != 1 or not result
                 or result.get("status") not in {"committed", "rolled_back"}):
             raise ProvisionError("Node transaction reconciliation required")
+        if prepared == "committed":
+            committed.append(directory)
+    # Read-only collectors ignore this list. Only a subsequent writer repeats
+    # the directory barrier, under the node flock, before changing any state.
+    return committed
 
 
 @contextmanager
@@ -1233,6 +1250,15 @@ def validate_state(state: dict[str, Any], access_id: str, desired_version: int) 
         raise ProvisionError("Durable panel identity is invalid")
 
 
+def sync_directory(path: Path) -> None:
+    if os.name != "nt":
+        descriptor = os.open(path, os.O_RDONLY | os.O_DIRECTORY)
+        try:
+            os.fsync(descriptor)
+        finally:
+            os.close(descriptor)
+
+
 def atomic_json(path: Path, value: dict[str, Any]) -> None:
     path.parent.mkdir(parents=True, exist_ok=True, mode=0o700)
     descriptor, name = tempfile.mkstemp(prefix=f".{path.name}.", dir=path.parent)
@@ -1244,12 +1270,7 @@ def atomic_json(path: Path, value: dict[str, Any]) -> None:
             os.fsync(handle.fileno())
         os.chmod(name, 0o600)
         os.replace(name, path)
-        if os.name != "nt":
-            parent_fd = os.open(path.parent, os.O_RDONLY | os.O_DIRECTORY)
-            try:
-                os.fsync(parent_fd)
-            finally:
-                os.close(parent_fd)
+        sync_directory(path.parent)
     finally:
         if os.path.exists(name):
             os.unlink(name)
@@ -1307,7 +1328,8 @@ def main() -> int:
         # Lock order: node, then access. Hold through configuration read, panel
         # read/write/readback and durable output, including replacement cleanup.
         with node_mutation_lock():
-            assert_no_pending_node_transaction(args.config.parent / "transactions")
+            for directory in assert_no_pending_node_transaction(args.config.parent / "transactions"):
+                sync_directory(directory)
             command = json.loads(args.request.read_text(encoding="utf-8"))
             config = json.loads(args.config.read_text(encoding="utf-8"))
             if args.cleanup_previous:

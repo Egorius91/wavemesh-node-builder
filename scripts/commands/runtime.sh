@@ -84,6 +84,9 @@ wm_runtime_health() (
 wm_runtime_health_locked() {
   local as_json=0 requested_exit="" transaction inbounds template probes nginx_file api_ok=false
   while [[ $# -gt 0 ]]; do case "$1" in --json) as_json=1; shift;; --exit-id) requested_exit="${2:-}"; shift 2;; *) wm_fail "Unknown health option: $1";; esac; done
+  # A dead writer releases flock but may leave unresolved prepared debt. Admit
+  # this persisted observation only after the shared journal check and barrier.
+  python3 "$WM_TRANSACTION_TOOL" admit --root "$WM_TRANSACTION_ROOT" || return
   wm_load_config; wm_require_entry_role
   if [[ -n "$requested_exit" ]] && ! python3 -c 'import json,sys; cfg=json.load(open(sys.argv[1],encoding="utf-8")); sys.exit(0 if any(x.get("id")==sys.argv[2] for x in cfg.get("exits",[])) else 1)' "$WM_CONFIG_JSON" "$requested_exit"; then wm_fail "Exit not found: ${requested_exit}"; fi
   transaction="$(mktemp -d)"; chmod 700 "$transaction"

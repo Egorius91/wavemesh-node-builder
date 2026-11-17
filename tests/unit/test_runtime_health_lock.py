@@ -4,6 +4,7 @@ import json
 import os
 from pathlib import Path
 import shutil
+import signal
 import subprocess
 import tempfile
 import unittest
@@ -35,9 +36,11 @@ class HealthWriterLockTests(unittest.TestCase):
         self.script = r'''
 set -Eeuo pipefail
 fixture="$1"; WM_LIB_DIR="$2/scripts"
+TMPDIR="$fixture"; export TMPDIR
 WM_STATE_DIR="$fixture"; WM_CONFIG_JSON="$fixture/config.json"
 WM_RUNTIME_JSON="$fixture/runtime.json"; WM_SUB_DIR="$fixture/subscriptions"
 source "$fixture/transaction.sh"
+WM_TRANSACTION_TOOL="$WM_LIB_DIR/lib/transaction_state.py"
 source "$WM_LIB_DIR/commands/runtime.sh"
 source "$WM_LIB_DIR/commands/cascade.sh"
 wm_fail(){ echo "$*" >&2; exit 42; }
@@ -60,20 +63,34 @@ wm_runtime_apply_public_state(){ assert_locked; }
 wm_atomic_install_json(){ assert_locked; cp "$1" "$2"; }
 wm_export_config_env_from_json(){ assert_locked; }
 wm_transaction_commit(){ assert_locked; }
+# Real health/evaluate is exercised by the three public health paths below.
+# Reconcile tests its ownership across delegation and external mutation stages;
+# avoid repeating that probe fixture twice in the same bounded subprocess.
+if [[ ! -d "$fixture/transactions" && ( "$3" == dry || "$3" == apply ) ]]; then
+  wm_runtime_health_locked(){ wm_load_config; assert_locked; printf '{"observed_at":"reconcile-fixture"}\n' > "$WM_RUNTIME_JSON"; }
+fi
 case "$3" in
   health) wm_runtime_health --json; flock -n "$fixture/node.lock" true;;
   cascade) wm_cascade_command health --json; flock -n "$fixture/node.lock" true;;
   verify) # verify-e2e loads config before invoking the health writer.
     wm_load_config(){ NODE_ROLE=entry; }
     wm_cascade_verify_e2e --json; flock -n "$fixture/node.lock" true;;
-  dry) wm_reconcile_command --dry-run;;
+  dry) wm_reconcile_command --dry-run; assert_locked;;
   apply) wm_reconcile_command --apply;;
 esac
 '''
 
     def invoke(self, mode):
-        return subprocess.run(["bash", "-c", self.script, "fixture", str(self.directory), str(ROOT), mode],
-                              capture_output=True, text=True, timeout=15)
+        args = ["bash", "-c", self.script, "fixture", str(self.directory), str(ROOT), mode]
+        with subprocess.Popen(args, stdout=subprocess.PIPE, stderr=subprocess.PIPE,
+                              text=True, start_new_session=True) as process:
+            try:
+                stdout, stderr = process.communicate(timeout=15)
+            except subprocess.TimeoutExpired:
+                os.killpg(process.pid, signal.SIGKILL)
+                process.communicate()
+                raise
+            return subprocess.CompletedProcess(args, process.returncode, stdout, stderr)
 
     def test_agent_lock_refuses_every_health_writer_before_state_change(self):
         before = self.state.read_bytes()
@@ -88,7 +105,7 @@ esac
                     self.assertFalse((self.directory / "inodes").exists())
                     self.assertEqual(self.lock.stat().st_ino, inode)
 
-    def test_health_holds_node_lock_through_real_persistence_and_releases_on_return(self):
+    def test_health_and_reconcile_hold_node_lock_through_persistence_and_release(self):
         for mode in ("health", "cascade", "verify", "dry", "apply"):
             with self.subTest(mode=mode):
                 (self.directory / "inodes").unlink(missing_ok=True)
@@ -100,6 +117,30 @@ esac
                 self.assertEqual(set(inodes), {str(self.lock.stat().st_ino)})
                 with runtime.node_mutation_lock(self.lock):
                     pass
+
+    def test_prepared_debt_refuses_every_health_writer_after_dead_process_releases_lock(self):
+        directory = self.directory / "transactions" / "retained"
+        directory.mkdir(parents=True)
+        (directory / "plan.json").write_text('{"schema_version":1,"operation":"auto-prepared-reconcile"}')
+        result = directory / "result.json"
+        result.write_text('{"status":"committed"}')
+        before = self.state.read_bytes()
+        for origin in ("pending", "completed", "proof-only"):
+            marker = directory / f"prepared.apply.{origin}.json"
+            if origin == "pending":
+                marker.symlink_to(directory / "missing")
+            elif origin == "completed":
+                marker.write_text("malformed")
+            else:
+                result.write_text('{"status":"committed","prepared_commit":{}}')
+                result.chmod(0o600)
+            for mode in ("health", "cascade", "verify", "dry", "apply"):
+                with self.subTest(origin=origin, mode=mode):
+                    completed = self.invoke(mode)
+                    self.assertNotEqual(completed.returncode, 0)
+                    self.assertEqual(self.state.read_bytes(), before)
+                    self.assertFalse((self.directory / "inodes").exists())
+            marker.unlink(missing_ok=True)
 
 
 if __name__ == "__main__":
