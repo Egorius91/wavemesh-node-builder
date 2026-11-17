@@ -123,6 +123,57 @@ class PreparedDebt(unittest.TestCase):
             self.journal.prune(self.root, 0)
             self.assertFalse(transaction.exists())
 
+    def test_failed_parent_barrier_is_repeated_before_next_begin_can_return(self):
+        events = []
+        real_sync = self.journal._sync_directory
+        failed = False
+
+        def sync(path):
+            nonlocal failed
+            path = Path(path)
+            events.append(path)
+            if path == self.root.parent and not failed:
+                failed = True
+                raise OSError("first parent barrier failed")
+            real_sync(path)
+
+        with mock.patch.object(self.journal, "_sync_directory", side_effect=sync):
+            with self.assertRaisesRegex(OSError, "first parent barrier"):
+                self.journal.begin(self.root, "preparation-only", 123)
+            self.assertTrue(self.root.is_dir())
+            self.assertFalse(any(self.root.glob("*/plan.json")))
+            events.clear()
+            transaction = self.journal.begin(self.root, "preparation-only-retry", 124)
+        self.assertIn(self.root.parent, events)
+        self.assertIn(self.root.parent.parent, events)
+        self.assertEqual(self.journal.incomplete(self.root)[0]["id"], transaction.name)
+
+    def test_failed_ancestor_barrier_is_repeated_before_next_atomic_record(self):
+        target = self.root / "orphan/prepared.apply.pending.json"
+        real_sync = self.journal._sync_directory
+        events = []
+        failed = False
+
+        def sync(path):
+            nonlocal failed
+            path = Path(path)
+            events.append(path)
+            if path == self.root.parent and not failed:
+                failed = True
+                raise OSError("first ancestor barrier failed")
+            real_sync(path)
+
+        with mock.patch.object(self.journal, "_sync_directory", side_effect=sync):
+            with self.assertRaisesRegex(OSError, "first ancestor barrier"):
+                self.journal.atomic_json(target, {"status": "UNKNOWN"})
+            self.assertTrue(target.parent.is_dir())
+            self.assertFalse(target.exists())
+            events.clear()
+            self.journal.atomic_json(target, {"status": "UNKNOWN"})
+        self.assertIn(self.root.parent, events)
+        self.assertIn(self.root.parent.parent, events)
+        self.assertEqual(json.loads(target.read_text())["status"], "UNKNOWN")
+
     @unittest.skipUnless(sys.platform == "linux", "native Linux directory fsync required")
     def test_new_directory_entries_and_atomic_record_are_synced_before_return(self):
         real_sync, real_replace = os.fsync, os.replace
@@ -156,7 +207,7 @@ class PreparedDebt(unittest.TestCase):
         dispatched = []
 
         def fail_directory(fd):
-            if stat.S_ISDIR(os.fstat(fd).st_mode):
+            if stat.S_ISDIR(os.fstat(fd).st_mode) and (transaction / "prepared.apply.pending.json").exists():
                 raise OSError("synthetic directory sync failure")
             real_sync(fd)
 
@@ -171,7 +222,14 @@ class PreparedDebt(unittest.TestCase):
     def test_new_transaction_directory_sync_failure_prevents_record_or_dispatch(self):
         # Existing root isolates the barrier that records the new tx entry.
         self.root.mkdir(parents=True)
-        with mock.patch.object(self.journal, "_sync_directory", side_effect=OSError("parent sync failure")), \
+        real_sync = self.journal._sync_directory
+
+        def fail_new_entry(path):
+            if Path(path) == self.root and any(self.root.iterdir()):
+                raise OSError("parent sync failure")
+            real_sync(path)
+
+        with mock.patch.object(self.journal, "_sync_directory", side_effect=fail_new_entry), \
              mock.patch.object(self.journal, "atomic_json") as write:
             with self.assertRaisesRegex(OSError, "parent sync failure"):
                 self.journal.begin(self.root, "must-not-dispatch", 123)

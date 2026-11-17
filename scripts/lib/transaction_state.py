@@ -32,16 +32,16 @@ def _sync_directory(path):
 
 def _mkdirs(path):
     path = Path(path)
-    missing = []
-    ancestor = path
-    while not ancestor.exists():
-        missing.append(ancestor)
-        ancestor = ancestor.parent
     path.mkdir(parents=True, exist_ok=True)
-    # Persist each new directory entry, including a new journal root, before
-    # writing a record that could authorize a later native effect.
-    for directory in reversed(missing):
-        _sync_directory(directory.parent)
+    # An earlier failed barrier may have left *existing* but nondurable dirs.
+    # Persist the entire parent chain on every successful preparation; exists
+    # alone cannot tell us which directory entries survived an earlier failure.
+    directory = path.absolute()
+    while True:
+        _sync_directory(directory)
+        if directory.parent == directory:
+            break
+        directory = directory.parent
 
 
 def _prepared_pending(path):
