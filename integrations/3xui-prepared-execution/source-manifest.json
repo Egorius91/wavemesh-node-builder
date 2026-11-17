@@ -392,6 +392,31 @@
         "sha256": "c92d451606595ec6469e5ef63151a49f098700152c5be1928f57edb47a5371d3"
       },
       "scope": "Cold consumed actual deny may differ from persisted desired target; exact expected nativeCAS, DBraw preimage, same rule/inbound and no-op conflict retained. Candidate source tests only; full service/native runtime NOT RUN."
+    },
+    "private_journal_reader": {
+      "status": "PASS_PORTABLE_SYNTHETIC_NATIVE_NOT_RUN",
+      "builder_source": "2182e9e5a6abb01e4ae708a03b2457104aa37111",
+      "source_ack": 888,
+      "reader_ack": 894,
+      "portable_reader_retention_cases": 8,
+      "existing_readonly_compatibility_cases": 28,
+      "ordinary_transaction_script": "PASS",
+      "skip": 0,
+      "source_summary": {
+        "file": ".tools\\pr4-journal-completion-20261117\\guards-summary.json",
+        "sha256": "d2afbb52846e396d22e38984cad62419cf9ee6fee5a90d448f9ad0650ccc9a2b"
+      },
+      "compatibility_fixed": {
+        "file": ".tools\\pr4-journal-completion-20261117\\guards-compat-fixed.json",
+        "sha256": "531e94b3fce4aebf4135efb354d136f5a9e8f6095602ee85dcd8cc65fc6b2014"
+      },
+      "stale_expectation_baseline": {
+        "file": ".tools\\pr4-journal-completion-20261117\\stale-compat-baseline.json",
+        "sha256": "12cf9af9a0bbfd38bb7b73fc58a9bb36b4c77e828039d6dbc7e8ff9be9157789"
+      },
+      "native_Bash_fsync": "NOT_RUN",
+      "positive_completion_writer": "NOT_IMPLEMENTED_YET",
+      "limits": "Pure historical validator and retention only; synthetic owner flags and artifact fixture are not actual producer proof. Shared runtime write and transport remain closed."
     }
   },
   "remaining_gates": [
@@ -412,5 +437,11 @@
     "scripts/lib/prepared_execution.py": "0ece06d78cfeb85c8940de462792740563cff48532da925aa0d8ab1fc15e8f14",
     "tests/unit/test_prepared_execution.py": "f41719aa451e7e568d5e715257628452a8284a1d7e0fa26cbefeac9741abf16d",
     "tests/fixtures/prepared-execution-go-json-vectors.json": "de1a7bdb8b57af0d0ceeffc24969a36136fe10e1aeca2ed99cea4b5944f98d3b"
+  },
+  "private_journal_reader_source_sha256": {
+    "scripts/lib/prepared_journal.py": "1f73c859622ec678e286c27f3f1c6882372c78151add249d7b18ff5c75dd9bd3",
+    "scripts/lib/transaction_state.py": "288090a3cba373f6d48504b4ac3b6ec591280525f2c4ce8cbfd9484322b1a5d3",
+    "scripts/lib/transaction.sh": "d23de93860123516520ee0f7feff382fb0a545c23d7d41f3e349a84bcac6d534",
+    "tests/unit/test_prepared_journal.py": "dd59819cab161ecc5738495536ca2a0a8864d0b0733c8746c167bbbf4fb9c0b9"
   }
 }
