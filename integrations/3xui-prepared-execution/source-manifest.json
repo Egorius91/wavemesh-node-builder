@@ -423,6 +423,14 @@
         "sha256": "c0d3417e9fa036f35801d4242f41911d156be8cab658427b3ddb0947cdc9e74c"
       },
       "earlier_portable_reader_retention_cases": 8
+    },
+    "journal_mutating_admission": {
+      "source": "9408f8b98a2f187872def05c3b2a97128fa7173a",
+      "proof": "PR4-JOURNAL-ADMISSION-SOURCE-PROOF-20261117.json",
+      "sha256": "ecaa900a09c128a77f46f62d283cb62669b2fb948247654468d15b5104f817d5",
+      "focused_pass": 6,
+      "skip": 0,
+      "native": "NOT_RUN"
     }
   },
   "remaining_gates": [
@@ -445,9 +453,9 @@
     "tests/fixtures/prepared-execution-go-json-vectors.json": "de1a7bdb8b57af0d0ceeffc24969a36136fe10e1aeca2ed99cea4b5944f98d3b"
   },
   "private_journal_reader_source_sha256": {
-    "scripts/lib/prepared_journal.py": "af9da144c246faa4d9b683309eee2502402a39877522be896c8bd5839ab5b285",
-    "scripts/lib/transaction_state.py": "288090a3cba373f6d48504b4ac3b6ec591280525f2c4ce8cbfd9484322b1a5d3",
-    "scripts/lib/transaction.sh": "d23de93860123516520ee0f7feff382fb0a545c23d7d41f3e349a84bcac6d534",
-    "tests/unit/test_prepared_journal.py": "088cb38aa7d050ad08183db372dd2263cb4f236a01ce46a4c41e68535da0bc58"
+    "scripts/lib/prepared_journal.py": "e588cbc03000e937a85e3bf07547187f417be7efad16a49da080d512461a98cc",
+    "scripts/lib/transaction_state.py": "da498478b6a1d9a895194cb4ef598da504aa21e371218bcb2a2e0d945c70617d",
+    "scripts/lib/transaction.sh": "16749b772e946250562cd33bac3477b453a539b178c03bf9752772c3f28870a9",
+    "tests/unit/test_prepared_journal.py": "b3c61ab762285955b5d29e0ac72bf075da81699e57bf7dc66a28103c60ec1f42"
   }
 }

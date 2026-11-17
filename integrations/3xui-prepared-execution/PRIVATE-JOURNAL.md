@@ -47,3 +47,8 @@ The portable tests prove structure, origin retention, foreign/stale/duplicate/
 corrupt refusal, metadata-only idempotency and barrier failure propagation.
 Actual Linux fsync/flock/Bash execution is a separate native packet. Current
 producer remains d8eea105; full producer/core/service integration is NOT RUN.
+
+The mutation-only API is transaction_state.admit(root), exposed privately as
+`admit --root ROOT` for existing lock-owning health callers. begin uses the same
+function. Read-only check/list do not repair barriers. The intent copy is itself
+type-validated before comparison (Python true must not compare as schema1).
