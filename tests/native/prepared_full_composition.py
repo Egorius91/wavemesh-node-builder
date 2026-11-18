@@ -35,6 +35,7 @@ from tests.unit.test_prepared_channels import fixture
 PRODUCER = "d8af4a509d2888b52356f6ea950a3ed5151a1b9f45e182deef250c0b11d8768b"
 PRODUCER_SOURCE = "fb44cd238cc086f8e706184b1745990ea700cfa6"
 WORK = Path("/tmp/wm-pr4-full-composition-20261118")
+INPUT = Path("/tmp/wm-pr4-composition-input-20261118")
 
 
 def digest_file(path):
@@ -81,12 +82,14 @@ def run(producer, core, manifest):
     try:
         assert sys.platform.startswith("linux") and os.geteuid() == 0
         import fcntl
+        os.umask(0o077)  # Child-only, inherited by migrate/daemon/config writers.
         assert {name for _, name in socket.if_nameindex()} == {"lo"}
         for namespace in ("net", "mnt"):
             assert os.stat(f"/proc/self/ns/{namespace}").st_ino != os.stat(f"/proc/1/ns/{namespace}").st_ino
         subprocess.run(["/usr/sbin/ip", "link", "set", "lo", "up"], check=True, timeout=5,
                        stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
         assert digest_file(producer) == PRODUCER and digest_file(core) == execution.CORE
+        assert (producer, core, Path(manifest)) == (INPUT / "out_x-ui-private", INPUT / "xray-linux-amd64", INPUT / "NATIVE-INPUTS.json")
         manifest_raw = Path(manifest).read_bytes()
         frozen = reader.decode(manifest_raw)
         assert frozen["producerSha256"] == PRODUCER and frozen["coreSha256"] == execution.CORE
@@ -101,6 +104,15 @@ def run(producer, core, manifest):
             pass
         else:
             raise RuntimeError("FD9 occupied")
+        ownership = INPUT / "FIXTURE-OWNERSHIP.json"
+        assert not os.path.lexists(ownership)
+        # Durable write-ahead ownership precedes even mkdir/copy/migrate. A
+        # terminal failed driver can leave partial files without a first result.
+        journal.atomic_json(ownership, {"schema_version": 1, "manifestSha256": reader.sha(manifest_raw),
+                            "producerSha256": PRODUCER, "coreSha256": execution.CORE,
+                            "driver": execution._process(os.getpid()), "phase": "FRESH_PATHS_RESERVED",
+                            "freshAbsentPaths": [str(path) for path in (WORK, execution.APPROVAL.parent,
+                                execution.DIRECTORY, completion.NODE_MUTATION_LOCK, Path("/var/log/wavemesh-node"))]})
         WORK.mkdir(mode=0o700)
         owned.append(WORK)
         for name in ("bin", "db", "home"):
