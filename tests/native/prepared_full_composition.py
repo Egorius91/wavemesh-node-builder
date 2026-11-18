@@ -198,9 +198,29 @@ def run(producer, core, manifest):
         result["transactionId"], result["intentSha256"] = transaction.name, reader.sha((transaction / "prepared.apply.pending.json").read_bytes())
         result["ownerInvocations"] = 1
         owner_started = time.monotonic()
+        audit = {"active": True, "connect": None, "header": None, "sends": 0}
+        def observe(event, arguments):
+            # CPython metadata-only audit observation. Never inspect arguments:
+            # http.client.send arguments contain the private request bytes.
+            if not audit["active"]:
+                return
+            if event == "socket.connect" and audit["connect"] is None:
+                audit["connect"] = time.monotonic()
+            elif event == "http.client.send":
+                if audit["header"] is None:
+                    audit["header"] = time.monotonic()
+                audit["sends"] += 1
+        sys.addaudithook(observe)
         # No retry/restore/compensation on failure or lost reply.
-        assert owner.apply_once(transaction, credentials) == "committed"
-        result["ownerSeconds"] = time.monotonic() - owner_started
+        try:
+            assert owner.apply_once(transaction, credentials) == "committed"
+        finally:
+            audit["active"] = False
+            result["ownerSeconds"] = time.monotonic() - owner_started
+            result["httpSendAuditEvents"] = audit["sends"]
+            result["connectToHeaderAttemptSeconds"] = (None if audit["header"] is None or audit["connect"] is None
+                                                       else audit["header"] - audit["connect"])
+        assert audit["connect"] is not None and audit["header"] is not None
         final_view, final_effective = execution.collect()
         assert final_view["native_generation"] == view["native_generation"]
         assert final_view["mutation_epoch"] == "1"
