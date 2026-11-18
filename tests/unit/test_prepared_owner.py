@@ -219,5 +219,16 @@ class PreparedOwner(unittest.TestCase):
             with self.assertRaises(sqlite3.OperationalError):db.execute('DELETE FROM settings')
         self.assertEqual(Path(intent['files']['database']).read_bytes(),before)
 
+    def test_peer_checks_share_one_finite_accept_budget(self):
+        case=self.factory.make_case();directory,intent,reply,view,effective=case
+        expected=intent['expected']
+        before={**view,'native_generation':expected['generation'],'mutation_epoch':expected['epoch'],'effective_config_sha256':expected['before_sha256']}
+        observed=('fixture-boot',{'pid':123,'start_ticks':'100','parent_pid':1},None,{})
+        with mock.patch.object(execution,'_collected_evidence',return_value=nullcontext(((before,effective),observed))),mock.patch.object(execution,'_accepted_panel_peer',return_value=(1,'fd',1,2,3)) as peer,mock.patch.object(execution,'_recheck'):
+            with execution.verified_panel_socket(object(),expected):
+                self.assertEqual(peer.call_count,2)
+                self.assertEqual(peer.call_args_list[0].args[2],peer.call_args_list[1].args[2],'accept budget was renewed')
+                self.assertLess(execution.time.monotonic(),peer.call_args_list[0].args[2])
+
 
 if __name__=='__main__':unittest.main()

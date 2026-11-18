@@ -315,43 +315,14 @@ def collect():
         return final
 
 
-def _accepted_panel_peer(connection, producer):
-    """Bind this connected IPv4 socket to the verified Producer's accepted FD.
+PANEL_ACCEPT_WAIT_SECONDS = 3
 
-    Inspect only kernel metadata, never issue an HTTP request or reopen a TCP
-    connection. A not-yet-accepted socket fails closed without credentials.
-    """
-    if (connection.family != socket.AF_INET
-            or connection.getsockopt(socket.SOL_SOCKET, socket.SO_TYPE) != socket.SOCK_STREAM
-            or _process(producer["pid"]) != producer):
-        _fail("PANEL_PEER_NOT_VERIFIED")
-    local, remote = connection.getsockname(), connection.getpeername()
-    if local[0] != "127.0.0.1" or remote[0] != "127.0.0.1":
-        _fail("PANEL_PEER_NOT_VERIFIED")
-    namespace = os.stat(f"/proc/{producer['pid']}/ns/net")
-    if not _same(namespace, os.stat("/proc/self/ns/net")):
-        _fail("PANEL_PEER_NOT_VERIFIED")
-    def endpoint(address):
-        return f"{struct.unpack('=I', socket.inet_aton(address[0]))[0]:08X}:{address[1]:04X}"
-    with open(f"/proc/{producer['pid']}/net/tcp", "rt", encoding="ascii") as stream:
-        table = stream.read(LIMIT + 1)
-    if len(table) > LIMIT:
-        _fail("PANEL_PEER_NOT_VERIFIED")
-    matches = []
-    for line in table.splitlines()[1:]:
-        fields = line.split()
-        if len(fields) >= 10 and fields[1] == endpoint(remote) and fields[2] == endpoint(local) and fields[3] == "01":
-            if fields[7] != "0" or not fields[9].isdigit() or int(fields[9]) <= 0:
-                _fail("PANEL_PEER_NOT_VERIFIED")
-            matches.append(int(fields[9]))
-    if len(matches) != 1:
-        _fail("PANEL_PEER_NOT_VERIFIED")
-    inode = matches[0]
-    deadline = time.monotonic() + 3
+
+def _producer_socket_fd(producer, inode, deadline):
     with os.scandir(f"/proc/{producer['pid']}/fd") as descriptors:
         for entry in descriptors:
-            if time.monotonic() > deadline:
-                _fail("PANEL_PEER_NOT_VERIFIED")
+            if time.monotonic() >= deadline:
+                _fail("PANEL_ACCEPT_TIMEOUT")
             try:
                 if os.readlink(entry.path) != f"socket:[{inode}]":
                     continue
@@ -359,10 +330,66 @@ def _accepted_panel_peer(connection, producer):
                 if (not stat.S_ISSOCK(metadata.st_mode) or metadata.st_uid != 0 or metadata.st_ino != inode
                         or os.readlink(entry.path) != f"socket:[{inode}]"):
                     _fail("PANEL_PEER_NOT_VERIFIED")
-                return inode, entry.path, local, remote, os.fstat(connection.fileno()).st_ino
+                if time.monotonic() >= deadline:
+                    _fail("PANEL_ACCEPT_TIMEOUT")
+                return entry.path
             except FileNotFoundError:
-                continue  # An unrelated FD may close while the table is read.
+                continue  # An unrelated FD may close while metadata is read.
     _fail("PANEL_PEER_NOT_VERIFIED")
+
+
+def _accepted_panel_peer(connection, producer, deadline):
+    """Read-only bounded accept wait on the SAME already-connected socket.
+
+    Only an inode-zero queued connection behind this verified Producer's own
+    root-owned LISTEN FD may wait. No request, reconnect or new operation occurs.
+    """
+    if connection.family != socket.AF_INET or connection.getsockopt(socket.SOL_SOCKET, socket.SO_TYPE) != socket.SOCK_STREAM:
+        _fail("PANEL_PEER_NOT_VERIFIED")
+    local, remote = connection.getsockname(), connection.getpeername()
+    client = os.fstat(connection.fileno())
+    if local[0] != "127.0.0.1" or remote[0] != "127.0.0.1":
+        _fail("PANEL_PEER_NOT_VERIFIED")
+    def endpoint(address):
+        return f"{struct.unpack('=I', socket.inet_aton(address[0]))[0]:08X}:{address[1]:04X}"
+    while True:
+        remaining = deadline - time.monotonic()
+        if remaining <= 0:
+            _fail("PANEL_ACCEPT_TIMEOUT")
+        if (_process(producer["pid"]) != producer or not _same(client, os.fstat(connection.fileno()))
+                or connection.getsockname() != local or connection.getpeername() != remote
+                or connection.getsockopt(socket.SOL_SOCKET, socket.SO_ERROR) != 0
+                or not _same(os.stat(f"/proc/{producer['pid']}/ns/net"), os.stat("/proc/self/ns/net"))):
+            _fail("PANEL_PEER_NOT_VERIFIED")
+        with open(f"/proc/{producer['pid']}/net/tcp", "rt", encoding="ascii") as stream:
+            table = stream.read(LIMIT + 1)
+        if len(table) > LIMIT:
+            _fail("PANEL_PEER_NOT_VERIFIED")
+        peer_rows, listeners = [], []
+        for line in table.splitlines()[1:]:
+            fields = line.split()
+            if len(fields) < 10:
+                continue
+            if fields[1] == endpoint(remote) and fields[2] == endpoint(local) and fields[3] == "01":
+                peer_rows.append(fields)
+            if fields[1] == endpoint(remote) and fields[2] == "00000000:0000" and fields[3] == "0A":
+                listeners.append(fields)
+        if len(peer_rows) != 1 or peer_rows[0][7] != "0" or not peer_rows[0][9].isdigit():
+            _fail("PANEL_PEER_NOT_VERIFIED")
+        inode = int(peer_rows[0][9])
+        if inode > 0:
+            descriptor = _producer_socket_fd(producer, inode, deadline)
+            return inode, descriptor, local, remote, client.st_ino
+        if (len(listeners) != 1 or listeners[0][7] != "0" or not listeners[0][9].isdigit()
+                or int(listeners[0][9]) <= 0):
+            _fail("PANEL_PEER_NOT_VERIFIED")
+        _producer_socket_fd(producer, int(listeners[0][9]), deadline)
+        # A queued accept is a verified read-only wait, never a send retry. The
+        # shared absolute budget includes metadata reads and both peer checks.
+        remaining = deadline - time.monotonic()
+        if remaining <= 0:
+            _fail("PANEL_ACCEPT_TIMEOUT")
+        time.sleep(min(0.01, remaining))
 
 
 @contextlib.contextmanager
@@ -380,10 +407,13 @@ def verified_panel_socket(connection, expected):
                     or view["engine_instance"] != expected["engine_instance"]):
                 _fail("PANEL_EXECUTION_CONTEXT_CHANGED")
             producer = observed[1]
-            before = _accepted_panel_peer(connection, producer)
+            deadline = time.monotonic() + PANEL_ACCEPT_WAIT_SECONDS
+            before = _accepted_panel_peer(connection, producer, deadline)
             _recheck(observed)
-            if before != _accepted_panel_peer(connection, producer):
+            if before != _accepted_panel_peer(connection, producer, deadline):
                 _fail("PANEL_PEER_CHANGED")
+            if time.monotonic() >= deadline:
+                _fail("PANEL_ACCEPT_TIMEOUT")
             yield
     except ExecutionUnavailable:
         raise

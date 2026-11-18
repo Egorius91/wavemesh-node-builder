@@ -115,17 +115,22 @@ identify exactly one ESTABLISHED root-owned peer inode in the verified Producer
 network namespace. The same Producer must hold that accepted inode in /proc/PID/fd;
 process/start/executable/core evidence is rechecked, then accepted inode/FD/tuple
 and the client socket inode are checked again. Listener metadata or loopback
-alone never suffices. A not-yet-accepted/unproven peer fails closed, without HTTP
-or credential bytes, reconnect or retry. All evidence closes on every outcome.
+alone never suffices. A queued inode-zero ESTABLISHED connection may wait only after the SAME
+verified root Producer is proven to own the exact LISTEN inode/FD. Both accepted
+peer checks and all metadata reads share one absolute monotonic3s budget; only
+read-only metadata is polled on the same connected socket. No reconnect or HTTP
+retry occurs. Missing/wrong UID/PID/tuple, closed/reused sockets or expired budget
+fail before any HTTP/credential bytes. All evidence closes on every outcome.
 The caller cannot provide a PID, alternate trusted process or verified flag.
 
 Portable protocol tests explicitly mock this native custody boundary; fake,
 different, reused and stale cases assert request() is never called and the fake
 HTTP listener receives no request. Existing collect still returns only the same
 (view, full config) tuple and closes its evidence, while a dedicated retained
-context keeps evidence open during peer verification. Linux fixture2 is prepared
+context keeps evidence open during peer verification. Linux fixture4 is prepared
 for real SO_PEERCRED/root-process/executable/namespace/accepted inode+FD behavior,
-including actual FD reuse and exited/different process refusals. That is a
+including actual FD reuse, exited/different process refusals, delayed accept
+without prior data, and timeout with no bytes/reconnect. That is a
 binding primitive with a synthetic Python peer, NOT an approved full Producer
 or sealed core/service composition. Native actual execution is still NOT RUN
 until its own receipt. Only synthetic credentials are used; ordinary activation

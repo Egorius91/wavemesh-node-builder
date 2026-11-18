@@ -1,7 +1,7 @@
 {
   "schema": 1,
-  "status": "PRIVATE_PEER958_SOURCE_IMPLEMENTED_NATIVE2_PENDING",
-  "at_utc": "2026-11-18T10:22:29.134686+00:00",
+  "status": "PRIVATE_PEER958_976_SOURCE_FROZEN_NATIVE4_PENDING",
+  "at_utc": "2026-11-18T10:32:13.720611+00:00",
   "upstream": {
     "repository": "https://github.com/MHSanaei/3x-ui",
     "tag": "v3.11.0",
@@ -560,12 +560,17 @@
       "portable_protocol_and_retained_collector_pass": 15,
       "portable_log_sha256": "bd70b2febb5ce8f5a2eb6aa78baa36f66aae049200849ba33192ff8e66d91362",
       "portable_scope": "Windows real synthetic HTTP/files/SQLite, explicitly mocked native peer/collector. Crypto evidence lifetime and no-send failure paths tested. Source stayed unchanged through saved run; no new before/after manifest was captured then.",
-      "native_peer_cases": 2,
+      "native_peer_cases": 4,
       "native_peer_status": "NOT_RUN",
-      "native_fixture_sha256": "67dfaec62bebd48a1727dc31eee0c9aa5fab789a255fc8a263d667c978353bdc",
+      "native_fixture_sha256": "6199500d7db53eae4538cc63ef982ea7f9dc8d4a445f4afee729310834914023",
       "native_scope": "Actual Linux accepted FD/tuple/root SO_PEERCRED/start/executable/namespace primitive with synthetic Python peer; not approved full Producer/sealed core/API/client composition.",
       "current_full_main": "NOT_RUN",
-      "auto_activation": "UNWIRED"
+      "auto_activation": "UNWIRED",
+      "accept_wait_review_request": 976,
+      "accept_wait_portable_delta_pass": 2,
+      "accept_wait_delta_log_sha256": "808b7767ea6c4baf5b98b7845986128c7f9ee6b2b9f57a4c608778baa8f47a6f",
+      "shared_accept_budget_seconds": 3,
+      "same_socket_metadata_only": true
     }
   },
   "remaining_gates": [
@@ -583,7 +588,7 @@
   "publication": false,
   "live_changes": false,
   "private_consumer_source_sha256": {
-    "scripts/lib/prepared_execution.py": "da1e780605c2c826aebfb8a3f4dc7279db10979eec890f012e586307a55d4424",
+    "scripts/lib/prepared_execution.py": "b651a41970b30034b5bc8631a06bb53a2a662e1ccf3d6eb470c8083561fce31f",
     "tests/unit/test_prepared_execution.py": "d96b6cb2765640d18944f234949c0c9b2cd1363a7062f995c94a309eec216802",
     "tests/fixtures/prepared-execution-go-json-vectors.json": "de1a7bdb8b57af0d0ceeffc24969a36136fe10e1aeca2ed99cea4b5944f98d3b"
   },
@@ -595,7 +600,7 @@
     "tests/unit/test_prepared_journal.py": "45dce3bd8d04b0d60263572d99757e0ff48d443662b05512fb88c5435e7d2e66",
     "tests/unit/test_prepared_completion.py": "c964a56d1ae31515688cfa7daac3a6772f5027f8d64ac3567b4ad57599bac4bb",
     "scripts/lib/prepared_owner.py": "b188d370bda3b0d86f1faa193ca52fecfbafd2a6b14da977e83f21da27dfbc36",
-    "tests/unit/test_prepared_owner.py": "296f745b5965ccfacb3118ecc7a439315d104a3182f2fba49ef90a229ff234c3",
-    "tests/unit/test_prepared_panel_peer_native.py": "67dfaec62bebd48a1727dc31eee0c9aa5fab789a255fc8a263d667c978353bdc"
+    "tests/unit/test_prepared_owner.py": "d26f4c557b7e3c647b14fde644b51adbe2b450c374ba45bc5da32d9426668967",
+    "tests/unit/test_prepared_panel_peer_native.py": "6199500d7db53eae4538cc63ef982ea7f9dc8d4a445f4afee729310834914023"
   }
 }

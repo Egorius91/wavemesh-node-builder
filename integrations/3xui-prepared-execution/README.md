@@ -145,3 +145,11 @@ inside the new private binding context. Go context9 and portable15 are scoped
 PASS; Linux connected-peer2 is NOT RUN. No real credentials or ordinary caller
 activation; current full main/managed service/core/API/client proof remains open.
 Fresh18Nov source resume ACK971 does not reopen yesterday's VM/deadline.
+
+ROOT976 closes the legitimate queued-accept race: inode-zero wait is permitted
+only behind the verified Producer's own LISTEN FD, on the same connected socket,
+inside a single monotonic3s budget shared by both peer checks. Four Linux helper
+cases are prepared (NOT RUN), and only the two affected portable assertions were
+run PASS. No accepted9/15 or prior native suites were replayed. Native/heavy queue
+is held by ROOT for the separately owned Recovery slot; no old runtime window
+is resumed.
