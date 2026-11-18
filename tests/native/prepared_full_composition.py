@@ -241,6 +241,7 @@ def run(producer, core, manifest):
     finally:
         result["seconds"] = time.monotonic() - started
         result["dispatchRecorded"] = transaction is not None and os.path.lexists(transaction / owner.DISPATCH)
+        result["availableExports"] = (["process-reference.json"] if WORK in owned and (WORK / "process-reference.json").is_file() else [])
         # Preserve result and transaction debt before any cleanup. Exporting
         # original receipts/owned files and independent cleanup is outer-driver work.
         def preserve_result():
