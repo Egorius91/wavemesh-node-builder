@@ -12,6 +12,12 @@ def evaluate(config, runtime, route_id, stored_template, observations):
     expected_execution is context for a future owner-side CAS, not a lock or
     proof that this candidate was applied. The caller must keep existing debt.
     """
+    result, _, _ = _evaluate_collected(config, runtime, route_id, stored_template, observations)
+    return result
+
+
+def _evaluate_collected(config, runtime, route_id, stored_template, observations):
+    """Private owning path: retain the SAME collected context, never accept one."""
     if any(not isinstance(value, dict) for value in (config, runtime, stored_template, observations)):
         raise ValueError("complete private evaluation inputs are required")
     config, runtime, stored_template, observations = copy.deepcopy(
@@ -44,4 +50,4 @@ def evaluate(config, runtime, route_id, stored_template, observations):
         "settled": False,
         "deny_outcome": "not_verified",
         "capability": False,
-    }
+    }, view, effective
