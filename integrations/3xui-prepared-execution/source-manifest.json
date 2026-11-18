@@ -1,7 +1,7 @@
 {
   "schema": 1,
-  "status": "PRIVATE_LOOPBACK948_SOURCE_PASS_INVARIANTS958_OPEN",
-  "at_utc": "2026-11-17T16:34:04.839100+00:00",
+  "status": "PRIVATE_PEER958_SOURCE_IMPLEMENTED_NATIVE2_PENDING",
+  "at_utc": "2026-11-18T10:22:29.134686+00:00",
   "upstream": {
     "repository": "https://github.com/MHSanaei/3x-ui",
     "tag": "v3.11.0",
@@ -9,10 +9,10 @@
     "license": "GPL-3.0",
     "license_sha256": "3972dc9744f6499f0f9b2dbf76696f2ae7ad8af9b23dde66d6af86c9dfb36986"
   },
-  "producer_commit": "233edc08baebf66512642d1e213162de6c319825",
+  "producer_commit": "fb44cd238cc086f8e706184b1745990ea700cfa6",
   "patch": {
     "file": "producer.patch",
-    "sha256": "5865a17acfc3f5fc799e72d8de9376c3ab4e8dfa0f9713783ce1372d9bb5e1ac"
+    "sha256": "642ed98a473f7000b43e11400ca62633f1531ab6baa61259a39e878572b361e0"
   },
   "changed_source_sha256": {
     "internal/web/controller/api.go": "6af5ef866f944b09cb51a21c8ef0d67e27284f21b3969f85a9ad6aae29c3407f",
@@ -26,16 +26,16 @@
     "internal/web/service/tuic_relay_apply.go": "9a5c5ab1c383835433699ed68f4287acc7b044befaf7dc0d130903c798ffc01c",
     "internal/web/service/xray.go": "bf52fa109d6393a62815dfa169173b9dc1ce2f9c5a3bb48b877fe9624c1de79e",
     "internal/web/service/xray_builder_loopback_test.go": "1568e0184775100091824d41d8f23bbc6e2352bd325ec0bd3fa3b4c631d8ed8d",
-    "internal/web/service/xray_execution.go": "d50703caae8b78c139c0b07638f8fa83998d23c986133e0b42278377e9155f32",
+    "internal/web/service/xray_execution.go": "c8b2a2acd569a6e2eab673ea0e69ca1e4ef52bf062c385277b42a64f87364b09",
     "internal/web/service/xray_execution_context_test.go": "09fef63feb7b4913dcab16585e8f9e85b62ff8bd4d1dac320f4ed3562a2046a7",
     "internal/web/service/xray_execution_test.go": "6d261d8b0983e8b7ae078d884da60d27d2891b76d0f6b9659f5d17d18cd117d3",
     "internal/web/service/xray_setting.go": "9647b1ca8c72d326d04ba0b297235bc435c6ce6dc996dce961f2194a4ca089a9",
     "internal/web/web.go": "2cd9df2a547a16f5305305b39f54fdd31f2436634b1951c4ba684e28d36ae912",
     "internal/xray/api.go": "6c86698dc7020b4fba71478c97a755a95206dfd0756ab5598b194f2bb925d1ec",
     "internal/xray/config.go": "dec65d8e0ae6ae13bfac2f016ad2eaad5038594798398067736ecad99cf7a2d4",
-    "internal/xray/execution.go": "02986da58aa63a0992f44c81996b7f51d0886b3798b5d41ef85e3f56ea7978e2",
-    "internal/xray/execution_api.go": "00f834558b9f54386fdc3e1b108f99f9f3f2fee59ae6654bc744be78068793e3",
-    "internal/xray/execution_context_test.go": "8f360f2284fef2b840a94c3a4844c48a1cd0c34b0fa75073bdecd60e27cac524",
+    "internal/xray/execution.go": "8fe9423b7225647ac88d5c0fb806191ec4be83fd3d5edf40adcd364667d4d54c",
+    "internal/xray/execution_api.go": "ff96ccd832082b97bfee2d6b4796701589c45e83f5bafa9be736c0780bb49be1",
+    "internal/xray/execution_context_test.go": "8402841e8a6db9b89992b045d0489ba2106f87f65a829519eb9d1d137148b756",
     "internal/xray/execution_identity_linux_test.go": "ab630afac4d684b71b25134684b50dbedc8ceb4355b1361fc2fda39fbc21f6f4",
     "internal/xray/execution_lifecycle_test.go": "0a63cbecd68dc116f7a3a6c63aa4e33127f89e4e60e2c8be48e95914b0add981",
     "internal/xray/execution_linux.go": "8929ddd757058faed5976d2c3b049b24510f66807ca648d24ee83d06e2ee1308",
@@ -64,9 +64,9 @@
     "tests/unit/test_prepared_channels.py": "25476f905139281ab15236e439ad03dc0ee6430d55eeda98f6b6ad0f86274e5b"
   },
   "previous_checkpoint": {
-    "producer_commit": "8923d82aa33dda5cfe982846c806260f95b6a1f9",
-    "manifest_sha256": "d2a440687b57f110abc5fae22925836153e6a0b97e917bb2bca8157c47cc65bb",
-    "patch_sha256": "a639be66a48e79474900535adbf710eed8dd88d462d93c11c9ba6859f450c719"
+    "producer_commit": "233edc08baebf66512642d1e213162de6c319825",
+    "manifest_sha256": "64c828019cc08343d0868534b1b4e7871e81dfc546a734b3bc859296669fec04",
+    "patch_sha256": "5865a17acfc3f5fc799e72d8de9376c3ab4e8dfa0f9713783ce1372d9bb5e1ac"
   },
   "proof": {
     "windows_race": {
@@ -528,10 +528,14 @@
       "native_current_api": "NOT_RUN",
       "activation": "private caller source only; auto.sh and installation unwired",
       "scope": "Windows CGO HTTP recorder/auth and mocked native RPC; real synthetic loopback client/files/SQLite. Not actual managed service/core or physical traffic.",
-      "unaccepted_invariants958": [
-        "canceled owner snapshot waiter must stop before identity inspection",
-        "authenticate same accepted TCP peer as private verified Producer before sending bearer"
-      ]
+      "unaccepted_invariants958": {
+        "historical_findings": [
+          "canceled snapshot owner waiter before identity inspection",
+          "TCP endpoint authentication before bearer"
+        ],
+        "implemented_in_source": true,
+        "review_and_native_gate": "PENDING"
+      }
     },
     "loopback_custody948": {
       "source_head": "233edc08baebf66512642d1e213162de6c319825",
@@ -545,10 +549,27 @@
       "summary_sha256": "a8e6abc32e00a1cea74448b8b38df45431e6959362e27c967b46b9fa5017c3b5",
       "builder_rerender_pass": 1,
       "scope": "WindowsCGO actual synthetic GetXrayConfig + validator, not Linux sealed qualification or public TLS"
+    },
+    "peer_and_snapshot958": {
+      "producer_source": "fb44cd238cc086f8e706184b1745990ea700cfa6",
+      "source_review_request": 958,
+      "fresh_source_resume_ack": 971,
+      "go_snapshot_context_pass": 9,
+      "go_skip": 0,
+      "go_summary_sha256": "be554f1e2986a88dfe479cd41d63f8c064455c6124871dc6b457580e8a8e8fe3",
+      "portable_protocol_and_retained_collector_pass": 15,
+      "portable_log_sha256": "bd70b2febb5ce8f5a2eb6aa78baa36f66aae049200849ba33192ff8e66d91362",
+      "portable_scope": "Windows real synthetic HTTP/files/SQLite, explicitly mocked native peer/collector. Crypto evidence lifetime and no-send failure paths tested. Source stayed unchanged through saved run; no new before/after manifest was captured then.",
+      "native_peer_cases": 2,
+      "native_peer_status": "NOT_RUN",
+      "native_fixture_sha256": "67dfaec62bebd48a1727dc31eee0c9aa5fab789a255fc8a263d667c978353bdc",
+      "native_scope": "Actual Linux accepted FD/tuple/root SO_PEERCRED/start/executable/namespace primitive with synthetic Python peer; not approved full Producer/sealed core/API/client composition.",
+      "current_full_main": "NOT_RUN",
+      "auto_activation": "UNWIRED"
     }
   },
   "remaining_gates": [
-    "ROOT958 snapshot cancellation and authenticated connected-peer custody before full current main and actual service/core/API/client composition",
+    "ROOT958 final source review + actual Linux connected-peer native2; then fresh grouped current Linux Go/full main and separately named managed core/API/client composition",
     "Installed transaction/caller integration under approved full producer release, not the synthetic ELF",
     "Reviewed installed full-producer release/manifest and target-node compatibility; the private Linux build is separately proven",
     "Real stock template compatibility and collector consuming the fresh private snapshot",
@@ -562,8 +583,8 @@
   "publication": false,
   "live_changes": false,
   "private_consumer_source_sha256": {
-    "scripts/lib/prepared_execution.py": "0ece06d78cfeb85c8940de462792740563cff48532da925aa0d8ab1fc15e8f14",
-    "tests/unit/test_prepared_execution.py": "f41719aa451e7e568d5e715257628452a8284a1d7e0fa26cbefeac9741abf16d",
+    "scripts/lib/prepared_execution.py": "da1e780605c2c826aebfb8a3f4dc7279db10979eec890f012e586307a55d4424",
+    "tests/unit/test_prepared_execution.py": "d96b6cb2765640d18944f234949c0c9b2cd1363a7062f995c94a309eec216802",
     "tests/fixtures/prepared-execution-go-json-vectors.json": "de1a7bdb8b57af0d0ceeffc24969a36136fe10e1aeca2ed99cea4b5944f98d3b"
   },
   "private_journal_reader_source_sha256": {
@@ -573,7 +594,8 @@
     "scripts/lib/prepared_completion.py": "73092c095b41f1047b424418f95943534816dfa52657fcc7632771b3d1a4e005",
     "tests/unit/test_prepared_journal.py": "45dce3bd8d04b0d60263572d99757e0ff48d443662b05512fb88c5435e7d2e66",
     "tests/unit/test_prepared_completion.py": "c964a56d1ae31515688cfa7daac3a6772f5027f8d64ac3567b4ad57599bac4bb",
-    "scripts/lib/prepared_owner.py": "d1b78d830c264c6f413790d35bf01f3cc7b3a5220409fa233f96a20c58b24684",
-    "tests/unit/test_prepared_owner.py": "d4593a4a183acc5e5533b6e69a2e0762d04b4c989be7307ac0a4b4eab84ff93d"
+    "scripts/lib/prepared_owner.py": "b188d370bda3b0d86f1faa193ca52fecfbafd2a6b14da977e83f21da27dfbc36",
+    "tests/unit/test_prepared_owner.py": "296f745b5965ccfacb3118ecc7a439315d104a3182f2fba49ef90a229ff234c3",
+    "tests/unit/test_prepared_panel_peer_native.py": "67dfaec62bebd48a1727dc31eee0c9aa5fab789a255fc8a263d667c978353bdc"
   }
 }

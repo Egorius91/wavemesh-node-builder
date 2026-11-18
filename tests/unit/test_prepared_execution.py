@@ -205,7 +205,7 @@ class PreparedExecution(unittest.TestCase):
         self.assertEqual(str(result), "SNAPSHOT_TIMEOUT")
         connection.recv.assert_not_called()
 
-    def collect_fixture(self, second=None, frame_error=None, bad_pin=False):
+    def collect_fixture(self, second=None, frame_error=None, bad_pin=False, retained=False):
         stream = tempfile.TemporaryFile()
         stream.write(PRODUCER_BYTES)
         stream.seek(0)
@@ -224,7 +224,12 @@ class PreparedExecution(unittest.TestCase):
             observed = patches.enter_context(mock.patch.object(execution, "_observe", return_value="observed"))
             rechecked = patches.enter_context(mock.patch.object(execution, "_recheck"))
             try:
-                result = execution.collect()
+                if retained:
+                    with execution._collected_evidence() as (result, evidence):
+                        self.assertFalse(stream.closed, 'verified executable evidence closed before owner callback')
+                        self.assertEqual(evidence, 'observed')
+                else:
+                    result = execution.collect()
             except execution.ExecutionUnavailable as error:
                 result = error
         self.assertTrue(stream.closed)
@@ -236,6 +241,12 @@ class PreparedExecution(unittest.TestCase):
         self.assertEqual(frames.call_count, 2)
         observed.assert_called_once()
         rechecked.assert_called_once_with("observed")
+
+    def test_retained_collection_keeps_evidence_open_until_owner_callback_finishes(self):
+        result, frames, observed, rechecked = self.collect_fixture(retained=True)
+        self.assertIsInstance(result, tuple)
+        self.assertEqual(frames.call_count, 2)
+        rechecked.assert_called_once_with('observed')
 
     def test_changed_epoch_even_equal_json_or_replayed_nonce_cannot_be_current(self):
         for second in ({**snapshot(NEXT_NONCE), "epoch": "2"}, snapshot(NONCE)):

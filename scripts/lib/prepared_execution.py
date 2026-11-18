@@ -279,8 +279,9 @@ def _snapshot(value, nonce, peer, approval):
     return view, config
 
 
-def collect():
-    """Return (private runtime-view3, full executing JSON) in memory after fresh IO."""
+@contextlib.contextmanager
+def _collected_evidence():
+    """Keep existing verified process/executable evidence open for its owner."""
     try:
         if not sys.platform.startswith("linux"):
             _fail("LINUX_REQUIRED")
@@ -301,8 +302,90 @@ def collect():
             if nonce == next_nonce or peer != next_peer or {k: v for k, v in first.items() if k != "challenge"} != {k: v for k, v in second.items() if k != "challenge"}:
                 _fail("EXECUTION_CHANGED_DURING_COLLECTION")
             _recheck(observed)
-        return final
+            yield final, observed
     except ExecutionUnavailable:
         raise
     except (OSError, ValueError, TypeError, KeyError, OverflowError, RecursionError, AttributeError):
         raise ExecutionUnavailable("EXECUTION_NOT_VERIFIED") from None
+
+
+def collect():
+    """Return the unchanged (runtime-view3, full executing JSON) contract."""
+    with _collected_evidence() as (final, _):
+        return final
+
+
+def _accepted_panel_peer(connection, producer):
+    """Bind this connected IPv4 socket to the verified Producer's accepted FD.
+
+    Inspect only kernel metadata, never issue an HTTP request or reopen a TCP
+    connection. A not-yet-accepted socket fails closed without credentials.
+    """
+    if (connection.family != socket.AF_INET
+            or connection.getsockopt(socket.SOL_SOCKET, socket.SO_TYPE) != socket.SOCK_STREAM
+            or _process(producer["pid"]) != producer):
+        _fail("PANEL_PEER_NOT_VERIFIED")
+    local, remote = connection.getsockname(), connection.getpeername()
+    if local[0] != "127.0.0.1" or remote[0] != "127.0.0.1":
+        _fail("PANEL_PEER_NOT_VERIFIED")
+    namespace = os.stat(f"/proc/{producer['pid']}/ns/net")
+    if not _same(namespace, os.stat("/proc/self/ns/net")):
+        _fail("PANEL_PEER_NOT_VERIFIED")
+    def endpoint(address):
+        return f"{struct.unpack('=I', socket.inet_aton(address[0]))[0]:08X}:{address[1]:04X}"
+    with open(f"/proc/{producer['pid']}/net/tcp", "rt", encoding="ascii") as stream:
+        table = stream.read(LIMIT + 1)
+    if len(table) > LIMIT:
+        _fail("PANEL_PEER_NOT_VERIFIED")
+    matches = []
+    for line in table.splitlines()[1:]:
+        fields = line.split()
+        if len(fields) >= 10 and fields[1] == endpoint(remote) and fields[2] == endpoint(local) and fields[3] == "01":
+            if fields[7] != "0" or not fields[9].isdigit() or int(fields[9]) <= 0:
+                _fail("PANEL_PEER_NOT_VERIFIED")
+            matches.append(int(fields[9]))
+    if len(matches) != 1:
+        _fail("PANEL_PEER_NOT_VERIFIED")
+    inode = matches[0]
+    deadline = time.monotonic() + 3
+    with os.scandir(f"/proc/{producer['pid']}/fd") as descriptors:
+        for entry in descriptors:
+            if time.monotonic() > deadline:
+                _fail("PANEL_PEER_NOT_VERIFIED")
+            try:
+                if os.readlink(entry.path) != f"socket:[{inode}]":
+                    continue
+                metadata = os.stat(entry.path)
+                if (not stat.S_ISSOCK(metadata.st_mode) or metadata.st_uid != 0 or metadata.st_ino != inode
+                        or os.readlink(entry.path) != f"socket:[{inode}]"):
+                    _fail("PANEL_PEER_NOT_VERIFIED")
+                return inode, entry.path, local, remote, os.fstat(connection.fileno()).st_ino
+            except FileNotFoundError:
+                continue  # An unrelated FD may close while the table is read.
+    _fail("PANEL_PEER_NOT_VERIFIED")
+
+
+@contextlib.contextmanager
+def verified_panel_socket(connection, expected):
+    """Authenticate the SAME accepted peer before any request/credential bytes.
+
+    Producer identity comes only from the existing private approval + SO_PEERCRED
+    + two fresh snapshots + independent sealed-core evidence, never a caller
+    supplied PID/verified flag. The connected TCP socket is not reopened.
+    """
+    try:
+        with _collected_evidence() as ((view, _), observed):
+            if (view["native_generation"] != expected["generation"] or view["mutation_epoch"] != expected["epoch"]
+                    or view["effective_config_sha256"] != expected["before_sha256"]
+                    or view["engine_instance"] != expected["engine_instance"]):
+                _fail("PANEL_EXECUTION_CONTEXT_CHANGED")
+            producer = observed[1]
+            before = _accepted_panel_peer(connection, producer)
+            _recheck(observed)
+            if before != _accepted_panel_peer(connection, producer):
+                _fail("PANEL_PEER_CHANGED")
+            yield
+    except ExecutionUnavailable:
+        raise
+    except (OSError, ValueError, TypeError, KeyError, OverflowError, RecursionError, AttributeError):
+        raise ExecutionUnavailable("PANEL_PEER_NOT_VERIFIED") from None

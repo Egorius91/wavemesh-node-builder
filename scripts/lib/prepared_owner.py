@@ -13,6 +13,7 @@ import sqlite3
 import time
 
 import prepared_completion as completion
+import prepared_execution as execution
 import prepared_journal as reader
 import transaction_state as journal
 
@@ -109,9 +110,12 @@ def apply_once(transaction, credential_file):
         connection.sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
         connection.sock.settimeout(35)
         connection.sock.connect(("127.0.0.1", port))
-        connection.request("POST", path, body=body, headers={"Content-Type": "application/json", "Authorization": "Bearer " + token})
-        response = connection.getresponse()
-        raw = response.read(reader.LIMIT + 1)
+        # No HTTP/Authorization bytes until private custody has authenticated
+        # the same connected peer's accepted inode/FD and stable process.
+        with execution.verified_panel_socket(connection.sock, expected):
+            connection.request("POST", path, body=body, headers={"Content-Type": "application/json", "Authorization": "Bearer " + token})
+            response = connection.getresponse()
+            raw = response.read(reader.LIMIT + 1)
         diagnostics = [value for key, value in response.getheaders() if key.lower() == DIAGNOSTIC.lower()]
         if (len(raw) > reader.LIMIT or len(diagnostics) != 1 or response.status not in (200, 409)
                 or len(response.headers.get_all('Content-Type', [])) != 1 or response.headers.get_content_type() != 'application/json'):
@@ -126,7 +130,7 @@ def apply_once(transaction, credential_file):
         if known:
             return completion.complete(directory)
         return "pending"
-    except (OSError, ValueError, TypeError, KeyError, AttributeError, OverflowError, RecursionError, StopIteration, sqlite3.Error, http.client.HTTPException, completion.CompletionUnavailable):
+    except (OSError, ValueError, TypeError, KeyError, AttributeError, OverflowError, RecursionError, StopIteration, sqlite3.Error, http.client.HTTPException, completion.CompletionUnavailable, execution.ExecutionUnavailable):
         raise OwnerUnavailable("PREPARED_OWNER_REPLY_NOT_VERIFIED") from None
     finally:
         if response is not None:

@@ -863,7 +863,7 @@ index 00000000..0abf48f6
 +}
 diff --git a/internal/web/service/xray_execution.go b/internal/web/service/xray_execution.go
 new file mode 100644
-index 00000000..62821905
+index 00000000..76d2f0e3
 --- /dev/null
 +++ b/internal/web/service/xray_execution.go
 @@ -0,0 +1,246 @@
@@ -931,7 +931,7 @@ index 00000000..62821905
 +		return result, err
 +	}
 +	defer api.Close()
-+	actualRouting, err := api.ExecutionRouting(expected)
++	actualRouting, err := api.ExecutionRoutingContext(ctx, expected)
 +	if err != nil {
 +		return result, err
 +	}
@@ -1793,10 +1793,10 @@ index 2cff1596..e8cc9a02 100644
  	if len(c.InboundConfigs) != len(other.InboundConfigs) {
 diff --git a/internal/xray/execution.go b/internal/xray/execution.go
 new file mode 100644
-index 00000000..27d087ec
+index 00000000..9f44ea21
 --- /dev/null
 +++ b/internal/xray/execution.go
-@@ -0,0 +1,884 @@
+@@ -0,0 +1,892 @@
 +package xray
 +
 +import (
@@ -1950,8 +1950,16 @@ index 00000000..27d087ec
 +}
 +
 +func (o *executionOwner) snapshot(challenge string) ExecutionSnapshot {
++	s, _ := o.snapshotContext(nil, challenge)
++	return s
++}
++
++func (o *executionOwner) snapshotContext(ctx context.Context, challenge string) (ExecutionSnapshot, error) {
 +	o.mu.Lock()
 +	defer o.mu.Unlock()
++	if ctx != nil && ctx.Err() != nil {
++		return ExecutionSnapshot{}, ctx.Err()
++	}
 +	o.identityValidLocked()
 +	s := ExecutionSnapshot{SchemaVersion: executionSchema, Challenge: challenge, Qualified: o.qualified, Reason: o.reason, Identity: o.identity, Epoch: strconv.FormatUint(o.epoch, 10)}
 +	if o.qualified {
@@ -1967,7 +1975,7 @@ index 00000000..27d087ec
 +			s.Transition = &r
 +		}
 +	}
-+	return s
++	return s, nil
 +}
 +
 +func (o *executionOwner) mutate(kind string, payload map[string]any, expected *ExecutionExpected, call func() error) error {
@@ -2683,10 +2691,10 @@ index 00000000..27d087ec
 +}
 diff --git a/internal/xray/execution_api.go b/internal/xray/execution_api.go
 new file mode 100644
-index 00000000..dee2c2b8
+index 00000000..6b8d10dd
 --- /dev/null
 +++ b/internal/xray/execution_api.go
-@@ -0,0 +1,176 @@
+@@ -0,0 +1,190 @@
 +package xray
 +
 +import (
@@ -2780,10 +2788,24 @@ index 00000000..dee2c2b8
 +// ExecutionRouting returns a detached actual routing preimage for the internal
 +// owning service. The subsequent CAS still rechecks the exact generation/epoch.
 +func (x *XrayAPI) ExecutionRouting(expected ExecutionExpected) ([]byte, error) {
++	return x.executionRouting(nil, expected)
++}
++
++func (x *XrayAPI) ExecutionRoutingContext(ctx context.Context, expected ExecutionExpected) ([]byte, error) {
++	if ctx == nil {
++		return nil, context.Canceled
++	}
++	return x.executionRouting(ctx, expected)
++}
++
++func (x *XrayAPI) executionRouting(ctx context.Context, expected ExecutionExpected) ([]byte, error) {
 +	if x.execution == nil {
 +		return nil, ErrExecutionConflict
 +	}
-+	s := x.execution.snapshot("")
++	s, err := x.execution.snapshotContext(ctx, "")
++	if err != nil {
++		return nil, err
++	}
 +	if !s.Qualified || s.Identity.Generation != expected.Generation || s.Epoch != expected.Epoch || len(s.Overrides) != 0 {
 +		return nil, ErrExecutionConflict
 +	}
@@ -2865,10 +2887,10 @@ index 00000000..dee2c2b8
 +}
 diff --git a/internal/xray/execution_context_test.go b/internal/xray/execution_context_test.go
 new file mode 100644
-index 00000000..3f863d3e
+index 00000000..b59315f4
 --- /dev/null
 +++ b/internal/xray/execution_context_test.go
-@@ -0,0 +1,120 @@
+@@ -0,0 +1,152 @@
 +package xray
 +
 +import (
@@ -2936,6 +2958,38 @@ index 00000000..3f863d3e
 +	after := o.snapshot("")
 +	if native != 0 || persisted != 0 || !after.Qualified || after.Epoch != before.Epoch || after.EffectiveSHA256 != before.EffectiveSHA256 {
 +		t.Fatal("canceled waiter invalidated owner or performed effects")
++	}
++}
++
++func TestExecutionContextCanceledSnapshotWaiterStopsBeforeIdentityInspection(t *testing.T) {
++	o := executionFixture(t)
++	before := o.snapshot("")
++	ctx, cancel := context.WithCancel(context.Background())
++	defer cancel()
++	api := &XrayAPI{execution: o}
++	done := make(chan error, 1)
++	inspections := 0
++	o.mu.Lock()
++	o.checkIdentity = func() error { inspections++; return errors.New("synthetic identity drift must not be inspected") }
++	go func() {
++		_, err := api.ExecutionRoutingContext(ctx, ExecutionExpected{Generation: before.Identity.Generation, Epoch: before.Epoch, EffectiveSHA256: before.EffectiveSHA256})
++		done <- err
++	}()
++	select {
++	case <-done:
++		o.mu.Unlock()
++		t.Fatal("snapshot bypassed owner lock")
++	case <-time.After(20 * time.Millisecond):
++	}
++	cancel()
++	o.mu.Unlock()
++	if err := <-done; !errors.Is(err, context.Canceled) {
++		t.Fatalf("snapshot cancellation lost: %v", err)
++	}
++	o.mu.Lock()
++	defer o.mu.Unlock()
++	if inspections != 0 || !o.qualified || o.epoch != 0 {
++		t.Fatal("canceled snapshot inspected identity or invalidated owner")
 +	}
 +}
 +

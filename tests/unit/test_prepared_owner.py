@@ -1,5 +1,5 @@
 """Private one-send fixtures, synthetic credentials and literal loopback only."""
-from contextlib import closing, contextmanager
+from contextlib import closing, contextmanager, nullcontext
 import copy
 import http.server
 import json
@@ -73,12 +73,15 @@ class PreparedOwner(unittest.TestCase):
             server.shutdown();server.server_close();thread.join(5)
             test.assertFalse(thread.is_alive(),'own loopback fixture did not close')
 
-    def apply(self, case, credentials, collector=None):
+    def apply(self, case, credentials, collector=None, mock_peer=True):
         directory,intent,reply,view,effective=case
         def collect():
             self.assertTrue((directory/'prepared.owner-result.json').is_file(),'collection preceded durable owner reply')
             return view,effective
-        with mock.patch.object(completion,'_require_node_owner'),mock.patch.object(execution,'collect',side_effect=collector or collect):
+        # Windows protocol fixtures explicitly stub native peer custody. The
+        # actual Linux accepted-socket test is separate, never inferred here.
+        peer = mock.patch.object(execution,'verified_panel_socket',return_value=nullcontext()) if mock_peer else nullcontext()
+        with peer,mock.patch.object(completion,'_require_node_owner'),mock.patch.object(execution,'collect',side_effect=collector or collect):
             return owner.apply_once(directory,credentials)
 
     def test_one_real_send_exact_raw_template_reply_before_collect_and_completion(self):
@@ -189,6 +192,23 @@ class PreparedOwner(unittest.TestCase):
         with mock.patch.object(owner.http.client,'HTTPConnection',side_effect=AssertionError('uncertain dispatch was retried')):
             with self.assertRaises(owner.OwnerUnavailable):self.apply(case,credentials)
 
+    def test_unverified_different_reused_or_stale_peer_gets_no_authorization_bytes(self):
+        for kind in ('fake','different','reused','stale'):
+            case=self.factory.make_case(kind);directory,intent,reply,view,effective=case
+            expected=intent['expected']
+            before={**view,'native_generation':expected['generation'],'mutation_epoch':expected['epoch'],'effective_config_sha256':expected['before_sha256']}
+            if kind=='different':before['native_generation']='00000000-0000-4000-8000-000000000099'
+            observed=('fixture-boot',{'pid':123,'start_ticks':'100','parent_pid':1},None,{})
+            peer=mock.Mock(side_effect=execution.ExecutionUnavailable('PANEL_PEER_NOT_VERIFIED')) if kind=='fake' else mock.Mock(side_effect=[(1,'fd',1,2,3),(2,'fd',1,2,3)] if kind=='reused' else [(1,'fd',1,2,3)]*2)
+            with self.server(reply) as (port,state):
+                credentials,_=self.seed(case,port)
+                with mock.patch.object(execution,'_collected_evidence',return_value=nullcontext(((before,effective),observed))),mock.patch.object(execution,'_accepted_panel_peer',peer),mock.patch.object(execution,'_recheck',side_effect=execution.ExecutionUnavailable('PROCESS_CHANGED') if kind=='stale' else None),mock.patch.object(owner.http.client.HTTPConnection,'request',side_effect=AssertionError('credential bytes sent before verified peer')) as send:
+                    with self.assertRaises(owner.OwnerUnavailable):self.apply(case,credentials,mock_peer=False)
+                    send.assert_not_called()
+                self.assertEqual(state['requests'],[],'unverified listener received HTTP/Authorization bytes')
+                self.assertTrue((directory/owner.DISPATCH).is_file())
+                self.assertFalse((directory/'prepared.owner-result.json').exists())
+                self.assertEqual(reader.prepared_status(directory),'active')
     def test_private_template_reader_is_exact_readonly_and_does_not_heal(self):
         case=self.factory.make_case();directory,intent,reply,view,effective=case
         credentials,raw=self.seed(case,12345)

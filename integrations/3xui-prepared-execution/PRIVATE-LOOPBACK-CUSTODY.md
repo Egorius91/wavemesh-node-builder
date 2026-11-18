@@ -61,7 +61,7 @@ and still refuses, as are native API escape/mutable dependency negatives.
 
 Focused Windows source validation and real synthetic GetXrayConfig generation
 do not prove actual Linux sealed launch/core qualification or a loaded service.
-Those must be included in the final related native packet. ROOT958 snapshot
-cancellation and pre-credential connected-peer custody remain separate required
-fixes before the full main build. No API/client/auto activation, public TLS,
+Those must be included in the final related native packet. ROOT958 snapshot cancellation and
+pre-credential connected-peer custody are implemented in a subsequent source
+slice; their scoped proof/native review remains separate before full main acceptance. No API/client/auto activation, public TLS,
 physical new/existing IPv4/IPv6/DNS denial, publication or live action follows.

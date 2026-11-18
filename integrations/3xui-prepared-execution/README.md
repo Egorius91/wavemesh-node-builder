@@ -136,3 +136,12 @@ normalization and exact allowed keys/types are in PRIVATE-LOOPBACK-CUSTODY.md.
 ROOT958 snapshot-context and connected-peer custody are still required before
 any caller activation/full main admission; loopback+DB authority alone does not
 authenticate a TCP listener. No real credentials have been used.
+
+ROOT958 implements context-aware owner snapshot reads and authenticates the
+SAME connected TCP peer before Authorization through existing private approval,
+SO_PEERCRED, pinned process/executable/core evidence and accepted tuple/inode/FD
+checks. Legacy collect retains its result contract; evidence stays open only
+inside the new private binding context. Go context9 and portable15 are scoped
+PASS; Linux connected-peer2 is NOT RUN. No real credentials or ordinary caller
+activation; current full main/managed service/core/API/client proof remains open.
+Fresh18Nov source resume ACK971 does not reopen yesterday's VM/deadline.

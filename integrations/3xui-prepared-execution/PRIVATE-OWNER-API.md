@@ -100,16 +100,36 @@ Known-reply metadata resumption uses `complete` separately, without a new send.
 ROOT owns the shared reader's orphan send/result guard and delivers its exact
 patch for private integration; no competing Agent/health writer is introduced.
 
-## Required follow-up before activation (ROOT958)
+## Authenticated connected peer and snapshot context (ROOT958)
 
-Scoped943 tests passed, but final review identified two unaccepted invariants:
-a request canceled while waiting for the initial owner snapshot can still reach
-identity inspection; and literal loopback plus database token metadata does not
-authenticate the connected TCP listener before bearer transmission. The caller
-is unwired and has used only synthetic credentials. ROOT958 requires a purpose
-context snapshot path and reuse of private SO_PEERCRED/process/exec custody to
-bind the exact accepted TCP socket before any Authorization bytes. These fixes
-remain mandatory before native composition or installation.
+Purpose-specific snapshot/routing reads now check request cancellation after
+owner locking BEFORE identity inspection, while legacy callers keep their old
+snapshot behavior. Focused Windows Go9 tests cover both previous locks, the
+snapshot waiter, persistence after known success and legacy identity loss.
+
+Before HTTP request/Authorization bytes, the caller reuses the SAME private
+approval/SO_PEERCRED/two-fresh-frame/sealed-core collector with its executable
+FDs held open. The view must equal the frozen generation/epoch/full hash/core
+instance. This connected numeric AF_INET socket's reversed exact tuple must
+identify exactly one ESTABLISHED root-owned peer inode in the verified Producer
+network namespace. The same Producer must hold that accepted inode in /proc/PID/fd;
+process/start/executable/core evidence is rechecked, then accepted inode/FD/tuple
+and the client socket inode are checked again. Listener metadata or loopback
+alone never suffices. A not-yet-accepted/unproven peer fails closed, without HTTP
+or credential bytes, reconnect or retry. All evidence closes on every outcome.
+The caller cannot provide a PID, alternate trusted process or verified flag.
+
+Portable protocol tests explicitly mock this native custody boundary; fake,
+different, reused and stale cases assert request() is never called and the fake
+HTTP listener receives no request. Existing collect still returns only the same
+(view, full config) tuple and closes its evidence, while a dedicated retained
+context keeps evidence open during peer verification. Linux fixture2 is prepared
+for real SO_PEERCRED/root-process/executable/namespace/accepted inode+FD behavior,
+including actual FD reuse and exited/different process refusals. That is a
+binding primitive with a synthetic Python peer, NOT an approved full Producer
+or sealed core/service composition. Native actual execution is still NOT RUN
+until its own receipt. Only synthetic credentials are used; ordinary activation
+remains unwired and current full main/API/core acceptance remains separate.
 
 ## Compatibility and rollback limits
 
