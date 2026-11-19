@@ -200,11 +200,15 @@ def run(producer, core, manifest):
         owned.append(WORK)
         for name in ("bin", "db", "home"):
             (WORK / name).mkdir(mode=0o700)
+        private_log = Path("/var/log/wavemesh-node")
+        private_log.mkdir(mode=0o700)
+        owned.append(private_log)
         shutil.copyfile(core, WORK / "bin/xray-linux-amd64")
         (WORK / "bin/xray-linux-amd64").chmod(0o500)
         env = {"PATH": "/usr/sbin:/usr/bin:/sbin:/bin", "HOME": str(WORK / "home"), "LANG": "C.UTF-8",
                "XUI_DB_FOLDER": str(WORK / "db"), "XUI_BIN_FOLDER": str(WORK / "bin"),
-               "XUI_PREPARED_ATTESTATION": "1", "NODE_TOKEN_ENCRYPTION": "off"}
+               "XUI_PREPARED_ATTESTATION": "1", "NODE_TOKEN_ENCRYPTION": "off",
+               "XUI_LOG_FOLDER": "/var/log/wavemesh-node"}
         log = (WORK / "producer.log").open("wb")
         diagnostics.enter("MIGRATION")
         subprocess.run([str(producer), "migrate"], cwd=WORK, env=env, stdin=subprocess.DEVNULL,
@@ -244,9 +248,6 @@ def run(producer, core, manifest):
                             "source_commit": PRODUCER_SOURCE, "upstream_commit": execution.UPSTREAM,
                             "producer_sha256": PRODUCER, "core_sha256": execution.CORE,
                             "release_manifest_sha256": reader.sha(manifest_raw)})
-        private_log = Path("/var/log/wavemesh-node")
-        private_log.mkdir(mode=0o700)
-        owned.append(private_log)
         lock_fd = os.open(completion.NODE_MUTATION_LOCK, os.O_CREAT | os.O_EXCL | os.O_RDWR, 0o600)
         if lock_fd == 9:
             lock_fd = os.dup(lock_fd)
