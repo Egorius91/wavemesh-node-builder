@@ -117,6 +117,7 @@ class AgentConfig:
     access_state_root: Path
     runtime_finding_mode: str = "disabled"
     runtime_finding_state_root: Path = Path("/var/lib/wavemesh-agent/runtime-findings")
+    public_profiles_enabled: bool = False
 
     @classmethod
     def load(cls, env_path: Path) -> "AgentConfig":
@@ -191,6 +192,9 @@ class AgentConfig:
             raise AgentError("WAVEMESH_AGENT_RUNTIME_FINDINGS_MODE must be disabled or observe")
         if finding_mode == "observe" and auth_mode != "mtls":
             raise AgentError("Runtime findings require primary mTLS authentication")
+        public_profiles = values.get("WAVEMESH_AGENT_PUBLIC_PROFILES_ENABLED", "false")
+        if public_profiles not in {"false", "true"} or public_profiles == "true" and (auth_mode != "mtls" or mtls_mode != "shadow"):
+            raise AgentError("Public profile observation requires primary mTLS shadow mode")
         return cls(
             env_path=env_path,
             api_base=values["WAVEMESH_API_BASE"].rstrip("/"),
@@ -260,6 +264,7 @@ class AgentConfig:
             ),
             command_mode=command_mode,
             runtime_finding_mode=finding_mode,
+            public_profiles_enabled=public_profiles == "true",
             runtime_finding_state_root=Path(values.get("WAVEMESH_AGENT_RUNTIME_FINDINGS_STATE_ROOT", "/var/lib/wavemesh-agent/runtime-findings")),
             access_runtime_path=Path(
                 values.get(
@@ -311,6 +316,9 @@ class NodeAgent:
         }
         self.runtime = read_json_file(config.runtime_path, default={})
         self.last_finding_status: dict[str, Any] = {"state": "DISABLED"}
+        self.profile_cursor = 0
+        self.profile_priority_access_id: str | None = None
+        self.last_profile_status: dict[str, Any] = {"state": "DISABLED"}
 
     def run(self, once: bool = False) -> None:
         next_observation = 0.0
@@ -358,6 +366,7 @@ class NodeAgent:
                 LOG.exception("Heartbeat cycle failed: %s", exc)
             self.run_mtls_shadow_heartbeat(heartbeat_payload)
             self.run_runtime_finding_cycle()
+            self.run_public_profile_cycle()
 
             if once:
                 return
@@ -397,6 +406,55 @@ class NodeAgent:
         except Exception:  # Isolate optional evidence work and never log raw errors.
             self.last_finding_status = {"state": "COLLECTION_BLOCKED"}
             LOG.warning("Runtime finding cycle blocked; private state retained")
+
+    def run_public_profile_cycle(self) -> None:
+        if not self.config.public_profiles_enabled:
+            return
+        if (self.config.auth_mode != "mtls" or self.mtls_runtime is None
+                or self.last_mtls_status.get("state") != "SHADOW_ACTIVE"):
+            self.last_profile_status = {"state": "MTLS_NOT_READY"}
+            return
+        try:
+            with tempfile.TemporaryDirectory(prefix=".public-profile.", dir=self.config.env_path.parent) as directory:
+                os.chmod(directory, 0o700)
+                output = Path(directory) / "profile.json"
+                args = ["/usr/bin/python3", str(Path(__file__).with_name("placement_profiles.py")),
+                    "--config", str(NODE_CONFIG_PATH), "--access-root", str(self.config.access_state_root),
+                    "--node-id", self.config.node_id, "--tenant-id", self.config.tenant_id,
+                    "--node-version", str(self.config.observed_version), "--cursor", str(self.profile_cursor), "--output", str(output)]
+                if self.profile_priority_access_id:
+                    args += ["--priority-access-id", self.profile_priority_access_id]
+                completed = subprocess.run(args, check=False, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, timeout=20)
+                if completed.returncode != 0:
+                    raise AgentError("Private profile collection is unavailable")
+                from runtime_findings import read_json
+                result = read_json(output)
+                if (set(result) != {"cursor", "profile"} or type(result["cursor"]) is not int
+                        or not 0 <= result["cursor"] <= 2147483647):
+                    raise AgentError("Private profile result is invalid")
+                self.profile_cursor = result["cursor"]
+                profile = result["profile"]
+                if profile is None:
+                    self.profile_priority_access_id = None
+                    self.last_profile_status = {"state": "IDLE"}
+                    return
+                if (not isinstance(profile, dict) or profile.get("schema_version") != 1
+                        or profile.get("node_version") != self.config.observed_version
+                        or not isinstance(profile.get("access_id"), str) or not re.fullmatch(r"[A-Za-z0-9_-]{8,128}", profile["access_id"])
+                        or not isinstance(profile.get("placement_id"), str) or not re.fullmatch(r"(?:legacy:)?[A-Za-z0-9_-]{1,128}", profile["placement_id"])):
+                    raise AgentError("Private profile scope is invalid")
+                path = (f"internal/v1/nodes/{self.config.node_id}/accesses/{profile['access_id']}/"
+                        f"placements/{profile['placement_id']}/public-profile")
+                receipt = self.mtls_runtime.api_json("POST", path, profile, expected=(200,))
+                if receipt.get("accepted") is not True or not re.fullmatch(r"[a-f0-9]{64}", str(receipt.get("profile_hash", ""))):
+                    raise AgentError("Profile acknowledgement is invalid")
+                self.profile_priority_access_id = None
+                self.last_profile_status = {"state": "CONFIGURATION_REPORTED"}
+        except Exception:
+            # Credentials, arbitrary exception text and native output never enter
+            # health/runtime logs. Optional evidence cannot fail access execution.
+            self.last_profile_status = {"state": "COLLECTION_BLOCKED"}
+            LOG.warning("Public profile observation blocked")
 
     def run_mtls_lifecycle(self) -> None:
         if self.mtls_runtime is None:
@@ -489,6 +547,8 @@ class NodeAgent:
                 },
                 expected=(204,),
             )
+            if payload.get("schema_version") in {2, 3}:
+                self.profile_priority_access_id = payload["access_id"]
             LOG.info("Access command completed: type=%s", command_type)
         except Exception as exc:  # noqa: BLE001 - isolate command work from health loop
             LOG.warning("Access provisioning command failed: code=%s", safe_error_code(type(exc).__name__))

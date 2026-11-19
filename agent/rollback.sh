@@ -153,6 +153,9 @@ restore_or_remove access_runtime.py "$INSTALL_DIR/access_runtime.py" 0755 0755
 if [[ -e "$backup_dir/runtime_findings.py" || -e "$backup_dir/runtime_findings.py.absent" ]]; then
   restore_or_remove runtime_findings.py "$INSTALL_DIR/runtime_findings.py" 0644 0755
 fi
+if [[ -e "$backup_dir/placement_profiles.py" || -e "$backup_dir/placement_profiles.py.absent" ]]; then
+  restore_or_remove placement_profiles.py "$INSTALL_DIR/placement_profiles.py" 0644 0755
+fi
 restore_or_remove "$SERVICE" "$UNIT_PATH" 0644 0755
 # Backward-compatible with backups made before shared-lock support. Leave the
 # runtime inode alone, even when removing this boot-time creation rule.
