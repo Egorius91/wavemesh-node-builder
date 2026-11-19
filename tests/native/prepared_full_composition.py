@@ -9,6 +9,7 @@ from contextlib import closing
 import copy
 import hashlib
 import json
+import math
 import os
 from pathlib import Path
 import secrets
@@ -21,6 +22,7 @@ import sys
 import time
 
 ROOT = Path(__file__).resolve().parents[2]
+sys.path.insert(0, str(ROOT))  # Absolute script entrypoint has no repository cwd on sys.path.
 sys.path.insert(0, str(ROOT / "scripts/lib"))
 import prepared_channels as channels
 import prepared_completion as completion
@@ -36,6 +38,84 @@ PRODUCER = "d8af4a509d2888b52356f6ea950a3ed5151a1b9f45e182deef250c0b11d8768b"
 PRODUCER_SOURCE = "fb44cd238cc086f8e706184b1745990ea700cfa6"
 WORK = Path("/tmp/wm-pr4-full-composition-20261118")
 INPUT = Path("/tmp/wm-pr4-composition-input-20261118")
+
+
+PHASES = frozenset({"PRECHECK", "FIXTURE_PREPARATION", "MIGRATION", "DATABASE_FIXTURE",
+                    "PRODUCER_START", "SNAPSHOT_WAIT", "INITIAL_COLLECT", "HEALTH_WAIT",
+                    "SECOND_COLLECT", "INTENT_PREPARE", "OWNER_API", "FINAL_COLLECT", "POSTIMAGE_VERIFY"})
+REASONS = frozenset({"FD9_OCCUPIED", "PRODUCER_EARLY_EXIT", "SNAPSHOT_WAIT_EXPIRED"})
+COLLECTOR_CODES = frozenset({
+    "UNSUPPORTED_JSON_INTEGER", "UNSUPPORTED_JSON_NUMBER", "AMBIGUOUS_JSON", "UNSUPPORTED_JSON_UNICODE",
+    "UNSUPPORTED_JSON_VALUE", "SNAPSHOT_SIZE", "SNAPSHOT_SHAPE", "FULL_PRODUCER_APPROVAL_REQUIRED",
+    "UNAPPROVED_ENGINE", "APPROVAL_SHAPE", "PRIVATE_CUSTODY_REQUIRED", "APPROVAL_CUSTODY_REQUIRED",
+    "APPROVAL_SIZE", "SNAPSHOT_PEER", "SNAPSHOT_PEER_CHANGED", "SNAPSHOT_TIMEOUT", "SNAPSHOT_FRAME",
+    "PROCESS_IDENTITY", "PROCESS_UID", "IMMUTABLE_INPUT_REQUIRED", "EXECUTABLE_PIN", "EXECUTABLE_OBJECT",
+    "CONSUMED_SIZE", "CONSUMED_OBJECT", "CONSUMED_HASH", "PROCESS_CHANGED", "SNAPSHOT_CHALLENGE",
+    "EXECUTION_UNQUALIFIED", "UNSUPPORTED_RUNTIME_OVERRIDE", "EFFECTIVE_HASH", "EXECUTION_HASH",
+    "SELECTOR_CONTEXT", "LINUX_REQUIRED", "EXECUTION_CHANGED_DURING_COLLECTION", "PANEL_ACCEPT_TIMEOUT",
+    "PANEL_PEER_NOT_VERIFIED", "PANEL_EXECUTION_CONTEXT_CHANGED", "PANEL_PEER_CHANGED"})
+
+
+def diagnostic_error(error, reason=None):
+    """Fixed enums only; never format exceptions or inspect HTTP/body/status attributes."""
+    if type(error) is RuntimeError and type(reason) is str and reason in REASONS:
+        return {"failureType": "RuntimeError", "errorCode": reason}
+    families = ((execution.ExecutionUnavailable, "ExecutionUnavailable", "EXECUTION_UNAVAILABLE"),
+                (intent_writer.IntentUnavailable, "IntentUnavailable", "INTENT_NOT_FROZEN"),
+                (owner.OwnerUnavailable, "OwnerUnavailable", "OWNER_REPLY_NOT_VERIFIED"),
+                (completion.CompletionUnavailable, "CompletionUnavailable", "COMPLETION_UNAVAILABLE"),
+                (subprocess.TimeoutExpired, "TimeoutExpired", "SUBPROCESS_TIMEOUT"),
+                (subprocess.CalledProcessError, "CalledProcessError", "SUBPROCESS_EXIT_NONZERO"),
+                (AssertionError, "AssertionError", "ASSERTION_FAILED"),
+                (sqlite3.Error, "SQLiteError", "SQLITE_ERROR"), (OSError, "OSError", "OS_ERROR"),
+                (ValueError, "ValueError", "INVALID_VALUE"), (TypeError, "TypeError", "INVALID_TYPE"),
+                (KeyError, "KeyError", "MISSING_FIELD"), (RuntimeError, "RuntimeError", "RUNTIME_ERROR"))
+    for family, kind, code in families:
+        if isinstance(error, family):
+            if type(error) is execution.ExecutionUnavailable:
+                # One exact source-defined collector enum, never a parsed/normalized message.
+                args = BaseException.args.__get__(error, type(error))
+                if len(args) == 1 and type(args[0]) is str and args[0] in COLLECTOR_CODES:
+                    code = args[0]
+            return {"failureType": kind, "errorCode": code}
+    return {"failureType": "UnclassifiedError", "errorCode": "UNCLASSIFIED_ERROR"}
+
+
+class PhaseDiagnostics:
+    def __init__(self, clock=None):
+        self.clock = time.monotonic if clock is None else clock
+        self.phase, self.started = "PRECHECK", self.tick()
+        self.durations, self.reason, self.stopped = {}, None, False
+
+    def tick(self):
+        try:
+            value = self.clock()
+            return value if type(value) in (int, float) and math.isfinite(value) else None
+        except Exception:
+            return None
+
+    def elapsed(self):
+        try:
+            value = self.tick() - self.started
+            return round(value, 6) if math.isfinite(value) and 0 <= value <= 1800 else None
+        except (TypeError, ValueError, OverflowError):
+            return None
+
+    def enter(self, phase):
+        if type(phase) is not str or phase not in PHASES or self.stopped:
+            raise ValueError("UNSUPPORTED_DIAGNOSTIC_PHASE")
+        self.durations[self.phase] = self.elapsed()
+        self.phase, self.started, self.reason = phase, self.tick(), None
+
+    def stop(self):
+        if not self.stopped:
+            self.durations[self.phase] = self.elapsed()
+            self.stopped = True
+        return {"phase": self.phase, "phaseSeconds": self.durations[self.phase],
+                "phaseDurations": dict(self.durations)}
+
+    def failure(self, error):
+        return {**self.stop(), "failedPhase": self.phase, **diagnostic_error(error, self.reason)}
 
 
 def digest_file(path):
@@ -73,6 +153,7 @@ def observation(plan, binding, view):
 def run(producer, core, manifest):
     result = {"status": "FAILED_NOT_ACCEPTED", "ownerInvocations": 0, "physicalFailClosed": "NOT_RUN",
               "capability": False, "syntheticHealth": True, "producerSource": PRODUCER_SOURCE}
+    diagnostics = PhaseDiagnostics()
     process = None
     log = None
     lock_fd = None
@@ -103,7 +184,9 @@ def run(producer, core, manifest):
         except OSError:
             pass
         else:
+            diagnostics.reason = "FD9_OCCUPIED"
             raise RuntimeError("FD9 occupied")
+        diagnostics.enter("FIXTURE_PREPARATION")
         ownership = INPUT / "FIXTURE-OWNERSHIP.json"
         assert not os.path.lexists(ownership)
         # Durable write-ahead ownership precedes even mkdir/copy/migrate. A
@@ -123,8 +206,10 @@ def run(producer, core, manifest):
                "XUI_DB_FOLDER": str(WORK / "db"), "XUI_BIN_FOLDER": str(WORK / "bin"),
                "XUI_PREPARED_ATTESTATION": "1", "NODE_TOKEN_ENCRYPTION": "off"}
         log = (WORK / "producer.log").open("wb")
+        diagnostics.enter("MIGRATION")
         subprocess.run([str(producer), "migrate"], cwd=WORK, env=env, stdin=subprocess.DEVNULL,
                        stdout=log, stderr=log, timeout=60, check=True)
+        diagnostics.enter("DATABASE_FIXTURE")
         database = WORK / "db/x-ui.db"
         database.chmod(0o600)
         config, runtime, template, plan, binding, payload = synthetic_inputs()
@@ -168,17 +253,22 @@ def run(producer, core, manifest):
         os.dup2(lock_fd, 9)
         fcntl.flock(9, fcntl.LOCK_EX | fcntl.LOCK_NB)
         owned.append(execution.DIRECTORY)  # Only our fresh Producer can create it.
+        diagnostics.enter("PRODUCER_START")
         process = subprocess.Popen([str(producer), "run"], cwd=WORK, env=env, stdin=subprocess.DEVNULL,
                                    stdout=log, stderr=log, start_new_session=True)
         result["producerPid"] = process.pid
         reference = {"producer": execution._process(process.pid), "session": process.pid}
         journal.atomic_json(WORK / "process-reference.json", reference)
         # Observe SAME original process; never relaunch after readiness failure.
+        diagnostics.enter("SNAPSHOT_WAIT")
         deadline = time.monotonic() + 60
         while not execution.SNAPSHOT.exists():
-            if process.poll() is not None or time.monotonic() >= deadline:
+            producer_status = process.poll()
+            if producer_status is not None or time.monotonic() >= deadline:
+                diagnostics.reason = "PRODUCER_EARLY_EXIT" if producer_status is not None else "SNAPSHOT_WAIT_EXPIRED"
                 raise RuntimeError("original Producer not ready")
             time.sleep(0.1)
+        diagnostics.enter("INITIAL_COLLECT")
         collection_started = time.monotonic()
         view, effective = execution.collect()
         result["initialCollectionSeconds"] = time.monotonic() - collection_started
@@ -199,16 +289,20 @@ def run(producer, core, manifest):
         journal.atomic_json(credentials, {"schema_version": 1, "bearer_token": token})
         del token
         # Preserve the actual 10s hysteresis interval, without changing clocks.
+        diagnostics.enter("HEALTH_WAIT")
         while int(time.time()) < first["at"] + plan["health"]["sample_interval_seconds"]:
             assert process.poll() is None
             time.sleep(0.1)
+        diagnostics.enter("SECOND_COLLECT")
         second_view, _ = execution.collect()
         assert second_view == view
         samples = observation(plan, binding, view)
+        diagnostics.enter("INTENT_PREPARE")
         transaction = journal.begin(WORK / "transactions", "auto-prepared-reconcile", os.getpid())
         intent = intent_writer.prepare_once(transaction, "route-auto-europe", paths, samples)
         result["transactionId"], result["intentSha256"] = transaction.name, reader.sha((transaction / "prepared.apply.pending.json").read_bytes())
         result["ownerInvocations"] = 1
+        diagnostics.enter("OWNER_API")
         owner_started = time.monotonic()
         audit = {"active": True, "connect": None, "header": None, "sends": 0}
         def observe(event, arguments):
@@ -233,7 +327,9 @@ def run(producer, core, manifest):
             result["connectToHeaderAttemptSeconds"] = (None if audit["header"] is None or audit["connect"] is None
                                                        else audit["header"] - audit["connect"])
         assert audit["connect"] is not None and audit["header"] is not None
+        diagnostics.enter("FINAL_COLLECT")
         final_view, final_effective = execution.collect()
+        diagnostics.enter("POSTIMAGE_VERIFY")
         assert final_view["native_generation"] == view["native_generation"]
         assert final_view["mutation_epoch"] == "1"
         assert final_view["effective_config_sha256"] == intent["expected"]["after_sha256"]
@@ -248,9 +344,9 @@ def run(producer, core, manifest):
                       actualEffectiveSha256=final_view["effective_config_sha256"],
                       processPostimageSha256=reply["outcome"]["ProcessConfigSHA256"])
     except Exception as error:
-        # Fixed type only. Never emit config/SQL/wire/credentials/raw exception.
-        result["failureType"] = type(error).__name__
+        result.update(diagnostics.failure(error))
     finally:
+        result.update(diagnostics.stop())
         result["seconds"] = time.monotonic() - started
         result["dispatchRecorded"] = transaction is not None and os.path.lexists(transaction / owner.DISPATCH)
         result["availableExports"] = (["process-reference.json"] if WORK in owned and (WORK / "process-reference.json").is_file() else [])
