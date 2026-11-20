@@ -50,16 +50,20 @@ def finalize(config,route_id,inbound_id):
     route["entry"]["inbound_id"]=int(inbound_id); return result
 def set_enabled(config,auto_id,enabled):
     result=copy.deepcopy(config); route,balancer=find_auto(result,auto_id); route["enabled"]=bool(enabled); balancer["enabled"]=bool(enabled)
+    if route.get("prepared_plan"):
+        raise ValueError("prepared routes must be reconciled through their EU-only owner")
     for client in result.get("clients",[]):
         for credential in client.get("credentials",[]):
             if credential.get("route_id")==route["id"]: credential["enabled"]=bool(enabled)
     return result
 def set_published(config,auto_id,published):
     result=copy.deepcopy(config); route,balancer=find_auto(result,auto_id)
+    if published and route.get("prepared_plan"):
+        raise ValueError("prepared route publication requires the shared SaaS admission owner")
     if published and not (route.get("enabled",True) and balancer.get("enabled",True)): raise ValueError("disabled Auto Route cannot be published")
     route.setdefault("presentation",{})["published"]=bool(published); return result
 def describe(config,auto_id):
-    route,balancer=find_auto(config,auto_id); return {"route_id":route["id"],"inbound_id":route["entry"]["inbound_id"],"inbound_tag":route["entry"]["inbound_tag"],"balancer_tag":route["routing"]["balancer_tag"],"rule_tag":route["routing"]["rule_tag"],"strategy":balancer["strategy"],"selectors":balancer["selector"],"enabled":bool(route.get("enabled",True) and balancer.get("enabled",True)),"published":route.get("presentation",{}).get("published",False)}
+    route,balancer=find_auto(config,auto_id); return {"route_id":route["id"],"inbound_id":route["entry"]["inbound_id"],"inbound_tag":route["entry"]["inbound_tag"],"balancer_tag":route["routing"]["balancer_tag"],"rule_tag":route["routing"]["rule_tag"],"strategy":balancer["strategy"],"selectors":balancer["selector"],"enabled":bool(route.get("enabled",True) and balancer.get("enabled",True)),"published":route.get("presentation",{}).get("published",False),"prepared":bool(route.get("prepared_plan"))}
 def main():
     p=argparse.ArgumentParser(); s=p.add_subparsers(dest="command",required=True)
     b=s.add_parser("prepare"); [b.add_argument(x,required=True) for x in ("--config","--candidate","--clients","--id","--display-name","--port","--path")]; b.add_argument("--exit-ids",default=""); b.add_argument("--sort-order",type=int,default=50)

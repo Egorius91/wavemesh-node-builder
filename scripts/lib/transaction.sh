@@ -68,7 +68,10 @@ PY
 }
 
 wm_transaction_begin() {
-  local operation="$1" transaction pending=""
+  local operation="$1" protocol="${2:-}" transaction pending=""
+  local begin_args=()
+  [[ -z "$protocol" || ( "$protocol" == prepared-v1 && "$operation" == auto-prepared-reconcile ) ]] || { wm_fail "Unsupported transaction protocol"; return 1; }
+  [[ -z "$protocol" ]] || begin_args+=(--prepared)
   if ! pending="$(python3 "$WM_TRANSACTION_TOOL" check --root "$WM_TRANSACTION_ROOT")"; then
     wm_fail "Incomplete transaction detected: ${pending}. Run: wavemesh transaction recover --id ${pending}"
   fi
@@ -76,7 +79,7 @@ wm_transaction_begin() {
     declare -F wm_xray_policy_preflight >/dev/null || { wm_fail "Xray policy helper is unavailable; no transaction was created"; return 1; }
     wm_xray_policy_preflight || { wm_fail "Xray private log policy preflight failed; no transaction was created"; return 1; }
   fi
-  transaction="$(python3 "$WM_TRANSACTION_TOOL" begin --root "$WM_TRANSACTION_ROOT" --operation "$operation" --pid "$$")" || {
+  transaction="$(python3 "$WM_TRANSACTION_TOOL" begin --root "$WM_TRANSACTION_ROOT" --operation "$operation" --pid "$$" "${begin_args[@]}")" || {
     [[ -z "${WM_XRAY_PREFLIGHT_FILE:-}" ]] || rm -f "$WM_XRAY_PREFLIGHT_FILE"
     WM_XRAY_PREFLIGHT_FILE=""
     wm_fail "Could not create transaction"
@@ -84,7 +87,9 @@ wm_transaction_begin() {
   WM_ACTIVE_TRANSACTION="$transaction"; export WM_ACTIVE_TRANSACTION
   trap 'wm_transaction_exit_handler $?' EXIT
   trap 'exit 130' INT; trap 'exit 143' TERM; trap 'exit 129' HUP
-  wm_transaction_snapshot "$transaction" || wm_fail "Could not capture transaction backups"
+  if [[ -z "$protocol" ]]; then
+    wm_transaction_snapshot "$transaction" || wm_fail "Could not capture transaction backups"
+  fi
 }
 
 wm_transaction_assert_xray_recovery() {
@@ -164,6 +169,13 @@ wm_transaction_wait_xui() {
 wm_transaction_rollback() {
   local transaction="$1" message="${2:-automatic rollback}" failed=0 db="" nginx_conf="${WM_NGINX_MANAGED_CONF:-/etc/nginx/wavemesh-managed-locations.conf}"
   trap - EXIT INT TERM HUP
+  if [[ "${transaction##*/}" == *-prepared-v1 ]]; then
+    # Only a verified pre-effect disposition may close the new protocol.
+    # Malformed bootstrap or any pending/request/reply remains fenced debt.
+    python3 "$WM_TRANSACTION_TOOL" prepared-abort --transaction "$transaction" && return 0
+    wm_warn "Prepared origin retained; no generic snapshot restore is permitted"
+    return 1
+  fi
   if [[ -e "$transaction/prepared.apply.pending.json" || -L "$transaction/prepared.apply.pending.json" ||
         -e "$transaction/prepared.apply.completed.json" || -L "$transaction/prepared.apply.completed.json" ]] ||
       ! python3 "$WM_TRANSACTION_TOOL" prepared-guard --transaction "$transaction"; then

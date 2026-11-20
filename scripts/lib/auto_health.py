@@ -3,7 +3,12 @@
 
 import argparse
 import json
+import sys
+import time
 from pathlib import Path
+
+sys.path.insert(0, str(Path(__file__).resolve().parent))
+import prepared_channels
 
 
 def load(path, default=None):
@@ -27,7 +32,7 @@ def parse_inbounds(response):
     return values if isinstance(values, list) else []
 
 
-def evaluate(config, runtime, inbounds_response, template, overrides=None):
+def evaluate(config, runtime, inbounds_response, template, overrides=None, now=None, runtime_view=None, effective_config=None):
     overrides = overrides or {}
     inbounds = parse_inbounds(inbounds_response)
     by_tag = {item.get("tag") or item.get("remark"): item for item in inbounds}
@@ -44,6 +49,27 @@ def evaluate(config, runtime, inbounds_response, template, overrides=None):
     rows = []
     for route in config.get("routes", []):
         if route.get("kind") != "auto":
+            continue
+        if route.get("prepared_plan"):
+            plan = route["prepared_plan"]
+            state = runtime.get("prepared_routes", {}).get(route["id"], {})
+            timestamp = int(time.time()) if now is None else now
+            try:
+                # Stored panel template and actual generated execution are
+                # separate. Only independently qualified full execution can
+                # grant prepared health, even when the stored bytes match.
+                actual = prepared_channels.qualified_effective_config(effective_config, runtime_view)
+                prepared_channels.health_config_fingerprint(config, route["id"], plan, actual, runtime_view)
+                expected, binding = prepared_channels.compile_template(config, route["id"], plan, template, state, timestamp, runtime_view, actual)
+                matches = prepared_channels.executing_intent_matches(expected, actual, route)
+                inbound = by_tag.get(route.get("entry", {}).get("inbound_tag"))
+                structural = matches and inbound is not None and inbound.get("enable", True) is True
+                fresh = prepared_channels.state_is_current(state, binding, runtime_view, timestamp, plan["health"]["max_age_seconds"])
+                healthy_exits = {p["exit_id"] for p in plan["paths"] if fresh and state.get("paths", {}).get(p["id"], {}).get("status") == "healthy" and state["paths"][p["id"]].get("consecutive_successes", 0) > 0}
+                status = "misconfigured" if not structural else ("healthy" if len(healthy_exits) == len(plan["exits"]) else "degraded") if fresh and state.get("selected") else "blocked"
+            except (KeyError, TypeError, ValueError):
+                status, binding, healthy_exits = "blocked" if runtime_view is None else "misconfigured", None, set()
+            rows.append({"id": route["id"], "display_name": route.get("display_name"), "status": status, "enabled": route.get("enabled", True), "published": route.get("presentation", {}).get("published", False), "strategy": "prepared", "selectors": [], "override_exit_id": None, "healthy_exits": len(healthy_exits), "total_exits": len(plan.get("exits", [])), "route_binding": binding, "evidence_scope": "local-entry-path-only"})
             continue
         balancer = configured_balancers.get(route.get("balancer_id"), {})
         enabled = bool(route.get("enabled", True) and balancer.get("enabled", True))
@@ -124,9 +150,11 @@ def main():
     parser.add_argument("--inbounds", required=True)
     parser.add_argument("--template", required=True)
     parser.add_argument("--overrides", required=True)
+    parser.add_argument("--runtime-view", help="Independent settled executing instance/config view; absent means unqualified")
+    parser.add_argument("--effective-config", help="Full qualified executing JSON; a stored panel template is insufficient")
     parser.add_argument("--json", action="store_true")
     args = parser.parse_args()
-    rows = evaluate(load(args.config, {}), load(args.runtime, {}), load(args.inbounds, {}), load(args.template, {}), load(args.overrides, {}))
+    rows = evaluate(load(args.config, {}), load(args.runtime, {}), load(args.inbounds, {}), load(args.template, {}), load(args.overrides, {}), runtime_view=load(args.runtime_view) if args.runtime_view else None, effective_config=load(args.effective_config) if args.effective_config else None)
     print(render(rows, args.json))
 
 

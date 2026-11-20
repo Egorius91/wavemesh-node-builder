@@ -11,6 +11,88 @@ AUTO_PROBE_URL = "https://www.google.com/generate_204"
 AUTO_PROBE_INTERVAL = "30s"
 PRIVATE_ERROR_LOG = "/var/log/wavemesh-node/xray-error.log"
 LOG_LEVELS = {"debug", "info", "warning", "error", "none"}
+BLOCK_TAG = "wm-eu-only-block"
+
+
+def ensure_block_outbound(template):
+    outbounds = template.setdefault("outbounds", [])
+    matches = [item for item in outbounds if item.get("tag") == BLOCK_TAG]
+    block = {"tag": BLOCK_TAG, "protocol": "blackhole", "settings": {}}
+    if matches and matches != [block]:
+        raise ValueError("EU-only block outbound is missing its exact policy")
+    if not matches:
+        outbounds.append(block)
+
+
+def ensure_client_guard(template, inbound_tag):
+    """Retain deny even while a managed route is removed before its inbound."""
+    ensure_block_outbound(template)
+    rules = template.setdefault("routing", {}).setdefault("rules", [])
+    guard_tag = f"wm-guard-{inbound_tag}"
+    rules[:] = [r for r in rules if r.get("ruleTag") != guard_tag]
+    rules.insert(0, {"type": "field", "inboundTag": [inbound_tag], "outboundTag": BLOCK_TAG, "ruleTag": guard_tag})
+
+
+def validate_exit_selectors(template, selectors):
+    """Xray selectors match prefixes, so reject every unintended expansion."""
+    outbounds = template.get("outbounds", [])
+    ensure_unique(outbounds, "tag", "outbound tags")
+    for selector in selectors:
+        matched = [item for item in outbounds if item.get("tag", "").startswith(selector)]
+        if len(matched) != 1 or matched[0].get("tag") != selector:
+            raise ValueError("Auto Route selector is missing outbounds or has a prefix collision")
+        if matched[0].get("protocol") != "vless":
+            raise ValueError("Auto Route selector is not a supported Exit outbound")
+
+
+def validate_eu_only(template, config=None):
+    """Check managed client routing before apply, snapshot and restore."""
+    balancers = template.get("routing", {}).get("balancers", [])
+    for balancer in balancers:
+        if not balancer.get("tag", "").startswith("wm-balancer-"):
+            continue
+        if balancer.get("fallbackTag") != BLOCK_TAG:
+            raise ValueError("Auto Route has no EU-only fallback")
+        if not balancer.get("selector") or balancer.get("strategy") != {"type": "leastPing"}:
+            raise ValueError("Auto Route has an unsupported selection strategy")
+        matches = [item for item in template.get("outbounds", []) if item.get("tag") == BLOCK_TAG]
+        if matches != [{"tag": BLOCK_TAG, "protocol": "blackhole", "settings": {}}]:
+            raise ValueError("Auto Route block outbound differs from policy")
+        validate_exit_selectors(template, balancer.get("selector", []))
+    rules = template.get("routing", {}).get("rules", [])
+    ensure_unique(rules, "ruleTag", "routing rule tags")
+    protected = [r for r in rules if r.get("ruleTag", "").startswith("wm-rule-")]
+    for index, rule in enumerate(rules):
+        guard = rule.get("ruleTag", "").startswith("wm-guard-wm-route-")
+        if rule not in protected and not guard:
+            continue
+        if set(rule) not in ({"type", "inboundTag", "balancerTag", "ruleTag"}, {"type", "inboundTag", "outboundTag", "ruleTag"}):
+            raise ValueError("Auto Route rule must cover every client protocol and address")
+        tags = rule.get("inboundTag")
+        if rule.get("type") != "field" or not isinstance(tags, list) or len(tags) != 1 or not tags[0].startswith("wm-route-"):
+            raise ValueError("Auto Route rule has an unsupported inbound")
+        for preceding in rules[:index]:
+            prior_tags = preceding.get("inboundTag")
+            if not isinstance(prior_tags, list) or not prior_tags or (tags[0] in prior_tags and not (guard and preceding in protected)):
+                raise ValueError("Auto Route client traffic can be shadowed by another rule")
+        if "outboundTag" in rule and rule["outboundTag"] != BLOCK_TAG:
+            if guard or not rule["outboundTag"].startswith("wm-exit-"):
+                raise ValueError("Auto Route direct fallback is forbidden")
+            validate_exit_selectors(template, [rule["outboundTag"]])
+        elif "outboundTag" in rule:
+            matches = [item for item in template.get("outbounds", []) if item.get("tag") == BLOCK_TAG]
+            if matches != [{"tag": BLOCK_TAG, "protocol": "blackhole", "settings": {}}]:
+                raise ValueError("Auto Route block outbound differs from policy")
+        elif len([b for b in balancers if b.get("tag") == rule["balancerTag"]]) != 1:
+            raise ValueError("Auto Route references an absent or duplicated balancer")
+    if config and config.get("node", {}).get("role") == "entry":
+        for route in config.get("routes", []):
+            if route.get("kind") not in ("auto", "cascade") or not route.get("enabled", True):
+                continue
+            tag = route.get("entry", {}).get("inbound_tag")
+            if not tag or not any(r.get("inboundTag") == [tag] and (r in protected or r.get("ruleTag", "").startswith("wm-guard-wm-route-")) for r in rules):
+                raise ValueError("active Entry route has no verified forwarding/block rule")
+    return True
 
 
 def validate_log_shape(template, allow_missing_policy_fields=False):
@@ -148,10 +230,12 @@ def merge(template, outbound, inbound_tag, outbound_tag, rule_tag):
     routing = result.setdefault("routing", {})
     rules = routing.setdefault("rules", [])
     rules[:] = [item for item in rules if item.get("ruleTag") != rule_tag and not (item.get("inboundTag") == [inbound_tag] and item.get("outboundTag") == outbound_tag)]
-    insert_before_catch_all(rules, {"type": "field", "inboundTag": [inbound_tag], "outboundTag": outbound_tag, "ruleTag": rule_tag})
+    ensure_client_guard(result, inbound_tag)
+    rules.insert(0, {"type": "field", "inboundTag": [inbound_tag], "outboundTag": outbound_tag, "ruleTag": rule_tag})
 
     ensure_unique(outbounds, "tag", "outbound tags")
     ensure_unique(rules, "ruleTag", "routing rule tags")
+    validate_eu_only(result)
     return result
 
 
@@ -174,18 +258,22 @@ def merge_balancer(template, selectors, inbound_tag, balancer_tag, rule_tag, str
     missing = [tag for tag in selectors if tag not in available]
     if missing:
         raise ValueError(f"Auto Route selector references missing outbounds: {', '.join(missing)}")
-
+    validate_exit_selectors(result, selectors)
     routing = result.setdefault("routing", {})
     rules = routing.setdefault("rules", [])
     balancers = routing.setdefault("balancers", [])
     rules[:] = [item for item in rules if item.get("ruleTag") != rule_tag and item.get("inboundTag") != [inbound_tag]]
+    ensure_client_guard(result, inbound_tag)
     balancers[:] = [item for item in balancers if item.get("tag") != balancer_tag]
-    balancers.append({"tag": balancer_tag, "selector": selectors, "strategy": {"type": strategy}})
-    insert_before_catch_all(rules, {"type": "field", "inboundTag": [inbound_tag], "balancerTag": balancer_tag, "ruleTag": rule_tag})
+    balancers.append({"tag": balancer_tag, "selector": selectors, "strategy": {"type": strategy}, "fallbackTag": BLOCK_TAG})
+    # First match owns ALL client traffic, including literal IPv4/IPv6 and DNS.
+    # A preceding user/IP-specific rule must not send this inbound to freedom.
+    rules.insert(0, {"type": "field", "inboundTag": [inbound_tag], "balancerTag": balancer_tag, "ruleTag": rule_tag})
 
     observatory = result.setdefault("observatory", {})
+    unmanaged_subjects = [tag for tag in observatory.get("subjectSelector", []) if not tag.startswith("wm-exit-")]
     observatory.update({
-        "subjectSelector": selectors,
+        "subjectSelector": list(dict.fromkeys(unmanaged_subjects + [tag for item in balancers for tag in item.get("selector", [])])),
         "probeURL": AUTO_PROBE_URL,
         "probeInterval": AUTO_PROBE_INTERVAL,
         "enableConcurrency": True,
@@ -193,11 +281,13 @@ def merge_balancer(template, selectors, inbound_tag, balancer_tag, rule_tag, str
 
     ensure_unique(balancers, "tag", "balancer tags")
     ensure_unique(rules, "ruleTag", "routing rule tags")
+    validate_eu_only(result)
     return result
 
 
 def verify_balancer(template, selectors, inbound_tag, balancer_tag, rule_tag, strategy="leastPing"):
     validate_log_policy(template)
+    validate_eu_only(template)
     selectors = list(dict.fromkeys(selectors))
     routing = template.get("routing", {})
     balancers = [item for item in routing.get("balancers", []) if item.get("tag") == balancer_tag]
@@ -216,8 +306,14 @@ def verify_balancer(template, selectors, inbound_tag, balancer_tag, rule_tag, st
     rule_index = routing.get("rules", []).index(rule)
     if rule_index >= catch_index:
         raise ValueError("managed Auto Route routing rule is shadowed by catch-all")
+    # Other managed Auto Route rules have disjoint inbound tags. Anything else
+    # before this rule can match the protected client and is refused.
+    for preceding in routing.get("rules", [])[:rule_index]:
+        tags = preceding.get("inboundTag", [])
+        if not isinstance(tags, list) or not tags or inbound_tag in tags:
+            raise ValueError("managed Auto Route routing rule can be shadowed")
     observatory = template.get("observatory", {})
-    if observatory.get("subjectSelector") != selectors:
+    if not set(selectors).issubset(observatory.get("subjectSelector", [])):
         raise ValueError("Auto Route observatory selectors differ from desired state")
     return True
 
@@ -236,6 +332,7 @@ def remove_balancer(template, inbound_tag, balancer_tag, rule_tag):
     routing["rules"] = [item for item in routing.get("rules", []) if item.get("ruleTag") != rule_tag and not (item.get("inboundTag") == [inbound_tag] and item.get("balancerTag") == balancer_tag)]
     routing["balancers"] = [item for item in routing.get("balancers", []) if item.get("tag") != balancer_tag]
     remaining_selectors = []
+    remaining_selectors.extend(tag for tag in result.get("observatory", {}).get("subjectSelector", []) if not tag.startswith("wm-exit-"))
     for balancer in routing.get("balancers", []):
         remaining_selectors.extend(balancer.get("selector", []))
     if remaining_selectors:
@@ -286,6 +383,9 @@ def main():
 
     policy_parser = sub.add_parser("assert-log-policy")
     policy_parser.add_argument("--template", required=True)
+    eu_parser = sub.add_parser("assert-eu-only")
+    eu_parser.add_argument("--template", required=True)
+    eu_parser.add_argument("--config")
 
     candidate_parser = sub.add_parser("normalize-log-policy-candidate")
     candidate_parser.add_argument("--template", required=True)
@@ -293,6 +393,9 @@ def main():
 
     args = parser.parse_args()
     template = read_json(args.template)
+    if args.command == "assert-eu-only":
+        validate_eu_only(template, read_json(args.config) if args.config else None)
+        return
     if args.command == "assert-log-policy":
         validate_log_policy(template)
         return

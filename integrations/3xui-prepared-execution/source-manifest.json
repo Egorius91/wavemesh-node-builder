@@ -1,0 +1,606 @@
+{
+  "schema": 1,
+  "status": "PRIVATE_PEER958_976_SOURCE_FROZEN_NATIVE4_PENDING",
+  "at_utc": "2026-11-18T10:32:13.720611+00:00",
+  "upstream": {
+    "repository": "https://github.com/MHSanaei/3x-ui",
+    "tag": "v3.11.0",
+    "commit": "c621ba9014a6aa21fd7c9ecf45655e44e24ebf13",
+    "license": "GPL-3.0",
+    "license_sha256": "3972dc9744f6499f0f9b2dbf76696f2ae7ad8af9b23dde66d6af86c9dfb36986"
+  },
+  "producer_commit": "fb44cd238cc086f8e706184b1745990ea700cfa6",
+  "patch": {
+    "file": "producer.patch",
+    "sha256": "642ed98a473f7000b43e11400ca62633f1531ab6baa61259a39e878572b361e0"
+  },
+  "changed_source_sha256": {
+    "internal/web/controller/api.go": "6af5ef866f944b09cb51a21c8ef0d67e27284f21b3969f85a9ad6aae29c3407f",
+    "internal/web/controller/xray_execution.go": "fd81468df9177ffc4c1a0472faf9f96436e17e0895bcfcdd30008f1a1b460fd1",
+    "internal/web/controller/xray_execution_test.go": "053845e2a3c9b7c230014c761b3e81dbb38e736d5d0eb0362087c987a8e32ef0",
+    "internal/web/job/check_client_ip_job.go": "5921d724074f1dad18efb5d55327f6866bae7ecd86ffcbc5a33fae0b75d7b62d",
+    "internal/web/runtime/local.go": "b68987abfc08a24926b8e5c4c92422412bdaafb3a5ef341d46a56ed3d787afde",
+    "internal/web/runtime/local_api.go": "0ceefec338e70a32c7987b7fdb333be056bd30b49e41038c8bdcf5d0d383e5f5",
+    "internal/web/runtime/local_api_test.go": "7b4818bbfd8438edc568bbade1ce5ab5cebaaf484df319e99dcd4fac78424f20",
+    "internal/web/service/node.go": "9687b7e25045ea1638c09c1c6137d2632967f2cf6cbe7d49e941d4db54c5e18f",
+    "internal/web/service/tuic_relay_apply.go": "9a5c5ab1c383835433699ed68f4287acc7b044befaf7dc0d130903c798ffc01c",
+    "internal/web/service/xray.go": "bf52fa109d6393a62815dfa169173b9dc1ce2f9c5a3bb48b877fe9624c1de79e",
+    "internal/web/service/xray_builder_loopback_test.go": "1568e0184775100091824d41d8f23bbc6e2352bd325ec0bd3fa3b4c631d8ed8d",
+    "internal/web/service/xray_execution.go": "c8b2a2acd569a6e2eab673ea0e69ca1e4ef52bf062c385277b42a64f87364b09",
+    "internal/web/service/xray_execution_context_test.go": "09fef63feb7b4913dcab16585e8f9e85b62ff8bd4d1dac320f4ed3562a2046a7",
+    "internal/web/service/xray_execution_test.go": "6d261d8b0983e8b7ae078d884da60d27d2891b76d0f6b9659f5d17d18cd117d3",
+    "internal/web/service/xray_setting.go": "9647b1ca8c72d326d04ba0b297235bc435c6ce6dc996dce961f2194a4ca089a9",
+    "internal/web/web.go": "2cd9df2a547a16f5305305b39f54fdd31f2436634b1951c4ba684e28d36ae912",
+    "internal/xray/api.go": "6c86698dc7020b4fba71478c97a755a95206dfd0756ab5598b194f2bb925d1ec",
+    "internal/xray/config.go": "dec65d8e0ae6ae13bfac2f016ad2eaad5038594798398067736ecad99cf7a2d4",
+    "internal/xray/execution.go": "8fe9423b7225647ac88d5c0fb806191ec4be83fd3d5edf40adcd364667d4d54c",
+    "internal/xray/execution_api.go": "ff96ccd832082b97bfee2d6b4796701589c45e83f5bafa9be736c0780bb49be1",
+    "internal/xray/execution_context_test.go": "8402841e8a6db9b89992b045d0489ba2106f87f65a829519eb9d1d137148b756",
+    "internal/xray/execution_identity_linux_test.go": "ab630afac4d684b71b25134684b50dbedc8ceb4355b1361fc2fda39fbc21f6f4",
+    "internal/xray/execution_lifecycle_test.go": "0a63cbecd68dc116f7a3a6c63aa4e33127f89e4e60e2c8be48e95914b0add981",
+    "internal/xray/execution_linux.go": "8929ddd757058faed5976d2c3b049b24510f66807ca648d24ee83d06e2ee1308",
+    "internal/xray/execution_loopback.go": "b18e01c4b5b910cbf6eff905d1ea50d4b2faf480513e67d1c8827ce572924dd0",
+    "internal/xray/execution_loopback_test.go": "c741ef5e502b2be292fea8ae9d3e56ab49587f621ed2bdce0ec665f163611cc7",
+    "internal/xray/execution_native_linux_test.go": "d1df5e86221b84ce0032e07aaee6b3e0ce188e1cbb75015653f7566e115057aa",
+    "internal/xray/execution_other.go": "4988e852af47f487b2232ba089db0363498a1f3b5833b626a78f15fd4df7d9b7",
+    "internal/xray/execution_override_test.go": "15f50a1d62b97be709205331ee5de46e72d1b379d50851c89b475450b6bdd432",
+    "internal/xray/execution_persist_test.go": "6b27b553037b5ec8c44e292b934ffc1b8acc1abc9bb133720f98559b187dc9b8",
+    "internal/xray/execution_template_test.go": "a515ffa3d2fcb0037f5264ce5f26e5ec332fb755ca640673cab2841b7e17caee",
+    "internal/xray/execution_test.go": "4f2522b334db1f61f7df2782e22a1a947438880a5997047a56d07d460ee55bbd",
+    "internal/xray/process.go": "5ee126e0455d621db7e4f790899433faf9858ad65b4889beafe752f5805e6b10",
+    "internal/xray/testdata/builder-getconfig-loopback.json": "5e5ab769b2a548afb8f210951f1734b1e39c3436ee2926b80fcf75e68bb05f00",
+    "internal/xray/testdata/builder-loopback-inbounds.json": "cd624c5e760fbfbfc3396773acdece1dab7534d99c74828251f4b6b220205213"
+  },
+  "stock_core": {
+    "version": "26.10.21",
+    "sha256": "a27e3f95ab6ce270956d0cecd32eda4686a811afc71c64a6a734a3dede14883e",
+    "modified": false
+  },
+  "private_execution_schema": 3,
+  "public_channel_schema": 1,
+  "builder_base": "d2cd3e62de5fd368582eb3259a63ff0069f4335c",
+  "compiler_source_sha256": {
+    "scripts/lib/prepared_channels.py": "64b699606631073689a8481243ab8a393c8729bbd7db2f7b6affbae57d1c5960",
+    "tests/unit/test_prepared_channels.py": "25476f905139281ab15236e439ad03dc0ee6430d55eeda98f6b6ad0f86274e5b"
+  },
+  "previous_checkpoint": {
+    "producer_commit": "233edc08baebf66512642d1e213162de6c319825",
+    "manifest_sha256": "64c828019cc08343d0868534b1b4e7871e81dfc546a734b3bc859296669fec04",
+    "patch_sha256": "5865a17acfc3f5fc799e72d8de9376c3ab4e8dfa0f9713783ce1372d9bb5e1ac"
+  },
+  "proof": {
+    "windows_race": {
+      "status": "PASS",
+      "source_head": "35c57fe48f5df242ea79592d2e17b2dcae926932",
+      "top_level_pass": 21,
+      "subcase_pass": 17,
+      "fail": 0,
+      "skip": 0,
+      "evidence": {
+        "file": "PR4-PHASE766-OWNER-RACE.jsonl",
+        "sha256": "a503684a4e605e0b1063d8efd27f301c253429d269bd586c20d596fd34596c82"
+      },
+      "scope": "All owner regressions including exact inert API label and still-unsupported nginx loopback; unchanged unmanaged runtime/service evidence retained."
+    },
+    "compiler": {
+      "pass": 45,
+      "fail": 0,
+      "skip": 0,
+      "head_tested": "25f9e4ee0906a6422df6f8bf722f43b3dca0a7bf",
+      "evidence": "PR4-PHASE712-COMPILER.log",
+      "evidence_sha256": "04b38dda34316bc36b379791ea0d133b4ca4f6b196c4c43d5913c7002e854fa3",
+      "scope": "current frozen product/test bytes after final epoch-length guard",
+      "previous_scope": "before final epoch-length bound; frozen source NOT RERUN due coordinator701",
+      "reuse_applicability": "Exact two compiler/test Git-LF SHA256 values unchanged from compiler45 PASS; not rerun in phase757."
+    },
+    "linux_cross_compile": {
+      "status": "PASS",
+      "source_head": "253ace5365c804f84746442bc9f15ed75f803a2b",
+      "target": "linux/amd64",
+      "CGO_ENABLED": 0,
+      "package": "./internal/xray",
+      "toolchain": "go1.27.4 windows/amd64",
+      "artifact_filename": "producer-PHASE757-253ace53-linux.test",
+      "artifact_sha256": "db47f84136ec3200458fd24bdc16bdd274b79e0a1da2e1257c8978d592127852",
+      "artifact_bytes": 47471580
+    },
+    "native": {
+      "status": "HISTORICAL_NATIVE757_SCOPED_PASS_ONLY",
+      "source_head": "253ace5365c804f84746442bc9f15ed75f803a2b",
+      "top_level_pass": 3,
+      "fail": 0,
+      "skip": 0,
+      "result": {
+        "file": "PR4-PHASE757-NATIVE-RESULT.json",
+        "sha256": "778de82e02b937197817100adf2ec39c7ef31944ded437006f7442b5eb2451fc"
+      },
+      "receipt_sha256": "54450df8ec839dbb220afe5f6816ec980a90e76357aea14f9b8d9b9c55768e8e",
+      "independent_cleanup_receipt_sha256": "e265a8fb3d629809f82d43269f4c567b5eab2a6edd94c383cfc83f554f1ec356",
+      "release": {
+        "file": "PR4-PHASE757-NATIVE-RELEASE.json",
+        "sha256": "e43b42aeae31cc3825629b4dd4b989bd81bbd274735602d3cb7ca80d86d1cf75"
+      },
+      "applicability": "Kernel identity/memfd/UDS/lifecycle and old untagged control source proof retained. Current inert tagged-control path and Python consumer have no new native acceptance; do not call current whole producer native-qualified."
+    },
+    "startup_diagnosis": {
+      "file": "PR4-PHASE742-STARTUP-DIAGNOSIS.json",
+      "sha256": "8b773775ed28dc838c63758015c9a0f500dd96d00568d1a3eb5f57456ffb637c"
+    },
+    "hash_cost": {
+      "file": "PR4-PHASE755-HASH-COST-TOOL.json",
+      "sha256": "9733f95d4905d522ede9b8a27badc58aebe83d390f4d19e5d23e75b01b3f6ba8"
+    },
+    "previous_windows757_composite": {
+      "status": "PASS_COMPOSITE_AFFECTED_CHECKS",
+      "top_level_pass": 33,
+      "subcase_pass": 17,
+      "skip": 0,
+      "original_grouped_run": {
+        "file": "PR4-PHASE757-RACE.jsonl",
+        "sha256": "542bc5e715a3257f0ac904fba7c46895b3b4bfd736d7356684c5ab250f0dac73"
+      },
+      "original_outcome": "32 top-level+17 subcases PASS; one portable closed-handle assertion FAIL; five packages compiled, runtime/service cases PASS",
+      "original_source": "253ace5365c804f84746442bc9f15ed75f803a2b",
+      "current_focused_correction": {
+        "file": "PR4-PHASE757B-PORTABLE-RACE.jsonl",
+        "sha256": "29202cff044ed33ccd9241d26600d774aa85c5c74f897ecdc95e414706745aab"
+      },
+      "current_focused_top_level_pass": 1,
+      "applicability": "Only lifecycle test changes Stat to ReadAt while retaining errors.Is(os.ErrClosed); product and all other tested bytes unchanged. Original FAIL retained; this is not one all-green grouped run."
+    },
+    "private_consumer": {
+      "status": "SOURCE_AND_SCOPED_SYNTHETIC_LINUX_NATIVE_PASS",
+      "top_level_pass": 20,
+      "fail": 0,
+      "skip": 0,
+      "evidence": {
+        "file": "PR4-PHASE776FIX2-READER.log",
+        "sha256": "808b52bd615e82558d5e9e61a2854497096d9efe3d8f20bc20219f57668c6c68"
+      },
+      "go_vectors": {
+        "total": 13,
+        "supported_match": 4,
+        "explicit_refusal": 9,
+        "actual_native_snapshot_dto": true,
+        "fixture_sha256": "de1a7bdb8b57af0d0ceeffc24969a36136fe10e1aeca2ed99cea4b5944f98d3b",
+        "overlay_source_sha256": "054c768c0b1bd0aa317c0ca8b287f63a187a63dc9a10701afc92f5d2542330fc",
+        "evidence_sha256": "2166291b1f2e4333cac3095439baffa4b6146ab1266371c47d20b2fe893d2693",
+        "actual_native_unqualified_snapshot_dto": true
+      },
+      "original_native_failed_attempt": {
+        "file": "PR4-CONSUMER-FAILED-834.json",
+        "sha256": "cf91b02ffa4d19c92c379613af31c6e406b52d0ad615c0d35c31c386d9382da8"
+      },
+      "production_approval": null,
+      "native_execution_current_fix": true,
+      "wire_change": false,
+      "native": {
+        "builder_source": "ba057cf8881f283950edc9806e12799a8fadef17",
+        "producer_source": "35c57fe48f5df242ea79592d2e17b2dcae926932",
+        "reader_sha256": "0ece06d78cfeb85c8940de462792740563cff48532da925aa0d8ab1fc15e8f14",
+        "producer_test_elf_sha256": "645b754a307acc963b674ce040bbe24a8fc7a6fd504c9d5be398e5d9c8016483",
+        "test_overlay_sha256": "b72a06714c9ab7ac46d294e391ef7a9837aead892cbe34a5345d286df6365c11",
+        "selected_case_checks": 7,
+        "all_pass": true,
+        "result": {
+          "file": "PR4-CONSUMER-NATIVE-RESULT.json",
+          "sha256": "f50df8b9208e96d366e639b372eea2f718df44149ca6a8a26be4a3a96c680ac1"
+        },
+        "receipt_sha256": "cdd5f49b6aa800a5fb8d512d927e75b21b6b3ca823fe6acc51f63fcd972ab560",
+        "independent_cleanup_receipt_sha256": "6a9953063def7358e9269dba73f02cc12ba019e49d38bf7dedf2bc153ef6610a",
+        "release": {
+          "file": "PR4-CONSUMER-NATIVE-RELEASE.json",
+          "sha256": "8ba742e59645ae29fa355632beeb0d6f0a99ad6df48cfef438a2da26b238b53f"
+        },
+        "trust_scope": "Isolated synthetic-loader injection only; no production approval file/label or installed integration.",
+        "physical_acceptance": false,
+        "full_producer_acceptance": false
+      }
+    },
+    "template_regression_red": {
+      "file": "PR4-PHASE766-TEMPLATE-RED.jsonl",
+      "sha256": "55fe517f3d8db26ecfec28dc69cd2c09dee1ececfaf7fdb1b9a21da6d016fa2e"
+    },
+    "private_consumer_before_native_adapter_fix": {
+      "status": "SOURCE_SYNTHETIC_PASS_NATIVE_NOT_RUN",
+      "top_level_pass": 18,
+      "fail": 0,
+      "skip": 0,
+      "evidence": {
+        "file": "PR4-PHASE766-READER.log",
+        "sha256": "119d6929ed7e79cd4f4184d04a922e08c0efc4c645b0ea7277f66713e5a6f988"
+      },
+      "initial_mock_portability_failure": {
+        "file": "PR4-PHASE766-READER-INITIAL-FAILURE.json",
+        "sha256": "55f22f1474c399470526980f51c6b761e164e6697c75b5d14130e5a34961a89c"
+      },
+      "go_canonical_vectors": {
+        "total": 13,
+        "supported_match": 4,
+        "explicit_refusal": 9,
+        "result": {
+          "file": "PR4-PHASE766-GO-WIRE-VECTORS-RESULT.json",
+          "sha256": "ed2b6de487a1068c9000980755aa9b1b8365fe6de9816f36cfaf69d75c92c6bd"
+        }
+      },
+      "generated_entry_shape": {
+        "file": "PR4-PHASE766-GENERATED-ENTRY-SHAPE.json",
+        "sha256": "f45a42a0b3295f1f3800f4a92c1f75b47071380d5504f14a7c79ac71ae657a41"
+      },
+      "current_production_approval": null,
+      "native_execution": false,
+      "integration": "Library returns only private in-memory data; no installed caller, Agent or health transport."
+    },
+    "read_only_evaluation": {
+      "status": "SOURCE_INTEGRATION_PASS_NATIVE_NOT_RUN",
+      "ack": 793,
+      "proposal_sha256": "a1f54c059560c6bc493499f046a5bb83a60a4b81f317b1dd05b8cd315b48c208",
+      "base": "75906f4088284823ef0ee7331514eacffd81e356",
+      "source_sha256": {
+        "scripts/lib/prepared_evaluation.py": "9813c53ce49c5a719434b34dcba72c222be757d48ad32a26494b1994b5df656a",
+        "tests/unit/test_prepared_evaluation.py": "dce8fd201a66427e6d1283dd7fceb9ce2cdb4b597344771a1305a880178e131c"
+      },
+      "tests": {
+        "pass": 10,
+        "fail": 0,
+        "skip": 0,
+        "platform": "Windows Python 3.14",
+        "collector": "synthetic mock; actual compiler",
+        "evidence": "PR4-PHASE793-EVALUATION.log",
+        "evidence_sha256": "976dd9d89aef2c5203492ce051bbfbe849731683389daea31a1eb315567a377d"
+      },
+      "original_test_outcome": "Initial 9-case run: 8 PASS, 1 FAIL from a test assertion using block instead of the existing wm-eu-only-block constant. Test corrected to the existing constant; product unchanged; final focused 10-case run PASS.",
+      "reused_unchanged": {
+        "compiler_pass": 45,
+        "reader_pass": 20,
+        "owner_top_level_pass": 21,
+        "owner_subcase_pass": 17,
+        "native_reader_case_checks_pass": 7
+      },
+      "effects": {
+        "application": false,
+        "settlement": false,
+        "health_write": false,
+        "pending_debt_clear": false,
+        "production_approval": false,
+        "native_execution": false,
+        "publication": false,
+        "live_changes": false
+      },
+      "scope": "Private in-memory candidate only. Exact expected generation/epoch is future CAS context, not actual atomic apply or persistence proof."
+    },
+    "full_private_producer_build": {
+      "status": "HISTORICAL_35_BUILD_PASS_CURRENT_SOURCE_NOT_BUILT",
+      "producer_head": "35c57fe48f5df242ea79592d2e17b2dcae926932",
+      "builder_source_tested": "8dd43aaf18039f78cc2a1b1033382f22c490e88c",
+      "binary_sha256": "2a45079b9ae10cc41706f9d4f41355a4448580c1e555eeaf893a1234a8cf5072",
+      "binary_bytes": 106420408,
+      "version": "dev+35c57fe4",
+      "target": "linux/amd64",
+      "toolchain": {
+        "go": "go version go1.27.4 linux/amd64",
+        "gcc": "13.3.0",
+        "libc": "ldd (Ubuntu GLIBC 2.39-0ubuntu8.9) 2.39"
+      },
+      "CGO_ENABLED": 1,
+      "embedded_assets": 169,
+      "sqlite": {
+        "integrity": "ok",
+        "required_tables": true,
+        "table_count": 25,
+        "fixture_values_exported": false
+      },
+      "actual_build_attempts": 1,
+      "build_seconds": 3669.3883843421936,
+      "frozen_go_sum_unchanged": true,
+      "harness": "V3 offline dependency metadata closure; original selected ZIP-only preflight failure864 retained, no compilation attempted in that failed run.",
+      "proof": {
+        "file": "PR4-FULL-PRODUCER-FROZEN-PROOF-20261117.json",
+        "sha256": "9c5274736853725a3015f2b6d89e7cc239010a28714eb5b91a6c02df56ad1425"
+      },
+      "native_receipt": {
+        "guestPid": 950,
+        "sha256": "41f553bc687867f240d1b5548dafaf305a792ed4a019a71b2dc071c4aa5362c9"
+      },
+      "independent_cleanup": {
+        "guestPid": 6180,
+        "sha256": "88fe422e45632ba4df45ba3642c1a2120d8b81d99c8b580a21f8e041c3903c9a"
+      },
+      "release": {
+        "file": "PR4-FULL-PRODUCER-NATIVE-RELEASE-20261117.json",
+        "sha256": "767d60dd56211273e36a65fe1f20e4674900e90b5b3d4e22a298674a3bd29d38"
+      },
+      "installed": false,
+      "production_approval": false,
+      "full_runtime_acceptance": false,
+      "public_tls_acceptance": false,
+      "physical_flow_acceptance": false,
+      "portability": "Ubuntu24.04/gcc13.3/glibc2.39 build; static/portable release and working-node compatibility NOT VERIFIED.",
+      "applies_to_current_producer": false,
+      "current_source_build": "NOT_RUN",
+      "reason": "Current0d0b7617 includes process postimage result and earlier owner/retry changes; old full main artifact applies only to35."
+    },
+    "no_implicit_rpc_retry": {
+      "status": "PASS_SCOPED_WINDOWS_CGO_UNIT_ONLY",
+      "source_head": "b6b6f40eee3c106e0ac4b86c6df069c4d6cd85d3",
+      "ack": 850,
+      "changed_files": [
+        "internal/web/runtime/local.go",
+        "internal/web/runtime/local_api_test.go"
+      ],
+      "top_level_pass": 5,
+      "fail": 0,
+      "skip": 0,
+      "platform": "Windows/amd64 Go1.27.4 CGO1 existing llvm-mingw",
+      "log": {
+        "file": ".tools\\pr4-native-retry-20261117\\fixed-pool.log",
+        "sha256": "f4f9e6c50b9d6eb1f7e6d4286a92a391224d3c61915a432e3653c08f1bf1ad4d"
+      },
+      "baseline_red": {
+        "file": "PR4-NO-RETRY-BASELINE-RED-20261117.json",
+        "sha256": "6101cbf81ef0f27474918dfa58de9e35b66a15ddf941d62583974a23f5ee31b6"
+      },
+      "build_preflight_failure": {
+        "file": "PR4-NO-RETRY-BASELINE-CGO0-FAILURE.json",
+        "sha256": "8bf12c817547413aab63cb05eeba67b370a2aa3f388448645d924d7940a3c1d5"
+      },
+      "artifact_roundtrip": {
+        "file": "PR4-NO-RETRY-ARTIFACT-ROUNDTRIP-20261117.json",
+        "sha256": "b5e246b7fce487806214f27a6f843b512462b4c59efb3d964adf6458f4e013c3"
+      },
+      "limits": "Synthetic callback and loopback fake gRPC pooling/restart tests only. No full producer build/runtime, managed UDS RPC or Linux acceptance for this delta."
+    },
+    "evidence_reuse_boundary": "Earlier proofs retain exact original source/hash scope. Current Go5 and changed portable58 are separately scoped, not full native/service/current build acceptance.",
+    "owner_persistence_barrier": {
+      "status": "PASS_SCOPED_WINDOWS_SOURCE_ONLY",
+      "source_head": "90f920be36d3a515a05638d269d91686f90269cf",
+      "source_ack": 870,
+      "top_level_pass": 59,
+      "fail": 0,
+      "skip": 0,
+      "source_unchanged": true,
+      "platform": "Windows amd64 Go1.27.4 CGO1 existing offline cache; source callbacks/temporary SQLite, not real Xray/native/full service",
+      "summary": {
+        "file": ".tools\\pr4-owner-barrier-20261117\\focused-summary.json",
+        "sha256": "afc3a1c68a8f26157bf3d3a1344a7c289965d98bb520c3f2f2b8725a1c789f7f"
+      },
+      "log": {
+        "file": ".tools\\pr4-owner-barrier-20261117\\focused.jsonl",
+        "sha256": "6b54e4e3b3fcd465338fa2b752fcfb87e534c181c6a6707aea0f36feb2983a04"
+      },
+      "artifact_roundtrip": {
+        "file": "PR4-OWNER-BARRIER-ARTIFACT-ROUNDTRIP-20261117.json",
+        "sha256": "fb3086047c5003f93f19e915186d737394a4f3eb556bb67a01de8ed4b521df79"
+      },
+      "limits": "Owner fake RoutingService callbacks + actual temporary SQLite/file persistence. Real core, managed UDS, full app/service composition, native directory fsync/current full build NOT RUN. No handler/wire/capability enabled."
+    },
+    "owner_cold_desired_compatibility": {
+      "status": "PASS_FOCUSED_WINDOWS_SOURCE_ONLY",
+      "source_head": "d8eea105ec2d41895c5119c86193b11afcbe9a7f",
+      "source_ack": 883,
+      "top_level_pass": 4,
+      "skip": 0,
+      "fail": 0,
+      "summary": {
+        "file": ".tools\\pr4-owner-barrier-20261117\\cold-preimage-fixed-summary.json",
+        "sha256": "18ee09c5be5ed4dd464be8b8070496105704e384664b0fc749e7f556d4b892fb"
+      },
+      "log": {
+        "file": ".tools\\pr4-owner-barrier-20261117\\cold-preimage-fixed.jsonl",
+        "sha256": "2157351334d90a8561d89a1a50c7233f9bf6eb10f9ba07277e636d4404bfd172"
+      },
+      "expected_red": {
+        "file": ".tools\\pr4-owner-barrier-20261117\\cold-preimage-baseline.json",
+        "sha256": "400bb47ce189387e9699157aa084a89b335b59979a739ca7aba6f3d79096043e"
+      },
+      "reuse_proof": {
+        "file": ".tools\\pr4-owner-barrier-20261117\\cold-preimage-reuse.json",
+        "sha256": "bf97ccd50a3bd2ab5eb8aaca31fe82e4399d7b128f649aa139ce8c73bde007db"
+      },
+      "roundtrip": {
+        "file": "PR4-COLD-DESIRED-ARTIFACT-ROUNDTRIP-20261117.json",
+        "sha256": "c92d451606595ec6469e5ef63151a49f098700152c5be1928f57edb47a5371d3"
+      },
+      "scope": "Cold consumed actual deny may differ from persisted desired target; exact expected nativeCAS, DBraw preimage, same rule/inbound and no-op conflict retained. Candidate source tests only; full service/native runtime NOT RUN."
+    },
+    "private_journal_reader": {
+      "status": "PASS_PORTABLE_SYNTHETIC_NATIVE_NOT_RUN",
+      "builder_source": "09ce5f6e40eae3caf51cb2342dafb4da6d0c78c7",
+      "source_ack": 888,
+      "reader_ack": 894,
+      "portable_reader_retention_cases": 8,
+      "existing_readonly_compatibility_cases": 28,
+      "ordinary_transaction_script": "PASS_FINAL_CURRENT",
+      "skip": 0,
+      "source_summary": {
+        "file": ".tools\\pr4-journal-completion-20261117\\guards-summary.json",
+        "sha256": "d2afbb52846e396d22e38984cad62419cf9ee6fee5a90d448f9ad0650ccc9a2b"
+      },
+      "compatibility_fixed": {
+        "file": ".tools\\pr4-journal-completion-20261117\\guards-compat-fixed.json",
+        "sha256": "531e94b3fce4aebf4135efb354d136f5a9e8f6095602ee85dcd8cc65fc6b2014"
+      },
+      "stale_expectation_baseline": {
+        "file": ".tools\\pr4-journal-completion-20261117\\stale-compat-baseline.json",
+        "sha256": "12cf9af9a0bbfd38bb7b73fc58a9bb36b4c77e828039d6dbc7e8ff9be9157789"
+      },
+      "native_Bash_fsync": "NOT_RUN",
+      "positive_completion_writer": "NOT_IMPLEMENTED_YET",
+      "limits": "Pure historical validator and retention only; synthetic owner flags and artifact fixture are not actual producer proof. Shared runtime write and transport remain closed.",
+      "frozen_current_unittest_cases": 37,
+      "frozen_summary": {
+        "file": ".tools\\pr4-journal-completion-20261117\\reader-frozen37.json",
+        "sha256": "c0d3417e9fa036f35801d4242f41911d156be8cab658427b3ddb0947cdc9e74c"
+      },
+      "earlier_portable_reader_retention_cases": 8
+    },
+    "journal_mutating_admission": {
+      "source": "9408f8b98a2f187872def05c3b2a97128fa7173a",
+      "proof": "PR4-JOURNAL-ADMISSION-SOURCE-PROOF-20261117.json",
+      "sha256": "ecaa900a09c128a77f46f62d283cb62669b2fb948247654468d15b5104f817d5",
+      "focused_pass": 6,
+      "skip": 0,
+      "native": "NOT_RUN"
+    },
+    "owner_process_postimage": {
+      "source_head": "0d0b7617b4b994747983bc42f9acb2040b6a4042",
+      "source_ack": 912,
+      "source_review": 924,
+      "status": "PASS_WINDOWS_CGO_FOCUSED_ONLY",
+      "top_level_pass": 5,
+      "fail": 0,
+      "skip": 0,
+      "summary": {
+        "file": ".tools\\pr4-process-postimage-20261117\\focused-summary.json",
+        "sha256": "3463ca759326db19af7791e88192bf1dc267b36737d671f9e2786f1d1729e5f8"
+      },
+      "artifact_roundtrip": {
+        "file": "PR4-PROCESS-POSTIMAGE-ARTIFACT-ROUNDTRIP-20261117.json",
+        "sha256": "197e3e292d7a705f4e46f9551038c8e72a77cd2c1d9f5bb40d41f0a04f3aa14f"
+      },
+      "scope": "Exact raw payload hash after existing atomic write/barriers and memory adoption. Missing/stale startup disk, byte identity, partial/file failure and cold desired distinctness; real managed service/core NOT RUN."
+    },
+    "private_journal_completion": {
+      "builder_source": "ea9421b4fcf806b25367a3e1fa205862629965c7",
+      "source_ack": 888,
+      "process_shape_ack": 912,
+      "status": "PASS_CHANGED_PORTABLE_SCOPE_NATIVE_NOT_RUN",
+      "portable_pass": 58,
+      "fail": 0,
+      "skip": 0,
+      "ordinary_script": "PASS",
+      "native_not_run": [
+        {
+          "test": "tests.unit.test_prepared_completion.PreparedCompletionNativeOwner.test_native_existing_fd9_is_held_until_caller_closes_it",
+          "reason": "native Linux root node lock required"
+        },
+        {
+          "test": "tests.unit.test_prepared_completion.PreparedCompletionNativeOwner.test_native_foreign_inode_and_weak_lock_are_refused",
+          "reason": "native Linux root node lock required"
+        },
+        {
+          "test": "tests.unit.test_prepared_debt.PreparedDebt.test_dangling_pending_symlink_remains_debt_without_reading_target",
+          "reason": "native Linux symlink required"
+        },
+        {
+          "test": "tests.unit.test_prepared_debt.PreparedDebt.test_new_directory_entries_and_atomic_record_are_synced_before_return",
+          "reason": "native Linux directory fsync required"
+        },
+        {
+          "test": "tests.unit.test_prepared_debt.PreparedDebt.test_new_transaction_directory_sync_failure_prevents_record_or_dispatch",
+          "reason": "native Linux directory fsync required"
+        },
+        {
+          "test": "tests.unit.test_prepared_debt.PreparedDebt.test_pending_directory_sync_failure_stops_before_dispatch_and_keeps_debt",
+          "reason": "native Linux directory fsync required"
+        }
+      ],
+      "summary": {
+        "file": ".tools\\pr4-process-postimage-20261117\\frozen-portable-summary.json",
+        "sha256": "86ceb85c07d8e8d5e7f32e6b80c80e263baeae72f0fd336f1cd365d2f0374429"
+      },
+      "results": {
+        "file": ".tools\\pr4-process-postimage-20261117\\frozen-portable-results.json",
+        "sha256": "54c8dfebf27f14fb54fd1b6dc1c5233ff4f60b9cdb34e1ec3ab9c206ce6a1126"
+      },
+      "scope": "Real owned temporary files/SQLite; positive owner/collector mocked. Strict trusted result+raw process postimage, before/candidate guards, Root field preservation, no pre-sample relabel, retained origin/metadata-only recovery. No installed transport/caller or capability.",
+      "native_later_accepted": {
+        "builder_head": "e1e5a700d1ac10ed1c7ff466ea280c740a3df4f6",
+        "root_ack": 942,
+        "proof": "PR4-PRIVATE-COMPLETION-NATIVE19-PASS.json",
+        "sha256": "09a137a60bfb7096613cee72a4585ea2d0c41528fbc12a253669b1140a91e09f",
+        "scope": "Historical exact e1 Linux15completion+4debt+Bash, owner/collector mocked; not new caller native proof"
+      }
+    },
+    "owner_adapter943": {
+      "source_head": "8923d82aa33dda5cfe982846c806260f95b6a1f9",
+      "source_ack": 943,
+      "go_focused_pass": 24,
+      "go_skip": 0,
+      "go_summary_sha256": "84f31c4e7e32a33731f5e5ee29ab4cee50ec89e2169df84fa916df993596b338",
+      "python_previous_reader_client8_and_affected_completion2_pass": 10,
+      "python_current_reader_client_integration_pass": 8,
+      "python_skip": 0,
+      "current_python_log_sha256": "288435c0a3ee43b24d966d15cedb73697dc664298f51e672acac1bec77f234f5",
+      "root_orphan_patch_sha256": "703ea0f78ed3ff7c34e9c21b9cff103bbd63d83aee7c47b324d667ddbfb168d7",
+      "root_orphan_native2_pass": "PR4-ORPHAN-READER-DELTA-PASS.json",
+      "root_orphan_native2_sha256": "311170a5595551c1af3610df37234d2037a1533601dfb4d75d5f0ea902efd0fb",
+      "native_current_api": "NOT_RUN",
+      "activation": "private caller source only; auto.sh and installation unwired",
+      "scope": "Windows CGO HTTP recorder/auth and mocked native RPC; real synthetic loopback client/files/SQLite. Not actual managed service/core or physical traffic.",
+      "unaccepted_invariants958": {
+        "historical_findings": [
+          "canceled snapshot owner waiter before identity inspection",
+          "TCP endpoint authentication before bearer"
+        ],
+        "implemented_in_source": true,
+        "review_and_native_gate": "PENDING"
+      }
+    },
+    "loopback_custody948": {
+      "source_head": "233edc08baebf66512642d1e213162de6c319825",
+      "source_ack": 948,
+      "immediate_base": "8923d82aa33dda5cfe982846c806260f95b6a1f9",
+      "actual_builder_fixture_sha256": "cd624c5e760fbfbfc3396773acdece1dab7534d99c74828251f4b6b220205213",
+      "actual_complete_getconfig_sha256": "5e5ab769b2a548afb8f210951f1734b1e39c3436ee2926b80fcf75e68bb05f00",
+      "red": "actual2cases refused before validator change",
+      "focused_pass": 6,
+      "skip": 0,
+      "summary_sha256": "a8e6abc32e00a1cea74448b8b38df45431e6959362e27c967b46b9fa5017c3b5",
+      "builder_rerender_pass": 1,
+      "scope": "WindowsCGO actual synthetic GetXrayConfig + validator, not Linux sealed qualification or public TLS"
+    },
+    "peer_and_snapshot958": {
+      "producer_source": "fb44cd238cc086f8e706184b1745990ea700cfa6",
+      "source_review_request": 958,
+      "fresh_source_resume_ack": 971,
+      "go_snapshot_context_pass": 9,
+      "go_skip": 0,
+      "go_summary_sha256": "be554f1e2986a88dfe479cd41d63f8c064455c6124871dc6b457580e8a8e8fe3",
+      "portable_protocol_and_retained_collector_pass": 15,
+      "portable_log_sha256": "bd70b2febb5ce8f5a2eb6aa78baa36f66aae049200849ba33192ff8e66d91362",
+      "portable_scope": "Windows real synthetic HTTP/files/SQLite, explicitly mocked native peer/collector. Crypto evidence lifetime and no-send failure paths tested. Source stayed unchanged through saved run; no new before/after manifest was captured then.",
+      "native_peer_cases": 4,
+      "native_peer_status": "NOT_RUN",
+      "native_fixture_sha256": "6199500d7db53eae4538cc63ef982ea7f9dc8d4a445f4afee729310834914023",
+      "native_scope": "Actual Linux accepted FD/tuple/root SO_PEERCRED/start/executable/namespace primitive with synthetic Python peer; not approved full Producer/sealed core/API/client composition.",
+      "current_full_main": "NOT_RUN",
+      "auto_activation": "UNWIRED",
+      "accept_wait_review_request": 976,
+      "accept_wait_portable_delta_pass": 2,
+      "accept_wait_delta_log_sha256": "808b7767ea6c4baf5b98b7845986128c7f9ee6b2b9f57a4c608778baa8f47a6f",
+      "shared_accept_budget_seconds": 3,
+      "same_socket_metadata_only": true
+    }
+  },
+  "remaining_gates": [
+    "ROOT958 final source review + actual Linux connected-peer native2; then fresh grouped current Linux Go/full main and separately named managed core/API/client composition",
+    "Installed transaction/caller integration under approved full producer release, not the synthetic ELF",
+    "Reviewed installed full-producer release/manifest and target-node compatibility; the private Linux build is separately proven",
+    "Real stock template compatibility and collector consuming the fresh private snapshot",
+    "Builder owner-CAS/settlement/persistence and watchdog integration",
+    "Actual IPv4/IPv6/DNS/all-down/stale/existing-flow closure and management-loss continuation",
+    "PR2-owned current Agent/SaaS integration and hosted/service/Node/fleet acceptance"
+  ],
+  "positive_capability": false,
+  "physical_flow_acceptance": false,
+  "full_producer_acceptance": false,
+  "publication": false,
+  "live_changes": false,
+  "private_consumer_source_sha256": {
+    "scripts/lib/prepared_execution.py": "b651a41970b30034b5bc8631a06bb53a2a662e1ccf3d6eb470c8083561fce31f",
+    "tests/unit/test_prepared_execution.py": "d96b6cb2765640d18944f234949c0c9b2cd1363a7062f995c94a309eec216802",
+    "tests/fixtures/prepared-execution-go-json-vectors.json": "de1a7bdb8b57af0d0ceeffc24969a36136fe10e1aeca2ed99cea4b5944f98d3b"
+  },
+  "private_journal_reader_source_sha256": {
+    "scripts/lib/prepared_journal.py": "14b8d9956f0a034d7ef7f4ed65b00fcf536ae497cf877134dfa67d6565488166",
+    "scripts/lib/transaction_state.py": "f0a2b781af9dca4eb16aa6ac0338d23560e85646347a4bc2b61553b8968f3e05",
+    "scripts/lib/transaction.sh": "16749b772e946250562cd33bac3477b453a539b178c03bf9752772c3f28870a9",
+    "scripts/lib/prepared_completion.py": "73092c095b41f1047b424418f95943534816dfa52657fcc7632771b3d1a4e005",
+    "tests/unit/test_prepared_journal.py": "45dce3bd8d04b0d60263572d99757e0ff48d443662b05512fb88c5435e7d2e66",
+    "tests/unit/test_prepared_completion.py": "c964a56d1ae31515688cfa7daac3a6772f5027f8d64ac3567b4ad57599bac4bb",
+    "scripts/lib/prepared_owner.py": "b188d370bda3b0d86f1faa193ca52fecfbafd2a6b14da977e83f21da27dfbc36",
+    "tests/unit/test_prepared_owner.py": "d26f4c557b7e3c647b14fde644b51adbe2b450c374ba45bc5da32d9426668967",
+    "tests/unit/test_prepared_panel_peer_native.py": "6199500d7db53eae4538cc63ef982ea7f9dc8d4a445f4afee729310834914023"
+  }
+}
