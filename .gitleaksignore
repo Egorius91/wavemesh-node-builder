@@ -10,9 +10,6 @@
 5897ff95bc04d5f579d3d9e222e75125a0f45665:tests/unit/test_placement_quiescence.py:generic-api-key:54
 c0de11e5362121d3d4972f083204faaeb5ce9b75:tests/unit/test_placement_legacy_binary.py:generic-api-key:36
 0a8d0e78e4d3bb9628fc4a672234417342853e71:tests/native/test_stock_quota_runtime.py:jfrog-identity-token:31
-
-# Historical producer source SHA256 digests, not credentials. These exact
-# commit/path/rule/line fingerprints leave all future manifest changes scanned.
 a80d4e4defc87713b3be24df7304ef2e2e964721:integrations/3xui-prepared-execution/source-manifest.json:jfrog-identity-token:25
 a80d4e4defc87713b3be24df7304ef2e2e964721:integrations/3xui-prepared-execution/source-manifest.json:jfrog-identity-token:26
 b058b05b294dc65e7472b9d4598ab186f0fd9c66:integrations/3xui-prepared-execution/source-manifest.json:jfrog-identity-token:29
