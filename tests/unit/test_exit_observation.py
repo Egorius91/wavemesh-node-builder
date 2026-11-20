@@ -203,7 +203,10 @@ wm_exit_diagnostics_json
 
     def test_entry_dispatch_is_unchanged(self):
         instance = agent.NodeAgent.__new__(agent.NodeAgent)
-        instance.config = mock.Mock(node_id="node-12345678", observed_version=0)
+        instance.config = mock.Mock(
+            node_id="node-12345678", tenant_id="tenant-12345678",
+            auth_mode="bearer", observed_version=0,
+        )
         instance.runtime = {}
         instance.api_json = mock.Mock()
         with mock.patch.object(agent, "read_json_file", return_value={"node": {"role": "entry"}}), mock.patch.object(agent, "run_json_command", side_effect=[{"node_status": "healthy", "routes": []}, {"auto_routes": []}]) as run, mock.patch.object(agent, "write_json_file"):
