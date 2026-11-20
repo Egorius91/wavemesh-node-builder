@@ -74,7 +74,7 @@ def assert_no_pending_node_transaction(root: Path) -> list[Path]:
         return []
     if not root.is_dir():
         raise ProvisionError("Node transaction state is unsafe")
-    committed = []
+    terminal_history = []
     for directory in root.iterdir():
         if directory.is_symlink() or not directory.is_dir():
             raise ProvisionError("Node transaction state is unsafe")
@@ -92,11 +92,11 @@ def assert_no_pending_node_transaction(root: Path) -> list[Path]:
                 or plan["schema_version"] != 1 or not result
                 or result.get("status") not in {"committed", "rolled_back"}):
             raise ProvisionError("Node transaction reconciliation required")
-        if prepared == "committed":
-            committed.append(directory)
+        if prepared in {"committed", "rolled_back"}:
+            terminal_history.append(directory)
     # Read-only collectors ignore this list. Only a subsequent writer repeats
     # the directory barrier, under the node flock, before changing any state.
-    return committed
+    return terminal_history
 
 
 @contextmanager

@@ -78,7 +78,18 @@ def _hash(value):
 
 
 def validate_intent(intent, transaction_id):
-    _shape(intent, ("schema_version", "transaction_id", "route_id", "binding", "expected", "files", "before", "candidate"))
+    return _validate_intent(intent, transaction_id, health=False)
+
+
+def validate_health_intent(intent, transaction_id):
+    return _validate_intent(intent, transaction_id, health=True)
+
+
+def _validate_intent(intent, transaction_id, *, health):
+    keys = ("schema_version", "transaction_id", "route_id", "binding", "expected", "files", "before", "candidate")
+    _shape(intent, keys + (("kind",) if health else ()))
+    if health and intent["kind"] != "health-only":
+        raise ValueError("health-only intent required")
     if type(intent["schema_version"]) is not int or intent["schema_version"] != 1 or intent["transaction_id"] != transaction_id:
         raise ValueError("foreign journal intent")
     if not isinstance(intent["route_id"], str) or not intent["route_id"].startswith("route-"):
@@ -99,7 +110,7 @@ def validate_intent(intent, transaction_id):
         raise ValueError("process start required")
     for key in ("before_sha256", "after_sha256", "normalized_sha256"):
         _hash(expected[key])
-    if expected["before_sha256"] == expected["after_sha256"]:
+    if (expected["before_sha256"] == expected["after_sha256"]) != health:
         raise ValueError("native no-op is not a prepared commit")
     for key, prefix in (("rule_tag", "wm-rule-"), ("inbound_tag", "wm-route-")):
         if not isinstance(expected[key], str) or not expected[key].startswith(prefix):
@@ -156,7 +167,169 @@ def selector_matches(document, expected):
                         "inboundTag": [expected["inbound_tag"]], "outboundTag": expected["target"]}]
 
 
+PREPARED_SUFFIX = "-prepared-v1"
+PROTOCOL = "prepared-reconcile-v1"
+ORIGIN = "prepared.no-effect.json"
+
+
+def prepared_protocol(directory):
+    """Recognize the reserved namespace even before the first file exists.
+
+    Recognition is only a recovery fence, never authority to dispatch/commit.
+    Ordinary names and old no-effect markers retain their previous semantics.
+    """
+    directory = Path(directory)
+    if directory.name.endswith(PREPARED_SUFFIX):
+        return True
+    for name, key in (("plan.json", "prepared_protocol"), (ORIGIN, "protocol")):
+        try:
+            if key in decode(read_private(directory / name)):
+                return True
+        except (OSError, ValueError, TypeError, RecursionError):
+            pass
+    return False
+
+
+def prepared_origin(directory):
+    """Validate the immutable bootstrap; absence/corruption never means no effect."""
+    directory = Path(directory)
+    if directory.is_symlink() or not re.fullmatch(r"[0-9]{8}T[0-9]{6}Z-[0-9a-f]{6}" + PREPARED_SUFFIX, directory.name):
+        raise ValueError("reserved prepared transaction required")
+    plan = decode(read_private(directory / "plan.json"))
+    if (type(plan.get("schema_version")) is not int or plan["schema_version"] != 1
+            or plan.get("operation") != "auto-prepared-reconcile" or plan.get("prepared_protocol") != PROTOCOL
+            or plan.get("prepared_phase") not in ("bootstrap", "pre-effect", "effect-possible")):
+        raise ValueError("prepared bootstrap plan required")
+    raw = read_private(directory / ORIGIN)
+    origin = decode(raw)
+    _shape(origin, ("protocol", "transaction_id", "status"))
+    if origin != {"protocol": PROTOCOL, "transaction_id": directory.name, "status": "NO_CONFIG_MUTATION_DISPATCHED"}:
+        raise ValueError("prepared bootstrap origin required")
+    return sha(raw)
+
+
+def no_dispatch_facts(directory):
+    return not any(os.path.lexists(Path(directory) / name) for name in
+                   ("prepared.apply.pending.json", "prepared.apply.completed.json",
+                    "prepared.owner-request.json", "prepared.owner-result.json"))
+
+
+def frozen_pre_effect(directory):
+    """Validate the existing plan's frozen phase proof, never infer from absence."""
+    directory = Path(directory)
+    plan = decode(read_private(directory / "plan.json"))
+    intent = plan["prepared_pre_effect"]
+    validate = validate_health_intent if intent.get("kind") == "health-only" else validate_intent
+    validate(intent, directory.name)
+    for key, filename in ARTIFACTS.items():
+        if sha(read_private(directory / filename)) != intent["candidate"][key]:
+            raise ValueError("frozen candidate changed")
+    for key, filename in (("config", "config.before.json"), ("runtime", "runtime.before.json"),
+                          ("process", "process.before.json"), ("template", "prepared.template.before.json")):
+        if intent["before"][key] is None:
+            if os.path.lexists(directory / filename):
+                raise ValueError("ambiguous absent preimage")
+        elif sha(read_private(directory / filename)) != intent["before"][key]:
+            raise ValueError("frozen preimage changed")
+    return intent
+
+
+def _health_committed(directory, result, origin):
+    """Historical health-only proof. Never reads the mutable live runtime."""
+    if (os.path.lexists(directory / "prepared.apply.pending.json")
+            or any(os.path.lexists(directory / name) for name in
+                   ("prepared.owner-request.json", "prepared.owner-result.json"))):
+        return False
+    _shape(result, ("status", "finished_at", "prepared_health_commit"))
+    proof = result["prepared_health_commit"]
+    _shape(proof, ("origin_sha256", "intent_sha256", "runtime_sha256"))
+    if result["status"] != "committed" or not isinstance(result["finished_at"], str) or proof["origin_sha256"] != origin:
+        return False
+    raw = read_private(directory / "prepared.apply.completed.json")
+    intent = validate_health_intent(decode(raw), directory.name)
+    if proof["intent_sha256"] != sha(raw) or frozen_pre_effect(directory) != intent:
+        return False
+    candidates = {}
+    for kind, filename in ARTIFACTS.items():
+        raw = read_private(directory / filename)
+        if sha(raw) != intent["candidate"][kind]:
+            return False
+        candidates[kind] = decode(raw)
+    before = {}
+    for key, name in (("config", "config.before.json"), ("runtime", "runtime.before.json"),
+                      ("template", "prepared.template.before.json"), ("process", "process.before.json")):
+        if intent["before"][key] is None:
+            if os.path.lexists(directory / name):
+                return False
+            before[key] = {}
+        else:
+            raw = read_private(directory / name)
+            if sha(raw) != intent["before"][key]:
+                return False
+            before[key] = decode(raw)
+    route = intent["route_id"]
+    state = candidates["runtime"].get("prepared_routes", {}).get(route)
+    if (not isinstance(state, dict) or state.get("binding") != intent["binding"]
+            or state.get("native_generation") != intent["expected"]["generation"]
+            or state.get("mutation_epoch") != intent["expected"]["epoch"]
+            or state.get("engine_instance") != intent["expected"]["engine_instance"]
+            or state.get("effective_config_sha256") != intent["expected"]["before_sha256"]
+            or (None if route not in before["runtime"].get("prepared_routes", {})
+                else digest(before["runtime"]["prepared_routes"][route])) != intent["before"]["owned"]
+            or digest(before["config"]) != digest(candidates["config"])
+            or digest(before["template"]) != digest(candidates["template"])
+            or not selector_matches(candidates["template"], intent["expected"])):
+        return False
+    # The only change is this route's health namespace; preserve unrelated debt.
+    def unowned(runtime):
+        runtime = decode(json.dumps(runtime))
+        routes = runtime.get("prepared_routes", {})
+        routes.pop(route, None)
+        if not routes:
+            runtime.pop("prepared_routes", None)
+        return runtime
+    post = read_private(directory / "prepared.runtime.post.json")
+    return (digest(unowned(before["runtime"])) == digest(unowned(candidates["runtime"]))
+            and sha(post) == proof["runtime_sha256"] == intent["candidate"]["runtime"])
+
+
 def prepared_status(directory):
+    """Pure reader: new protocol is fail-closed; old journal rules stay intact."""
+    directory = Path(directory)
+    # Metadata-only dominance is part of the existing reader contract. These
+    # fences must not read any plan, origin or private dispatch payload, even
+    # when the directory name also reserves the new protocol.
+    if directory.is_symlink() or os.path.lexists(directory / "prepared.apply.pending.json"):
+        return "active"
+    if (not os.path.lexists(directory / "prepared.apply.completed.json")
+            and any(os.path.lexists(directory / name) for name in
+                    ("prepared.owner-request.json", "prepared.owner-result.json"))):
+        return "active"
+    legacy = _legacy_prepared_status(directory)
+    if not prepared_protocol(directory):
+        return legacy
+    try:
+        origin = prepared_origin(directory)
+        plan = decode(read_private(directory / "plan.json"))
+        if (legacy == "committed" and plan["prepared_phase"] == "effect-possible"
+                and frozen_pre_effect(directory) == decode(read_private(directory / "prepared.apply.completed.json"))):
+            return legacy
+        result = decode(read_private(directory / "result.json"))
+        if no_dispatch_facts(directory):
+            _shape(result, ("status", "finished_at", "prepared_no_effect"))
+            if (result["status"] == "rolled_back" and isinstance(result["finished_at"], str)
+                    and plan["prepared_phase"] == "pre-effect"
+                    and result["prepared_no_effect"] == {"origin_sha256": origin,
+                        "intent_sha256": digest(frozen_pre_effect(directory))}):
+                return "rolled_back"
+        if plan["prepared_phase"] == "effect-possible" and _health_committed(directory, result, origin):
+            return "committed"
+    except (OSError, ValueError, TypeError, KeyError, AttributeError, OverflowError, RecursionError):
+        pass
+    return "active"
+
+
+def _legacy_prepared_status(directory):
     """None: ordinary journal; active: retain; committed: verified history only."""
     directory = Path(directory)
     if directory.is_symlink():
