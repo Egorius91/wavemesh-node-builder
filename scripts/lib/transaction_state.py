@@ -10,6 +10,7 @@ import tempfile
 from datetime import datetime, timezone
 from pathlib import Path
 
+import prepared_journal as prepared_reader
 from prepared_journal import prepared_status
 
 ACTIVE = {"in_progress", "recovering", "rollback_failed"}
@@ -110,6 +111,8 @@ def records(root):
             outcome = {"status": "rollback_failed", "message": "Prepared update outcome UNKNOWN; retain dispatch evidence"}
         elif prepared == "committed":
             outcome = {"status": "committed", "finished_at": outcome.get("finished_at")}
+        elif prepared == "rolled_back":
+            outcome = {"status": "rolled_back", "finished_at": outcome.get("finished_at")}
         result.append({
             "id": directory.name,
             "operation": str(plan.get("operation") or "unknown")[:80],
@@ -152,22 +155,76 @@ def admit(root):
     # pure reader never repairs it; mutation admission repeats that barrier.
     if root.exists():
         for directory in root.iterdir():
-            if directory.is_dir() and prepared_status(directory) == "committed":
+            if directory.is_dir() and prepared_status(directory) in ("committed", "rolled_back"):
                 _sync_directory(directory)
 
 
-def begin(root, operation, pid):
+def begin(root, operation, pid, *, prepared=False):
+    if prepared:
+        from prepared_completion import _require_node_owner
+        _require_node_owner()
+        if operation != "auto-prepared-reconcile":
+            raise ValueError("prepared reconcile operation required")
     admit(root)
     root = Path(root)
     _mkdirs(root)
     os.chmod(root, 0o700)
     transaction_id = f"{datetime.now(timezone.utc).strftime('%Y%m%dT%H%M%SZ')}-{secrets.token_hex(3)}"
+    if prepared:
+        transaction_id += prepared_reader.PREPARED_SUFFIX
     path = root / transaction_id
     path.mkdir(mode=0o700)
     _sync_directory(root)
-    atomic_json(path / "plan.json", {"schema_version": 1, "operation": operation[:80], "pid": int(pid), "started_at": utc_now()})
+    plan = {"schema_version": 1, "operation": operation[:80], "pid": int(pid), "started_at": utc_now()}
+    if prepared:
+        plan["prepared_protocol"] = prepared_reader.PROTOCOL
+        plan["prepared_phase"] = "bootstrap"
+    atomic_json(path / "plan.json", plan)
     atomic_json(path / "result.json", {"status": "in_progress"})
+    if prepared:
+        atomic_json(path / prepared_reader.ORIGIN, {"protocol": prepared_reader.PROTOCOL,
+                    "transaction_id": path.name, "status": "NO_CONFIG_MUTATION_DISPATCHED"})
+        prepared_reader.prepared_origin(path)
     return path
+
+
+def abort_prepared(path):
+    """Close verified pre-effect validation only. Never restore or erase facts."""
+    import prepared_completion as completion
+    import prepared_execution as execution
+    import prepared_channels as channels
+    completion._require_node_owner()
+    path = Path(path)
+    origin = prepared_reader.prepared_origin(path)
+    if prepared_status(path) == "rolled_back":
+        _sync_directory(path)
+        return
+    result = prepared_reader.decode(prepared_reader.read_private(path / "result.json"))
+    plan = prepared_reader.decode(prepared_reader.read_private(path / "plan.json"))
+    if (result != {"status": "in_progress"} or plan["prepared_phase"] != "pre-effect"
+            or not prepared_reader.no_dispatch_facts(path)):
+        raise RuntimeError("Prepared outcome retained; no-effect disposition is forbidden")
+    intent = prepared_reader.frozen_pre_effect(path)
+    files, expected = intent["files"], intent["expected"]
+    config = prepared_reader.decode(prepared_reader.read_private(path / "config.before.json"))
+    approved = completion._approved_plan(intent, config)
+    with execution._collected_evidence(stable=True) as ((view, effective), _, recheck):
+        if (view["engine_instance"] != expected["engine_instance"] or view["native_generation"] != expected["generation"]
+                or view["mutation_epoch"] != expected["epoch"] or view["effective_config_sha256"] != expected["before_sha256"]
+                or channels.health_config_fingerprint(config, intent["route_id"], approved, effective, view) != expected["normalized_sha256"]):
+            raise RuntimeError("Prepared pre-effect execution changed; retain origin")
+        recheck()
+        for key in ("config", "runtime", "process"):
+            raw = completion._optional(files[key])[0]
+            if (None if raw is None else prepared_reader.sha(raw)) != intent["before"][key]:
+                raise RuntimeError("Prepared live preimage changed; retain origin")
+        if prepared_reader.sha(completion._stored_template_raw(files["database"]).encode()) != intent["before"]["template"]:
+            raise RuntimeError("Prepared template preimage changed; retain origin")
+        recheck()
+        atomic_json(path / "result.json", {"status": "rolled_back", "finished_at": utc_now(),
+            "prepared_no_effect": {"origin_sha256": origin, "intent_sha256": prepared_reader.digest(intent)}})
+    if prepared_status(path) != "rolled_back":
+        raise RuntimeError("Prepared no-effect disposition is not verified")
 
 
 def mark(path, status, message=""):
@@ -178,6 +235,11 @@ def mark(path, status, message=""):
     if status == "committed" and prepared_status(path) == "committed":
         _sync_directory(path)
         return
+    if prepared_reader.prepared_protocol(path):
+        if status == "rolled_back" and prepared_status(path) == "rolled_back":
+            _sync_directory(path)
+            return
+        raise RuntimeError("Prepared protocol requires verified disposition; generic mark is forbidden")
     if _prepared_completed(path):
         raise RuntimeError("Prepared completion requires verified metadata; retain origin and result")
     try:
@@ -203,7 +265,7 @@ def prune(root, keep):
     for item in terminal[max(0, keep):]:
         path = resolve(root, item["id"])
         prepared = prepared_status(path)
-        if prepared == "committed":
+        if prepared in ("committed", "rolled_back"):
             _sync_directory(path)
         if not _prepared_pending(path) and prepared != "active":
             shutil.rmtree(path)
@@ -233,6 +295,9 @@ def main():
         if name in ("prune", "prune-backups"): child.add_argument("--keep", type=int, default=20)
     begin_parser = sub.add_parser("begin")
     begin_parser.add_argument("--root", required=True); begin_parser.add_argument("--operation", required=True); begin_parser.add_argument("--pid", required=True, type=int)
+    begin_parser.add_argument("--prepared", action="store_true")
+    abort_parser = sub.add_parser("prepared-abort")
+    abort_parser.add_argument("--transaction", required=True)
     mark_parser = sub.add_parser("mark")
     mark_parser.add_argument("--transaction", required=True); mark_parser.add_argument("--status", required=True); mark_parser.add_argument("--message", default="")
     resolve_parser = sub.add_parser("resolve")
@@ -265,9 +330,13 @@ def main():
         if not pending: raise SystemExit("no incomplete transaction")
         print(pending[0]["id"])
     elif args.command == "begin":
-        try: print(begin(args.root, args.operation, args.pid))
+        try: print(begin(args.root, args.operation, args.pid, prepared=args.prepared))
         except RuntimeError as error: raise SystemExit(str(error)) from error
     elif args.command == "mark": mark(args.transaction, args.status, args.message)
+    elif args.command == "prepared-abort":
+        try: abort_prepared(args.transaction)
+        except (OSError, ValueError, TypeError, KeyError, AttributeError, RuntimeError):
+            raise SystemExit("Prepared no-effect disposition is not verified; retain origin") from None
     elif args.command == "prepared-guard":
         if prepared_status(args.transaction) is not None:
             raise SystemExit("Prepared origin retained; snapshot restore forbidden")

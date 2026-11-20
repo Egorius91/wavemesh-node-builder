@@ -9,6 +9,7 @@ WM_PREPARED_TOOL="$WM_LIB_DIR/lib/prepared_channels.py"
 # integration; this command never starts a provider operation or edits rights.
 wm_auto_prepared() {
   local action="${1:-}" auto_id="auto-europe" plan="" runtime_view="" effective_config="" observations="" engine="/usr/local/x-ui/bin/xray-linux-amd64"
+  local database="" process="" credential_file=""
   [[ "$action" == install || "$action" == reconcile ]] || wm_fail "Usage: wavemesh cascade auto prepared install --plan FILE | reconcile [--id ID]"
   shift
   while [[ $# -gt 0 ]]; do
@@ -18,14 +19,32 @@ wm_auto_prepared() {
       --runtime-view) runtime_view="${2:-}"; shift 2 ;;
       --effective-config) effective_config="${2:-}"; shift 2 ;;
       --observations) observations="${2:-}"; shift 2 ;;
+      --database) database="${2:-}"; shift 2 ;;
+      --process-config) process="${2:-}"; shift 2 ;;
+      --credential-file) credential_file="${2:-}"; shift 2 ;;
       *) wm_fail "Unknown prepared route option" ;;
     esac
   done
   [[ "$action" != install || -n "$plan" ]] || wm_fail "Prepared route install requires a private plan"
-  [[ -n "$runtime_view" ]] || wm_fail "Prepared routes require an independent settled process/effective-config collector view"
-  [[ -n "$effective_config" ]] || wm_fail "Prepared routes require full qualified executing config separately from the stored panel template"
-  [[ "$action" != reconcile || -n "$observations" ]] || wm_fail "Prepared reconcile requires collector-qualified observationv2"
+  if [[ "$action" == install ]]; then
+    [[ -n "$runtime_view" ]] || wm_fail "Prepared routes require an independent settled process/effective-config collector view"
+    [[ -n "$effective_config" ]] || wm_fail "Prepared routes require full qualified executing config separately from the stored panel template"
+  else
+    [[ -z "$runtime_view" && -z "$effective_config" ]] || wm_fail "Prepared reconcile collects executing evidence internally"
+    [[ -n "$database" && -n "$process" && -n "$credential_file" ]] || wm_fail "Prepared reconcile requires admitted database/process paths and an existing private bearer file"
+  fi
+  [[ "$action" != reconcile || -n "$observations" ]] || wm_fail "Prepared reconcile requires collector-qualified observationv3"
   wm_lock_mutation "auto-prepared-$action"; wm_load_config; wm_require_entry_role
+  if [[ "$action" == reconcile ]]; then
+    wm_transaction_begin "auto-prepared-reconcile" prepared-v1
+    local owning_transaction="$WM_ACTIVE_TRANSACTION"
+    python3 "$WM_LIB_DIR/lib/prepared_reconcile.py" --transaction "$owning_transaction" --route-id "route-auto-${auto_id}" \
+      --config "$WM_CONFIG_JSON" --runtime "$WM_RUNTIME_JSON" --database "$database" --process "$process" \
+      --observations "$observations" --credential-file "$credential_file" || wm_fail "Prepared reconcile is not verified; retain journal"
+    wm_transaction_commit "$owning_transaction"
+    wm_success "Prepared reconcile committed; current path readiness remains independently qualified"
+    return 0
+  fi
   wm_transaction_begin "auto-prepared-$action"
   local transaction="$WM_ACTIVE_TRANSACTION" route_id="route-auto-${auto_id}"
   python3 - "$transaction" "$WM_LIB_DIR/lib" <<'PY' || wm_fail "Could not retain prepared no-effect guard"

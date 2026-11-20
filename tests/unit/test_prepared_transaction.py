@@ -1,4 +1,4 @@
-"""Native Bash transaction orchestration with a synthetic compiler/panel.
+"""Legacy install Bash orchestration with a synthetic compiler/panel.
 
 This is not an engine/collector/service proof. The actual compiler is tested
 separately; here a successful mutable panel response must not clear transition
@@ -20,7 +20,7 @@ sys.path.insert(0, str(ROOT/"scripts/lib"))
 import prepared_channels
 
 
-class PreparedTransaction(unittest.TestCase):
+class PreparedLegacyInstallTransaction(unittest.TestCase):
     def run_case(self, case, include_view=True, include_effective=True):
         if sys.platform != "linux" or not shutil.which("bash"):
             raise RuntimeError("native Linux Bash required; run in isolated VM")
@@ -68,7 +68,7 @@ wm_require_entry_role(){ [[ "$NODE_ROLE" == entry ]]; }
 wm_xray_get_template(){ cp "$CASE_ROOT/template.json" "$1"; }
 wm_xray_apply_template(){ printf 'post\n' >> "$CASE_ROOT/post.marker"; }
 wm_export_config_env_from_json(){ printf 'export\n' >> "$CASE_ROOT/export.marker"; }
-wm_auto_prepared reconcile --id europe --observations "$CASE_ROOT/observation.json" VIEW_ARGUMENT EFFECTIVE_ARGUMENT
+wm_auto_prepared install --plan "$CASE_ROOT/plan.json" --id europe --observations "$CASE_ROOT/observation.json" VIEW_ARGUMENT EFFECTIVE_ARGUMENT
 '''.replace("VIEW_ARGUMENT", '--runtime-view "$CASE_ROOT/view.json"' if include_view else "").replace("EFFECTIVE_ARGUMENT", '--effective-config "$CASE_ROOT/template.json"' if include_effective else "")
             result = subprocess.run(["bash", "--noprofile", "--norc", "-c", script], env={**os.environ, "CASE_ROOT": str(directory), "CASE_KIND": case, "SOURCE": str(ROOT)}, capture_output=True, text=True, timeout=60)
             transactions = list((directory/"state/transactions").glob("*")) if (directory/"state/transactions").exists() else []

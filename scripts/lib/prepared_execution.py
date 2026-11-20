@@ -280,7 +280,7 @@ def _snapshot(value, nonce, peer, approval):
 
 
 @contextlib.contextmanager
-def _collected_evidence():
+def _collected_evidence(*, stable=False):
     """Keep existing verified process/executable evidence open for its owner."""
     try:
         if not sys.platform.startswith("linux"):
@@ -302,7 +302,23 @@ def _collected_evidence():
             if nonce == next_nonce or peer != next_peer or {k: v for k, v in first.items() if k != "challenge"} != {k: v for k, v in second.items() if k != "challenge"}:
                 _fail("EXECUTION_CHANGED_DURING_COLLECTION")
             _recheck(observed)
-            yield final, observed
+            if stable:
+                # One owning context, SAME pinned peer/approval/open descriptors.
+                # Identity alone cannot catch an in-process selector epoch change.
+                # Re-observe a fresh challenged frame against the original full
+                # context; never adopt a newer view then validate an older sample.
+                nonces = {nonce, next_nonce}
+                def recheck():
+                    _recheck(observed)
+                    value, challenge, current_peer = _frame(peer)
+                    current = _snapshot(value, challenge, current_peer, approval)
+                    if challenge in nonces or current_peer != peer or current != final:
+                        _fail("EXECUTION_CHANGED_DURING_OWNING_CONTEXT")
+                    nonces.add(challenge)
+                    _recheck(observed)
+                yield final, observed, recheck
+            else:
+                yield final, observed
     except ExecutionUnavailable:
         raise
     except (OSError, ValueError, TypeError, KeyError, OverflowError, RecursionError, AttributeError):

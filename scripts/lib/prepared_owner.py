@@ -1,4 +1,4 @@
-"""Private, unwired one-send owner caller. No CLI, login or generic activation.
+"""Private one-send owner for prepared reconcile. No login/generic activation.
 
 Only the admitted node-lock owner may provide a frozen intent and an existing
 private bearer file. A durable dispatch fact prevents replay after any failure.
@@ -53,7 +53,7 @@ def _admission(path, token):
 def apply_once(transaction, credential_file):
     """Retain one trusted reply then use existing completion; never replay.
 
-    No ordinary command imports this module. A pre-existing dispatch fact is
+    The prepared reconcile adapter is its installed caller. A dispatch fact is
     always a refusal here; known-reply metadata resumption belongs to complete.
     """
     connection = None
@@ -70,6 +70,10 @@ def apply_once(transaction, credential_file):
             raise ValueError("private reconcile owner required")
         intent_raw = reader.read_private(directory / "prepared.apply.pending.json")
         intent = reader.validate_intent(reader.decode(intent_raw), directory.name)
+        if reader.prepared_protocol(directory):
+            reader.prepared_origin(directory)
+            if plan.get("prepared_phase") != "effect-possible" or reader.frozen_pre_effect(directory) != intent:
+                raise ValueError("durable owning effect phase required")
         candidates = {}
         for kind, filename in reader.ARTIFACTS.items():
             raw = reader.read_private(directory / filename)

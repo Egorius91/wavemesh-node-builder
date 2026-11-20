@@ -1,6 +1,6 @@
-"""Private prepared journal completion; no transport/caller is installed.
+"""Private prepared journal completion for the existing owning adapter.
 
-Only the future trusted owning adapter may call record_owner_result, while
+Only the trusted owning adapter may call record_owner_result, while
 holding the existing node mutation lock. Caller-supplied verified/force CLI
 inputs are deliberately absent. Retention never settles the pending operation.
 """
@@ -176,7 +176,7 @@ def record_owner_result(transaction, reply):
 def complete(transaction, owner_result=None):
     """Complete only this known writer's metadata under the existing node lock.
 
-    No caller is wired to this source helper. A future trusted adapter owns the
+    The installed prepared adapter owns the
     frozen intent and reply. This method never dispatches, restores, restarts,
     rewrites the process desired file, or relabels a pre-apply path sample.
     """
@@ -193,6 +193,11 @@ def complete(transaction, owner_result=None):
             return "committed"  # Historical metadata only, never current readiness.
         raw_intent = reader.read_private(pending)
         intent = reader.validate_intent(reader.decode(raw_intent), directory.name)
+        if reader.prepared_protocol(directory):
+            reader.prepared_origin(directory)
+            plan = reader.decode(reader.read_private(directory / "plan.json"))
+            if plan.get("prepared_phase") != "effect-possible" or reader.frozen_pre_effect(directory) != intent:
+                raise ValueError("durable owning effect phase required")
         if owner_result is not None:
             record_owner_result(directory, owner_result)
         reply_raw = reader.read_private(directory / "prepared.owner-result.json")

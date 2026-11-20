@@ -1,5 +1,6 @@
 """Private candidate evaluation; no route application, persistence or settlement."""
 import copy
+from contextlib import contextmanager
 import time
 
 import prepared_channels as channels
@@ -18,6 +19,24 @@ def evaluate(config, runtime, route_id, stored_template, observations):
 
 def _evaluate_collected(config, runtime, route_id, stored_template, observations):
     """Private owning path: retain the SAME collected context, never accept one."""
+    config, runtime, stored_template, observations, route, plan = _inputs(
+        config, runtime, route_id, stored_template, observations)
+    view, effective = execution.collect()
+    return _stage_collected(config, runtime, route_id, stored_template, observations, route, plan, view, effective)
+
+
+@contextmanager
+def _owning_evaluation(config, runtime, route_id, stored_template, observations):
+    """One collector context with its verified descriptors kept open for writes."""
+    config, runtime, stored_template, observations, route, plan = _inputs(
+        config, runtime, route_id, stored_template, observations)
+    with execution._collected_evidence(stable=True) as ((view, effective), _, recheck):
+        result, view, effective = _stage_collected(
+            config, runtime, route_id, stored_template, observations, route, plan, view, effective)
+        yield result, view, effective, recheck
+
+
+def _inputs(config, runtime, route_id, stored_template, observations):
     if any(not isinstance(value, dict) for value in (config, runtime, stored_template, observations)):
         raise ValueError("complete private evaluation inputs are required")
     config, runtime, stored_template, observations = copy.deepcopy(
@@ -33,7 +52,10 @@ def _evaluate_collected(config, runtime, route_id, stored_template, observations
     if plan["channel"]["engine"] != {"name": "xray", "version": "26.10.21", "sha256": execution.CORE}:
         raise ValueError("evaluation requires the pinned stock engine")
 
-    view, effective = execution.collect()
+    return config, runtime, stored_template, observations, route, plan
+
+
+def _stage_collected(config, runtime, route_id, stored_template, observations, route, plan, view, effective):
     view, effective = copy.deepcopy((view, effective))
     now = int(time.time())
     candidate, observed, template, binding = channels.stage(

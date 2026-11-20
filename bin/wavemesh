@@ -57,6 +57,7 @@ Usage:
   wavemesh cascade auto create [--id ID] [--display-name TEXT] [--exit-id ID ...] [--sort-order N] [--dry-run]
   wavemesh cascade auto status [--json]
   wavemesh cascade auto health [--json]
+  wavemesh cascade auto prepared reconcile [--id ID] --observations FILE --database FILE --process-config FILE --credential-file FILE
   wavemesh cascade auto enable [--id ID]
   wavemesh cascade auto disable [--id ID]
   wavemesh cascade auto override [--id ID] --exit-id EXIT_ID

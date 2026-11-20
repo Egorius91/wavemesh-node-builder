@@ -164,6 +164,46 @@ GetConfig/cache is not an authoritative executing-config view. The historical na
 and its schema1 observations do not qualify this new process-bound contract.
 Do not use this working draft as an installed/runtime acceptance release.
 
+## Owning reconcile source contract (not deployed)
+
+The source CLI now connects prepared reconcile to the existing intent, single
+owner send, independent execution collector and completion. It replaces the
+legacy apply branch for reconcile. Supplied `--runtime-view` or
+`--effective-config` is refused on this path; install keeps its separate legacy
+candidate contract. Capability remains closed. No live collector/release is
+installed or admitted by this source change.
+
+The command takes private observationv3 plus explicitly admitted existing
+database/process-config paths and the existing private bearer-file contract
+(`schema_version: 1`, `bearer_token`). It neither creates a token nor copies it
+into the journal. Storage-path binding and runtime admission remain the owner's
+responsibility. Missing FD9, absent/unqualified collector, stale/foreign samples
+or raw preimage drift stop before any configuration or health mutation.
+
+Prepared transactions use the existing journal with a versioned directory
+reservation from mkdir, durable origin before trap exposure, and monotonic plan
+phases `bootstrap -> pre-effect -> effect-possible`. The last phase is durable
+before pending, owner request or health write. A name/origin alone never proves
+no effect. Terminal no-effect requires frozen artifacts, positive pre-effect
+phase, unchanged live preimages and fresh matching execution. Missing/corrupt
+facts, early bootstrap failure without that proof, UNKNOWN or lost reply keep
+active debt and block a new writer; deleting markers is not recovery. Ordinary
+snapshot transactions keep their existing behavior.
+
+Health-only no-op keeps one internally collected context open. Fresh challenged
+frames from the SAME pinned peer/approval/open descriptors must still match its
+original full image, generation and epoch; a newer view never rebinds old health.
+Only the route's health file changes, behind a durable typed pending intent.
+No POST, config rewrite, restart or credential change occurs. Failed writes or
+barriers retain proof/debt. Historical completion is idempotent and never proves
+current readiness. `prepare_once` itself remains strictly update-only.
+
+New portable regressions use synthetic FD9/collector/owner; separate Linux Bash
+tests exercise real FD9/trap/journal with synthetic execution and owner. Those
+labels do not prove real Producer/Core/API composition or physical client flows.
+Fresh native admission, IPv4/IPv6/DNS all-down/no-RU-fallback, rollback/client
+compatibility, Agent/SaaS integration and required PR checks remain open gates.
+
 ## Agent integration: current stock result is unqualified
 
 The existing Agent observation cycle adds `state.prepared_eu_paths` only through

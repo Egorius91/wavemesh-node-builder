@@ -1,7 +1,7 @@
 # Private prepared journal: one historical reader and isolated writer
 
 Authoritative stdlib-only reader: scripts/lib/prepared_journal.py.
-prepared_status(transaction: Path) -> None | "active" | "committed". It performs
+prepared_status(transaction: Path) -> None | "active" | "committed" | "rolled_back". It performs
 bounded private-file reads only: no collect, write, fsync, capability or readiness.
 The Agent installs these same frozen bytes, never another schema implementation.
 
@@ -13,6 +13,29 @@ Mutation-only transaction_state.admit(root), CLI admit --root ROOT, repeats
 verified directory barriers under the caller's existing node flock. begin reuses
 it; read-only check/list remain pure. Agent owns its separate barrier integration.
 
+The new source owning reconcile reserves `-prepared-v1` from mkdir and records
+the explicit protocol in the existing plan/origin before exposing path or trap.
+Reserved name is only a fence. Plan phase is monotonic bootstrap -> pre-effect
+(frozen exact intent/preimages/candidates) -> effect-possible, durable before any
+pending, send or health write. Missing/corrupt phase or lost dispatch markers
+cannot reset it. New writer entry requires fresh bootstrap. Ordinary and old
+prepared journals retain the legacy reader's exact body and behavior.
+
+Only this new protocol may return rolled_back: a typed no-effect terminal proof
+binds origin and frozen intent, after the dedicated disposition verifies positive
+pre-effect phase, unchanged live preimages and matching fresh execution. Origin
+plus absent markers alone never authorizes closure. Unqualified bootstrap and
+UNKNOWN remain active debt. The Agent must install these exact new reader bytes
+and handle the scoped rolled_back status before admitting this protocol; that
+shared integration remains ROOT-owned and is not changed in this Builder diff.
+
+Health-only no-op uses the same pending/completed names with strict `kind:
+health-only`; the update intent parser still rejects it. It writes only runtime,
+retains original context/preimages/candidates and commits typed historical proof.
+No owner request/reply can coexist with valid health completion. Partial health
+write or lost markers after effect-possible remain active. Committed and verified
+no-effect terminal admission repeats directory barriers before another writer.
+
 Private unshipped version1 intent records transaction/route/binding, exact native
 before generation/epoch/instance/hash, expected full post and normalized hash,
 owned rule/inbound/target, admitted storage paths, preimage hashes and THREE
@@ -21,7 +44,7 @@ is nullable, audit-only; managed Start may bypass that file entirely. It is neve
 an assertion about desired process memory. Do not reconstruct desired memory
 from consumed native JSON or an older disk file.
 
-The trusted future owner adapter binds an ordinary private reply to the same
+The trusted owning adapter binds an ordinary private reply to the same
 transaction and raw frozen intent hash. Its outcome contains the six existing
 Go operation flags plus ProcessConfigSHA256. A known result needs all success
 flags, NoOp false and a strict lowercase64-hex process hash. The Go owner returns
@@ -34,9 +57,10 @@ Exact bytes are retained in prepared.process.post.json, never remarshal/copied
 into the template or running process. Three candidates remain frozen; the process
 is a server-owned POSTIMAGE, not a pre-dispatch client candidate. Separate stored
 template readback uses a read-only SQLite connection against the admitted local
-source. Backend/path admission belongs to the trusted future caller.
+source. Backend/path admission belongs to the trusted owning caller.
 
-Private complete(transaction, owner_result=None) is uninstalled source only.
+Private complete(transaction, owner_result=None) is wired by the new source
+adapter; it is not a deployed or native-accepted whole-system release.
 It requires the existing Builder FD9 owner; retains the exact reply before fresh
 collection/local commit; checks actual collector epoch+1/full hashes/receipt and
 approved routing; checks storage independently before/after; writes only local

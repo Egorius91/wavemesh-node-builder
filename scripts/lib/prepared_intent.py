@@ -1,9 +1,10 @@
-"""Private, unwired preparation only. No CLI, owner send or capability change.
+"""Private preparation and health-only reconcile. No owner send/capability change.
 
 Caller already owns FD9 and a newly begun reconcile transaction. Failed writes
-retain their facts; this writer never retries, converts legacy debt or applies.
+retain their facts; this writer never retries, converts legacy debt or dispatches.
 """
 import copy
+from contextlib import ExitStack
 import os
 from pathlib import Path
 import sqlite3
@@ -28,6 +29,20 @@ def prepare_once(transaction, route_id, files, observations):
     files are the owning adapter's admitted storage paths, not runtime evidence.
     The full executing image/identity is collected internally exactly once.
     """
+    return _prepare_once(transaction, route_id, files, observations, owning=False)
+
+
+def prepare_reconcile_once(transaction, route_id, files, observations):
+    """Installed owning path: update intent OR committed health-only no-op.
+
+    One internally collected context stays open through all health persistence.
+    Strict prepare_once remains update-only and cannot acquire this behavior.
+    """
+    return _prepare_once(transaction, route_id, files, observations, owning=True)
+
+
+def _prepare_once(transaction, route_id, files, observations, *, owning):
+    stack = ExitStack()
     try:
         completion._require_node_owner()
         directory = Path(transaction)
@@ -41,6 +56,13 @@ def prepare_once(transaction, route_id, files, observations):
         if (type(plan.get("schema_version")) is not int or plan["schema_version"] != 1
                 or plan.get("operation") != "auto-prepared-reconcile" or result.get("status") != "in_progress"):
             raise ValueError("new reconcile transaction required")
+        if owning:
+            reader.prepared_origin(directory)
+            if (result != {"status": "in_progress"} or plan["prepared_phase"] != "bootstrap"
+                    or "prepared_pre_effect" in plan):
+                raise ValueError("fresh prepared bootstrap required")
+        elif reader.prepared_protocol(directory):
+            raise ValueError("prepared protocol requires its owning adapter")
         if any(item["id"] != directory.name for item in journal.incomplete(directory.parent)):
             raise ValueError("other unresolved transaction")
         # Do not overwrite even a partially prepared attempt or a dangling marker.
@@ -61,9 +83,15 @@ def prepare_once(transaction, route_id, files, observations):
         process_raw, _ = completion._optional(paths["process"])
         template_raw = completion._stored_template_raw(paths["database"])
         template = reader.decode(template_raw)
-        evaluated, view, effective = evaluation._evaluate_collected(config, runtime, route_id, template, observations)
+        recheck = lambda: None
+        if owning:
+            evaluated, view, effective, recheck = stack.enter_context(
+                evaluation._owning_evaluation(config, runtime, route_id, template, observations))
+        else:
+            evaluated, view, effective = evaluation._evaluate_collected(config, runtime, route_id, template, observations)
         candidates = evaluated["candidate"]
-        if (evaluated["update_required"] is not True or reader.digest(config) != reader.digest(candidates["config"])
+        health = owning and evaluated["update_required"] is False
+        if ((evaluated["update_required"] is not True and not health) or reader.digest(config) != reader.digest(candidates["config"])
                 or reader.digest(completion._unowned(runtime, route_id))
                 != reader.digest(completion._unowned(candidates["runtime"], route_id))):
             raise ValueError("one owned selector update required")
@@ -83,18 +111,29 @@ def prepare_once(transaction, route_id, files, observations):
                              "owned": completion._owned(runtime, route_id), "template": reader.sha(template_raw.encode()),
                              "process": None if process_raw is None else reader.sha(process_raw)},
                   "candidate": {key: "0" * 64 for key in reader.ARTIFACTS}}
-        reader.validate_intent(intent, directory.name)
+        validate = reader.validate_intent
+        if health:
+            intent["kind"] = "health-only"
+            validate = reader.validate_health_intent
+            if reader.digest(template) != reader.digest(candidates["template"]):
+                raise ValueError("health-only cannot change the stored template")
+        validate(intent, directory.name)
         completion._approved_plan(intent, candidates["config"])
         if not reader.selector_matches(candidates["template"], expected):
             raise ValueError("candidate selector differs")
 
-        def unchanged():
+        def unchanged(*, health_written=False):
             completion._require_node_owner()
+            recheck()
+            if owning and "prepared_pre_effect" in plan:
+                if (reader.decode(reader.read_private(directory / "plan.json")) != plan
+                        or reader.frozen_pre_effect(directory) != intent):
+                    raise ValueError("frozen phase or preparation changed")
             if not channels.state_is_current(candidates["runtime"]["prepared_routes"][route_id],
                                              intent["binding"], view, int(time.time()), route["prepared_plan"]["health"]["max_age_seconds"]):
                 raise ValueError("path sample expired during preparation")
             if (reader.read_private(paths["config"]) != config_raw
-                    or completion._optional(paths["runtime"])[0] != runtime_raw
+                    or (not health_written and completion._optional(paths["runtime"])[0] != runtime_raw)
                     or completion._optional(paths["process"])[0] != process_raw
                     or completion._stored_template_raw(paths["database"]) != template_raw):
                 raise ValueError("preimage changed during preparation")
@@ -111,12 +150,45 @@ def prepare_once(transaction, route_id, files, observations):
                 raise ValueError("candidate storage differs")
             intent["candidate"][key] = reader.sha(raw)
         unchanged()
-        reader.validate_intent(intent, directory.name)
+        validate(intent, directory.name)
+        if owning:
+            # One existing journal, monotonic phase before any possible effect.
+            # Losing pending/request/reply names cannot recreate pre-effect.
+            plan["prepared_pre_effect"] = copy.deepcopy(intent)
+            plan["prepared_phase"] = "pre-effect"
+            journal.atomic_json(directory / "plan.json", plan)
+            unchanged()
+            plan["prepared_phase"] = "effect-possible"
+            journal.atomic_json(directory / "plan.json", plan)
+            reader.prepared_origin(directory)
+            unchanged()
         journal.atomic_json(directory / "prepared.apply.pending.json", intent)
         if reader.decode(reader.read_private(directory / "prepared.apply.pending.json")) != intent:
             raise ValueError("frozen intent readback differs")
         unchanged()
+        if health:
+            # The existing pending marker is durable BEFORE the only live write.
+            # Any persistence/identity failure leaves debt; there is no retry.
+            candidate_raw = reader.read_private(directory / reader.ARTIFACTS["runtime"])
+            if reader.sha(candidate_raw) != intent["candidate"]["runtime"]:
+                raise ValueError("frozen health candidate changed")
+            journal.atomic_bytes(directory / "prepared.runtime.post.json", candidate_raw)
+            unchanged()
+            journal.atomic_bytes(paths["runtime"], candidate_raw)
+            unchanged(health_written=True)
+            if reader.read_private(paths["runtime"]) != candidate_raw:
+                raise ValueError("health persistence readback differs")
+            intent_raw = reader.read_private(directory / "prepared.apply.pending.json")
+            journal.atomic_json(directory / "result.json", {"status": "committed", "finished_at": journal.utc_now(),
+                "prepared_health_commit": {"origin_sha256": reader.prepared_origin(directory),
+                    "intent_sha256": reader.sha(intent_raw), "runtime_sha256": reader.sha(candidate_raw)}})
+            os.replace(directory / "prepared.apply.pending.json", directory / "prepared.apply.completed.json")
+            journal._sync_directory(directory)
+            if reader.prepared_status(directory) != "committed":
+                raise ValueError("health-only historical proof differs")
         return intent
     except (OSError, ValueError, TypeError, KeyError, AttributeError, OverflowError, RecursionError,
             StopIteration, RuntimeError, sqlite3.Error, execution.ExecutionUnavailable):
         raise IntentUnavailable("PREPARED_INTENT_NOT_FROZEN") from None
+    finally:
+        stack.close()
