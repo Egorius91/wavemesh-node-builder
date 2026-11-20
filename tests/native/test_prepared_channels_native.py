@@ -32,6 +32,12 @@ ENGINE_SHA256 = "a27e3f95ab6ce270956d0cecd32eda4686a811afc71c64a6a734a3dede14883
 PROXY_DIAGNOSTICS = {}
 
 
+def diagnostic_tls_context(cafile):
+    context = ssl.create_default_context(cafile=str(cafile))
+    context.minimum_version = ssl.TLSVersion.TLSv1_2
+    return context
+
+
 def receive(sock, count):
     data = b""
     while len(data) < count:
@@ -203,7 +209,7 @@ def run(binary, diagnose=False):
                     endpoint = next(e for e in config["exits"] if e["id"] == path["exit_id"])["endpoint"]
                     try:
                         with socket.create_connection((path["address"], 443), timeout=2) as raw:
-                            with ssl.create_default_context(cafile=str(cert)).wrap_socket(raw, server_hostname=endpoint["sni"]): pass
+                            with diagnostic_tls_context(cert).wrap_socket(raw, server_hostname=endpoint["sni"]): pass
                         tls[path["id"]] = "PASS"
                     except (OSError, ssl.SSLError) as error:
                         tls[path["id"]] = type(error).__name__
