@@ -146,6 +146,26 @@ class PreparedBootstrap(unittest.TestCase):
             with self.assertRaises(ValueError): self.begin()
         self.assertEqual(list(self.root.iterdir()), [])
 
+    def test_pending_on_valid_new_bootstrap_never_reads_any_private_payload(self):
+        path = self.begin()
+        journal.atomic_bytes(path / "prepared.apply.pending.json", b"PRIVATE_PENDING_DO_NOT_READ")
+        with mock.patch.object(reader, "read_private", side_effect=AssertionError("pending payload read")):
+            self.assertEqual(reader.prepared_status(path), "active")
+
+    def test_redirected_reserved_name_never_reads_plan_or_origin(self):
+        path = self.begin()
+        with mock.patch.object(Path, "is_symlink", return_value=True), \
+                mock.patch.object(reader, "read_private", side_effect=AssertionError("redirected payload read")):
+            self.assertEqual(reader.prepared_status(path), "active")
+
+    def test_orphan_owner_facts_on_reserved_name_dominate_without_payload_reads(self):
+        for marker in ("prepared.owner-request.json", "prepared.owner-result.json"):
+            with self.subTest(marker=marker):
+                path = self.begin(self.root / marker)
+                journal.atomic_bytes(path / marker, b"PRIVATE_OWNER_FACT_DO_NOT_READ")
+                with mock.patch.object(reader, "read_private", side_effect=AssertionError("orphan payload read")):
+                    self.assertEqual(reader.prepared_status(path), "active")
+
 
 class OwningCaller(unittest.TestCase):
     def setUp(self):

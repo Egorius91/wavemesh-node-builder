@@ -296,6 +296,15 @@ def _health_committed(directory, result, origin):
 def prepared_status(directory):
     """Pure reader: new protocol is fail-closed; old journal rules stay intact."""
     directory = Path(directory)
+    # Metadata-only dominance is part of the existing reader contract. These
+    # fences must not read any plan, origin or private dispatch payload, even
+    # when the directory name also reserves the new protocol.
+    if directory.is_symlink() or os.path.lexists(directory / "prepared.apply.pending.json"):
+        return "active"
+    if (not os.path.lexists(directory / "prepared.apply.completed.json")
+            and any(os.path.lexists(directory / name) for name in
+                    ("prepared.owner-request.json", "prepared.owner-result.json"))):
+        return "active"
     legacy = _legacy_prepared_status(directory)
     if not prepared_protocol(directory):
         return legacy
