@@ -1,11 +1,13 @@
 import importlib.util
 import json
 import os
+import sys
 import tempfile
 from pathlib import Path
 
 root = Path(__file__).resolve().parents[2]
 tool = root / "scripts" / "lib" / "transaction_state.py"
+sys.path.insert(0, str(tool.parent))
 spec = importlib.util.spec_from_file_location("transaction_state", tool)
 module = importlib.util.module_from_spec(spec)
 spec.loader.exec_module(module)

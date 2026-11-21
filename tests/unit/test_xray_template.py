@@ -45,7 +45,7 @@ with tempfile.TemporaryDirectory() as name:
     assert [x["tag"] for x in data["outbounds"]].count("wm-exit-de-fra-1") == 1
     assert data["outbounds"][0]["tag"] == "user-proxy"
     tags = [x.get("ruleTag") for x in data["routing"]["rules"]]
-    assert tags == ["wm-api-rule", "user-rule", "wm-rule-de-fra-1", "catch-all"]
+    assert tags == ["wm-rule-de-fra-1", "wm-guard-wm-route-de-fra-1", "wm-api-rule", "user-rule", "catch-all"]
 
     subprocess.run([
         sys.executable, str(tool), "remove",
@@ -57,7 +57,7 @@ with tempfile.TemporaryDirectory() as name:
     ], check=True)
     clean = json.loads(removed.read_text())
     assert all(x.get("tag") != "wm-exit-de-fra-1" for x in clean["outbounds"])
-    assert [x.get("ruleTag") for x in clean["routing"]["rules"]] == ["wm-api-rule", "user-rule", "catch-all"]
+    assert [x.get("ruleTag") for x in clean["routing"]["rules"]] == ["wm-guard-wm-route-de-fra-1", "wm-api-rule", "user-rule", "catch-all"]
 
     # Add a second managed Exit so Auto Route can select between two exact outbounds.
     auto_source = json.loads(second.read_text())

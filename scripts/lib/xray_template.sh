@@ -16,14 +16,17 @@ wm_xray_get_template() {
 }
 
 wm_xray_assert_log_policy() {
-  local template_file="${1:-}" owns_file=0
+  local template_file="${1:-}" policy_config="${2:-${WM_CONFIG_JSON:-}}" owns_file=0
   if [[ -z "$template_file" ]]; then
     template_file="$(mktemp)" || return 1
     chmod 600 "$template_file"
     owns_file=1
     wm_xray_get_template "$template_file" || { rm -f "$template_file"; return 1; }
   fi
-  python3 "$WM_XRAY_TEMPLATE_TOOL" assert-log-policy --template "$template_file" >/dev/null 2>&1
+  local config_args=()
+  [[ ! -f "$policy_config" ]] || config_args=(--config "$policy_config")
+  python3 "$WM_XRAY_TEMPLATE_TOOL" assert-log-policy --template "$template_file" >/dev/null 2>&1 &&
+    python3 "$WM_XRAY_TEMPLATE_TOOL" assert-eu-only --template "$template_file" "${config_args[@]}" >/dev/null 2>&1
   local rc=$?
   (( owns_file == 0 )) || rm -f "$template_file"
   return "$rc"
@@ -61,6 +64,8 @@ if len(rows) != 1:
     raise ValueError("Stored Xray policy is unavailable")
 template=json.loads(rows[0][0])
 policy.validate_log_policy(template)
+saved_config=Path(sys.argv[1]).parent/'config.before.json'
+policy.validate_eu_only(template, json.loads(saved_config.read_text(encoding='utf-8')) if saved_config.is_file() else None)
 if sys.argv[3] and template != json.load(open(sys.argv[3],encoding="utf-8")):
     raise ValueError("Stored Xray template differs from effective snapshot")
 PY

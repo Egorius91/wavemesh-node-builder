@@ -33,11 +33,12 @@ except ImportError:  # Old/staged packages keep ordinary Agent duties available.
     RuntimeFindingCycle = None  # type: ignore[assignment,misc]
 
 try:
-    from node_mtls_runtime import MtlsRuntimeConfig, MtlsRuntimeError, NodeMtlsRuntime
+    from node_mtls_runtime import MtlsApiError, MtlsRuntimeConfig, MtlsRuntimeError, NodeMtlsRuntime
 except ImportError:  # Preserve bearer-only compatibility during staged upgrades.
     MtlsRuntimeConfig = None  # type: ignore[assignment,misc]
     NodeMtlsRuntime = None  # type: ignore[assignment,misc]
     MtlsRuntimeError = RuntimeError  # type: ignore[assignment,misc]
+    MtlsApiError = None  # type: ignore[assignment,misc]
 
 AGENT_VERSION = "0.7.0-placement-v2"
 DEFAULT_ENV_PATH = Path("/etc/wavemesh-agent/agent.env")
@@ -347,15 +348,14 @@ class NodeAgent:
                 except ApiError as exc:
                     next_observation = time.monotonic() + min(60, self.config.observation_seconds)
                     LOG.warning(
-                        "Health observation failed: status=%s code=%s retryable=%s",
+                        "Health observation failed: status=%s code=TRANSPORT_UNAVAILABLE retryable=%s",
                         exc.status,
-                        exc.code,
                         exc.retryable,
                     )
-                except Exception as exc:  # noqa: BLE001 - long-running service boundary
+                except Exception:  # Raw local config/transport errors stay private.
                     self.mark_health_degraded()
                     next_observation = time.monotonic() + min(60, self.config.observation_seconds)
-                    LOG.exception("Health observation cycle failed: %s", exc)
+                    LOG.warning("Health observation cycle blocked: EVIDENCE_UNAVAILABLE")
 
             heartbeat_payload = self.build_heartbeat_payload()
             try:
@@ -844,36 +844,91 @@ class NodeAgent:
             route_health = run_json_command(["wavemesh", "cascade", "health", "--json"], timeout=90)
             auto_health = run_json_command(["wavemesh", "cascade", "auto", "health", "--json"], timeout=90)
         state = build_observation_state(route_health, auto_health)
+        if (self.config.auth_mode == "mtls" and self.mtls_runtime is not None
+                and self.last_mtls_status.get("state") == "SHADOW_ACTIVE"):
+            prepared = negative_prepared_route_state(config)
+            if prepared is not None:
+                state.update(prepared)
         assert_redacted(state)
         self.last_health_state = state
 
-        canonical = json.dumps(state, sort_keys=True, separators=(",", ":"), ensure_ascii=False)
-        state_hash = hashlib.sha256(canonical.encode("utf-8")).hexdigest()
-        if self.runtime.get("last_observation_hash") == state_hash:
-            return
-
-        observed_at = datetime.now(timezone.utc)
-        self.api_json(
-            "POST",
-            f"internal/v1/nodes/{self.config.node_id}/observations",
-            {
-                "type": f"node.health.{state_hash[:16]}",
+        # The SaaS consumer replaces the complete Node.observedState. Keep a
+        # single full-health stream; a partial prepared-only POST loses health.
+        state_hash = observation_digest(state)
+        pending = self.runtime.get("pending_health_observation")
+        scope = {"node_id": self.config.node_id, "tenant_id": self.config.tenant_id}
+        if pending is not None and self.runtime.get("pending_health_observation_scope") != scope:
+            raise AgentError("Health observation scope is unavailable")
+        if pending is None:
+            if (self.runtime.get("last_observation_hash") == state_hash
+                    and self.runtime.get("last_observation_version") == self.config.observed_version
+                    and self.runtime.get("last_observation_scope") == scope):
+                return
+            identity = health_observation_identity(scope, self.config.observed_version, state_hash)
+            pending = {
+                "type": f"node.health.{identity[:16]}",
                 "schema_version": 1,
                 "observed_version": self.config.observed_version,
                 "state": state,
-                "observed_at": format_timestamp(observed_at),
-            },
-            expected=(202,),
-            headers={"Idempotency-Key": f"node-health-{self.config.node_id}-{state_hash[:32]}"},
-        )
-        self.runtime["last_observation_hash"] = state_hash
-        self.runtime["last_observation_at"] = format_timestamp(observed_at)
+                "observed_at": format_timestamp(datetime.now(timezone.utc)),
+            }
+            self.runtime["pending_health_observation"] = pending
+            self.runtime["pending_health_observation_scope"] = scope
+            self.runtime["pending_health_observation_key"] = f"node-health-{self.config.node_id}-{identity[:32]}"
+        validate_health_observation(pending, scope)
+        key = self.runtime.get("pending_health_observation_key")
+        if not isinstance(key, str) or not re.fullmatch(r"node-health-"+re.escape(self.config.node_id)+r"-[a-f0-9]{32}", key):
+            raise AgentError("Health observation identity is unavailable")
+        if pending["observed_version"] > self.config.observed_version:
+            raise AgentError("Health observation version is unavailable")
+        if "prepared_eu_paths" in pending["state"] and not (
+                self.config.auth_mode == "mtls" and self.mtls_runtime is not None
+                and self.last_mtls_status.get("state") == "SHADOW_ACTIVE"):
+            raise AgentError("Prepared observation authentication is unavailable")
+        pending_hash = observation_digest(pending["state"])
+        # Persist before every attempt, including a retry after a local write
+        # failure. A lost reply retains the exact original body and timestamp.
         write_json_file(self.config.runtime_path, self.runtime)
+        try:
+            self.api_json(
+                "POST", f"internal/v1/nodes/{self.config.node_id}/observations", pending,
+                expected=(202,), headers={"Idempotency-Key": key},
+            )
+        except Exception as exc:
+            authenticated_error = isinstance(exc, ApiError) or (MtlsApiError is not None and isinstance(exc, MtlsApiError))
+            if not (authenticated_error and exc.status == 409 and exc.code == "STALE_OBSERVED_VERSION"
+                    and exc.retryable is False and self.config.observed_version > pending["observed_version"]):
+                raise
+            resolved = dict(self.runtime)
+            # One bounded resolved receipt, not another queue. The first lost
+            # dispatch may have been accepted; the stale reply proves only that
+            # this retry was refused before effects at the old Node version.
+            resolved["last_superseded_health_observation"] = {
+                "envelope": pending, "scope": scope, "idempotency_key": key,
+                "configured_version": self.config.observed_version,
+                "response": {"status": 409, "code": "STALE_OBSERVED_VERSION"},
+                "prior_dispatch_outcome": "UNKNOWN_OR_ACCEPTED",
+                "resolved_at": format_timestamp(datetime.now(timezone.utc)),
+            }
+            for name in ("pending_health_observation", "pending_health_observation_scope", "pending_health_observation_key"):
+                resolved.pop(name, None)
+            write_json_file(self.config.runtime_path, resolved)
+            self.runtime = resolved
+            return  # The next existing periodic cycle collects current health.
+        accepted = dict(self.runtime)
+        accepted["last_observation_hash"] = pending_hash
+        accepted["last_observation_at"] = pending["observed_at"]
+        accepted["last_observation_version"] = pending["observed_version"]
+        accepted["last_observation_scope"] = scope
+        for name in ("pending_health_observation", "pending_health_observation_scope", "pending_health_observation_key"):
+            accepted.pop(name, None)
+        write_json_file(self.config.runtime_path, accepted)
+        self.runtime = accepted
         LOG.info(
             "Health observation accepted: node_status=%s healthy_exits=%s/%s",
-            state.get("node_status"),
-            state.get("healthy_exits"),
-            state.get("total_exits"),
+            pending["state"].get("node_status"),
+            pending["state"].get("healthy_exits"),
+            pending["state"].get("total_exits"),
         )
 
     def build_heartbeat_payload(self) -> dict[str, Any]:
@@ -905,6 +960,10 @@ class NodeAgent:
             "mtls_shadow": self.last_mtls_status,
             "runtime_findings": {"mode": self.config.runtime_finding_mode, **self.last_finding_status},
         }
+        if has_prepared_routes(config):
+            # A saved receipt, template, heartbeat or matching PID cannot
+            # manufacture the unavailable stock full-execution guarantee.
+            capabilities["prepared_eu_paths_v1"] = False
         assert_redacted(capabilities)
         return {
             "agent_version": AGENT_VERSION,
@@ -1014,6 +1073,87 @@ class NodeAgent:
         if not isinstance(decoded, dict):
             raise AgentError("SaaS returned a non-object JSON response")
         return decoded
+
+
+def observation_digest(value: Any) -> str:
+    return hashlib.sha256(json.dumps(value, sort_keys=True, separators=(",", ":"), ensure_ascii=False, allow_nan=False).encode("utf-8")).hexdigest()
+
+
+def health_observation_identity(scope: dict[str, str], version: int, state_hash: str) -> str:
+    return observation_digest({**scope, "observed_version": version, "state_sha256": state_hash})
+
+
+def has_prepared_routes(config: dict[str, Any]) -> bool:
+    routes = config.get("routes")
+    return isinstance(routes, list) and any(isinstance(route, dict) and route.get("kind") == "auto" and "prepared_plan" in route for route in routes)
+
+
+def negative_prepared_route_state(config: dict[str, Any]) -> dict[str, Any] | None:
+    if not has_prepared_routes(config):
+        return None
+    rows = []
+    seen = set()
+    for route in config["routes"]:
+        if not isinstance(route, dict) or route.get("kind") != "auto" or "prepared_plan" not in route:
+            continue
+        route_id = route.get("id")
+        if not isinstance(route_id, str) or not re.fullmatch(r"route-auto-[a-z0-9][a-z0-9-]{1,47}", route_id) or route_id in seen:
+            raise AgentError("Prepared route identity is unavailable")
+        seen.add(route_id)
+        plan = route["prepared_plan"]
+        rows.append({
+            "route_id": route_id, "route_binding": None, "descriptor": None,
+            "state": "unqualified", "engine_instance": None, "effective_config_sha256": None,
+            "plan_sha256": observation_digest(plan) if isinstance(plan, dict) else None,
+            "sample_started_at": None, "sample_completed_at": None, "selected_path": None,
+            "deny_outcome": "not_verified", "readback": "unavailable", "entry_profile_sha256": None,
+        })
+    return {"prepared_eu_paths": {"schema_version": 1, "scope": "node_route_only", "routes": sorted(rows, key=lambda row: row["route_id"])}}
+
+
+def validate_health_observation(envelope: Any, scope: dict[str, str]) -> None:
+    """Reject cached positives/private fields before any authenticated send."""
+    if not isinstance(envelope, dict) or set(envelope) != {"type", "schema_version", "observed_version", "state", "observed_at"}:
+        raise AgentError("Prepared observation envelope is unavailable")
+    if (type(envelope["schema_version"]) is not int or envelope["schema_version"] != 1
+            or type(envelope["observed_version"]) is not int or envelope["observed_version"] < 0
+            or not isinstance(envelope["observed_at"], str)):
+        raise AgentError("Prepared observation version is unavailable")
+    parse_timestamp(envelope["observed_at"])
+    state = envelope["state"]
+    required = {"mode", "node_status", "healthy_exits", "total_exits", "routes", "auto_routes"}
+    if not isinstance(state, dict) or not required.issubset(state) or set(state)-required-{"prepared_eu_paths"}:
+        raise AgentError("Health observation scope is unavailable")
+    for key, fields in (("routes", {"route_id", "exit_id", "enabled", "status", "latency_ms"}),
+                        ("auto_routes", {"route_id", "enabled", "published", "status", "strategy", "healthy_exits", "total_exits"})):
+        if not isinstance(state[key], list) or any(not isinstance(row, dict) or set(row) != fields for row in state[key]):
+            raise AgentError("Health observation fields are unavailable")
+    # Validate the saved body/scope, never the newer configured version. The
+    # actual HTTP key remains the original persisted key on every retry.
+    identity = health_observation_identity(scope, envelope["observed_version"], observation_digest(state))
+    if envelope["type"] != f"node.health.{identity[:16]}":
+        raise AgentError("Health observation identity is unavailable")
+    assert_redacted(envelope)
+    if "prepared_eu_paths" not in state:
+        return
+    body = state["prepared_eu_paths"]
+    if (not isinstance(body, dict) or set(body) != {"schema_version", "scope", "routes"}
+            or type(body["schema_version"]) is not int or body["schema_version"] != 1
+            or body["scope"] != "node_route_only" or not isinstance(body["routes"], list)):
+        raise AgentError("Prepared observation scope is unavailable")
+    expected = {"route_id", "route_binding", "descriptor", "state", "engine_instance", "effective_config_sha256", "plan_sha256", "sample_started_at", "sample_completed_at", "selected_path", "deny_outcome", "readback", "entry_profile_sha256"}
+    seen = set()
+    for row in body["routes"]:
+        if not isinstance(row, dict) or set(row) != expected:
+            raise AgentError("Prepared observation fields are unavailable")
+        route_id = row["route_id"]
+        if not isinstance(route_id, str) or not re.fullmatch(r"route-auto-[a-z0-9][a-z0-9-]{1,47}", route_id) or route_id in seen:
+            raise AgentError("Prepared observation identity is unavailable")
+        seen.add(route_id)
+        if (row["state"] != "unqualified" or row["deny_outcome"] != "not_verified" or row["readback"] != "unavailable"
+                or any(row[key] is not None for key in ("route_binding", "descriptor", "engine_instance", "effective_config_sha256", "sample_started_at", "sample_completed_at", "selected_path", "entry_profile_sha256"))
+                or row["plan_sha256"] is not None and (not isinstance(row["plan_sha256"], str) or not re.fullmatch(r"[a-f0-9]{64}", row["plan_sha256"]))):
+            raise AgentError("Prepared positive evidence is unavailable")
 
 
 def build_observation_state(route_health: dict[str, Any], auto_health: dict[str, Any]) -> dict[str, Any]:

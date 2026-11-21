@@ -1,0 +1,135 @@
+{
+  "schema_version": 1,
+  "generator": "runtime_state.inbound_payload after prepared_channels.stage",
+  "cases": [
+    {
+      "name": "prepared-unpublished-empty",
+      "payload": {
+        "up": 0,
+        "down": 0,
+        "total": 0,
+        "remark": "--!wm-route-auto-europe",
+        "tag": "wm-route-auto-europe",
+        "enable": true,
+        "expiryTime": 0,
+        "listen": "127.0.0.1",
+        "port": 21090,
+        "protocol": "vless",
+        "settings": {
+          "clients": [],
+          "decryption": "none",
+          "fallbacks": []
+        },
+        "streamSettings": {
+          "network": "xhttp",
+          "security": "none",
+          "xhttpSettings": {
+            "path": "/api/auto/abcdefghijklmnop/",
+            "host": "ru-entry.example.com",
+            "mode": "stream-one"
+          },
+          "externalProxy": [
+            {
+              "dest": "ru-entry.example.com",
+              "port": 443,
+              "remark": "Auto",
+              "forceTls": "tls",
+              "sni": "ru-entry.example.com",
+              "fingerprint": "randomized"
+            }
+          ]
+        },
+        "sniffing": {
+          "enabled": true,
+          "destOverride": [
+            "http",
+            "tls",
+            "quic",
+            "fakedns"
+          ],
+          "metadataOnly": false,
+          "routeOnly": false
+        },
+        "allocate": {
+          "strategy": "always"
+        }
+      }
+    },
+    {
+      "name": "managed-dynamic-clients",
+      "payload": {
+        "up": 0,
+        "down": 0,
+        "total": 0,
+        "remark": "Auto",
+        "tag": "wm-route-auto-europe",
+        "enable": true,
+        "expiryTime": 0,
+        "listen": "127.0.0.1",
+        "port": 21090,
+        "protocol": "vless",
+        "settings": {
+          "clients": [
+            {
+              "id": "00000000-0000-4000-8000-000000000001",
+              "email": "fixture-1",
+              "enable": true,
+              "flow": "",
+              "limitIp": 0,
+              "totalGB": 0,
+              "expiryTime": 0,
+              "tgId": 0,
+              "subId": "synthetic-sub-1"
+            },
+            {
+              "id": "00000000-0000-4000-8000-000000000002",
+              "email": "fixture-2",
+              "enable": false,
+              "flow": "",
+              "limitIp": 0,
+              "totalGB": 0,
+              "expiryTime": 0,
+              "tgId": 0,
+              "subId": "synthetic-sub-2"
+            }
+          ],
+          "decryption": "none",
+          "fallbacks": []
+        },
+        "streamSettings": {
+          "network": "xhttp",
+          "security": "none",
+          "xhttpSettings": {
+            "path": "/api/auto/abcdefghijklmnop/",
+            "host": "ru-entry.example.com",
+            "mode": "stream-one"
+          },
+          "externalProxy": [
+            {
+              "dest": "ru-entry.example.com",
+              "port": 443,
+              "remark": "Auto",
+              "forceTls": "tls",
+              "sni": "ru-entry.example.com",
+              "fingerprint": "randomized"
+            }
+          ]
+        },
+        "sniffing": {
+          "enabled": true,
+          "destOverride": [
+            "http",
+            "tls",
+            "quic",
+            "fakedns"
+          ],
+          "metadataOnly": false,
+          "routeOnly": false
+        },
+        "allocate": {
+          "strategy": "always"
+        }
+      }
+    }
+  ]
+}

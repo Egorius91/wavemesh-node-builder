@@ -110,6 +110,7 @@ EXPIRED_IDENTITY_SOURCE="$PROJECT_DIR/agent/node_expired_identity.py"
 RECOVERY_CLIENT_SOURCE="$PROJECT_DIR/agent/node_recovery.py"
 ACCEPTANCE_SOURCE="$PROJECT_DIR/agent/acceptance.py"
 ACCESS_SOURCE="$PROJECT_DIR/agent/access_runtime.py"
+JOURNAL_SOURCE="$PROJECT_DIR/scripts/lib/prepared_journal.py"
 FINDINGS_SOURCE="$PROJECT_DIR/agent/runtime_findings.py"
 PROFILES_SOURCE="$PROJECT_DIR/agent/placement_profiles.py"
 UNIT_SOURCE="$PROJECT_DIR/agent/wavemesh-node-agent.service"
@@ -126,6 +127,7 @@ for source in \
   "$RECOVERY_CLIENT_SOURCE" \
   "$ACCEPTANCE_SOURCE" \
   "$ACCESS_SOURCE" \
+  "$JOURNAL_SOURCE" \
   "$FINDINGS_SOURCE" \
   "$UNIT_SOURCE" \
   "$LOCK_CONFIG_SOURCE" \
@@ -179,6 +181,7 @@ file_would_change "$EXPIRED_IDENTITY_SOURCE" "$INSTALL_DIR/node_expired_identity
 file_would_change "$RECOVERY_CLIENT_SOURCE" "$INSTALL_DIR/node_recovery.py" && changed=true
 file_would_change "$ACCEPTANCE_SOURCE" "$INSTALL_DIR/acceptance.py" && changed=true
 file_would_change "$ACCESS_SOURCE" "$INSTALL_DIR/access_runtime.py" && changed=true
+file_would_change "$JOURNAL_SOURCE" "$INSTALL_DIR/prepared_journal.py" && changed=true
 file_would_change "$FINDINGS_SOURCE" "$INSTALL_DIR/runtime_findings.py" && changed=true
 file_would_change "$PROFILES_SOURCE" "$INSTALL_DIR/placement_profiles.py" && changed=true
 file_would_change "$UNIT_SOURCE" "$UNIT_PATH" && changed=true
@@ -203,6 +206,7 @@ if [[ "$changed" == true ]]; then
   backup_file "$INSTALL_DIR/node_recovery.py" "$backup_dir" node_recovery.py 0755
   backup_file "$INSTALL_DIR/acceptance.py" "$backup_dir" acceptance.py 0755
   backup_file "$INSTALL_DIR/access_runtime.py" "$backup_dir" access_runtime.py 0755
+  backup_file "$INSTALL_DIR/prepared_journal.py" "$backup_dir" prepared_journal.py 0644
   backup_file "$INSTALL_DIR/runtime_findings.py" "$backup_dir" runtime_findings.py 0644
   backup_file "$INSTALL_DIR/placement_profiles.py" "$backup_dir" placement_profiles.py 0644
   backup_file "$UNIT_PATH" "$backup_dir" "$SERVICE" 0644
@@ -233,6 +237,7 @@ atomic_install_file "$EXPIRED_IDENTITY_SOURCE" "$INSTALL_DIR/node_expired_identi
 atomic_install_file "$RECOVERY_CLIENT_SOURCE" "$INSTALL_DIR/node_recovery.py" 0755
 atomic_install_file "$ACCEPTANCE_SOURCE" "$INSTALL_DIR/acceptance.py" 0755
 atomic_install_file "$ACCESS_SOURCE" "$INSTALL_DIR/access_runtime.py" 0755
+atomic_install_file "$JOURNAL_SOURCE" "$INSTALL_DIR/prepared_journal.py" 0644
 atomic_install_file "$FINDINGS_SOURCE" "$INSTALL_DIR/runtime_findings.py" 0644
 atomic_install_file "$PROFILES_SOURCE" "$INSTALL_DIR/placement_profiles.py" 0644
 atomic_install_file "$UNIT_SOURCE" "$UNIT_PATH" 0644
@@ -259,6 +264,7 @@ fi
   "$INSTALL_DIR/node_recovery.py" \
   "$INSTALL_DIR/acceptance.py" \
   "$INSTALL_DIR/access_runtime.py" \
+  "$INSTALL_DIR/prepared_journal.py" \
   "$INSTALL_DIR/runtime_findings.py" \
   "$INSTALL_DIR/placement_profiles.py"
 

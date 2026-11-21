@@ -74,9 +74,19 @@ wm_exit_diagnostics_json() {
   return "$result"
 }
 
-wm_runtime_health() {
+wm_runtime_health() (
+  # Health persists runtime.json. A subshell releases this acquisition on return;
+  # callers already owning the node lock use the locked implementation below.
+  wm_lock_mutation "runtime-health" || return
+  wm_runtime_health_locked "$@"
+)
+
+wm_runtime_health_locked() {
   local as_json=0 requested_exit="" transaction inbounds template probes nginx_file api_ok=false
   while [[ $# -gt 0 ]]; do case "$1" in --json) as_json=1; shift;; --exit-id) requested_exit="${2:-}"; shift 2;; *) wm_fail "Unknown health option: $1";; esac; done
+  # A dead writer releases flock but may leave unresolved prepared debt. Admit
+  # this persisted observation only after the shared journal check and barrier.
+  python3 "$WM_TRANSACTION_TOOL" admit --root "$WM_TRANSACTION_ROOT" || return
   wm_load_config; wm_require_entry_role
   if [[ -n "$requested_exit" ]] && ! python3 -c 'import json,sys; cfg=json.load(open(sys.argv[1],encoding="utf-8")); sys.exit(0 if any(x.get("id")==sys.argv[2] for x in cfg.get("exits",[])) else 1)' "$WM_CONFIG_JSON" "$requested_exit"; then wm_fail "Exit not found: ${requested_exit}"; fi
   transaction="$(mktemp -d)"; chmod 700 "$transaction"
@@ -265,9 +275,16 @@ PY
 wm_reconcile_command() {
   local mode="${1:---dry-run}" transaction candidate route_id enabled inbound_file outbound_file inbound_tag outbound_tag rule_tag reconciled_id updated_candidate balancer_tag selectors
   [[ "$mode" == "--dry-run" || "$mode" == "--apply" ]] || wm_fail "Usage: wavemesh reconcile --dry-run|--apply"
-  wm_runtime_health --json >/dev/null
+  # Both modes refresh persisted health; keep that snapshot and the subsequent
+  # plan/apply under one acquisition, including the final health readback.
+  if [[ "$mode" == "--apply" ]]; then
+    wm_lock_mutation "reconcile-apply" || return
+  else
+    wm_lock_mutation "reconcile-dry-run" || return
+  fi
+  wm_runtime_health_locked --json >/dev/null || return
   if [[ "$mode" == "--dry-run" ]]; then python3 "$WM_RUNTIME_TOOL" plan --config "$WM_CONFIG_JSON" --runtime "$WM_RUNTIME_JSON"; return; fi
-  wm_lock_mutation "reconcile-apply"; wm_load_config; wm_require_entry_role
+  wm_load_config; wm_require_entry_role
   wm_transaction_begin "reconcile-apply"; transaction="$WM_ACTIVE_TRANSACTION"; candidate="$transaction/config.candidate.json"; cp "$WM_CONFIG_JSON" "$candidate"
   if [[ "$(wm_subscription_backend "$WM_CONFIG_JSON")" == "xui-native" ]]; then
     wm_native_apply_settings "$WM_CONFIG_JSON" || wm_fail "Could not apply native subscription settings"
@@ -319,5 +336,5 @@ PY
   wm_runtime_apply_public_state "$transaction" || wm_fail "Could not reconcile nginx/subscriptions; transaction will be rolled back"
   wm_atomic_install_json "$WM_RUNTIME_CANDIDATE" "$WM_CONFIG_JSON"; wm_export_config_env_from_json
   wm_transaction_commit "$transaction"
-  wm_runtime_health
+  wm_runtime_health_locked
 }

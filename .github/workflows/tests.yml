@@ -24,7 +24,7 @@ jobs:
         with:
           python-version: "3.12"
       - name: Install nginx and unzip for native regressions
-        run: sudo apt-get update -qq && sudo apt-get install -y nginx unzip
+        run: sudo apt-get update -qq && sudo apt-get install -y nginx unzip iproute2
       - name: Python unit and E2E tests
         env:
           WAVEMESH_REQUIRE_NGINX_TESTS: "1"
@@ -32,11 +32,20 @@ jobs:
           set -Eeuo pipefail
           python3 -m compileall -q agent scripts tests
           for test in tests/unit/test_*.py; do
-            python3 "$test"
+            # These files/root completion cases remain mandatory in the root step below.
+            case "$test" in
+              tests/unit/test_prepared_owning_caller.py|tests/unit/test_prepared_owning_transaction.py|tests/unit/test_prepared_transaction.py|tests/unit/test_agent_prepared_origin.py|tests/unit/test_prepared_panel_peer_native.py) continue ;;
+              tests/unit/test_prepared_completion.py)
+                PYTHONPATH="$PWD" python3 tests/prepared_native_units.py --ordinary-completion
+                continue ;;
+            esac
+            PYTHONPATH="$PWD" python3 "$test"
           done
           python3 tests/e2e/test_multi_exit.py
       - name: Native public Entry TLS verifier in a private network namespace
         run: sudo -n unshare --net -- /usr/bin/python3 -B tests/native/test_public_entry_tls_native.py --require-native -v
+      - name: Mandatory prepared owning synthetic units (49 plus 6)
+        run: sudo -n unshare --net -- sh -ec 'ip link set dev lo up; exec "$@"' sh "$(command -v python3)" -I -B tests/prepared_native_units.py
       - name: Bash and adapter tests
         # Root ownership and permissions are part of the constrained pilot boundary.
         run: |

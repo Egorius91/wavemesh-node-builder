@@ -51,10 +51,11 @@ run_rollback() {
 
 run_installer
 
-for file in node_mtls_client.py node_mtls_runtime.py node_mtls_state.py node_expired_identity.py runtime_findings.py; do
+for file in node_mtls_client.py node_mtls_runtime.py node_mtls_state.py node_expired_identity.py runtime_findings.py prepared_journal.py; do
   [[ -f "$DESTDIR/usr/local/lib/wavemesh-agent/$file" ]]
   [[ "$(stat -c '%a' "$DESTDIR/usr/local/lib/wavemesh-agent/$file")" == 644 ]]
 done
+cmp "$ROOT_DIR/scripts/lib/prepared_journal.py" "$DESTDIR/usr/local/lib/wavemesh-agent/prepared_journal.py"
 [[ "$(stat -c '%a' "$DESTDIR/usr/local/lib/wavemesh-agent/access_runtime.py")" == 755 ]]
 "${WAVEMESH_TEST_PYTHON:-/usr/bin/python3}" "$ROOT_DIR/tests/unit/test_installed_recovery_dependency.py" \
   --installed-dir "$DESTDIR/usr/local/lib/wavemesh-agent"
@@ -113,6 +114,18 @@ cmp "$TEMP_DIR/expiry.dependency-only" "$module_backup/node_expired_identity.py"
 cmp "$ROOT_DIR/agent/node_expired_identity.py" "$DESTDIR/usr/local/lib/wavemesh-agent/node_expired_identity.py"
 run_rollback --latest
 cmp "$TEMP_DIR/expiry.dependency-only" "$DESTDIR/usr/local/lib/wavemesh-agent/node_expired_identity.py"
+run_installer
+second_backup_count="$(find "$backup_root" -mindepth 1 -maxdepth 1 -type d | wc -l)"
+
+# Dependency-only updates must preserve the same reader with their Agent backup.
+printf '\n# previous-journal-reader\n' >> "$DESTDIR/usr/local/lib/wavemesh-agent/prepared_journal.py"
+cp "$DESTDIR/usr/local/lib/wavemesh-agent/prepared_journal.py" "$TEMP_DIR/journal.before"
+run_installer
+journal_backup="$(find "$backup_root" -mindepth 1 -maxdepth 1 -type d | sort | tail -n 1)"
+cmp "$TEMP_DIR/journal.before" "$journal_backup/prepared_journal.py"
+cmp "$ROOT_DIR/scripts/lib/prepared_journal.py" "$DESTDIR/usr/local/lib/wavemesh-agent/prepared_journal.py"
+run_rollback --latest
+cmp "$TEMP_DIR/journal.before" "$DESTDIR/usr/local/lib/wavemesh-agent/prepared_journal.py"
 run_installer
 second_backup_count="$(find "$backup_root" -mindepth 1 -maxdepth 1 -type d | wc -l)"
 
