@@ -166,8 +166,13 @@ class PreparedNativeEntrypointTests(unittest.TestCase):
 
     def test_loopback_bringup_is_required_for_existing_peer_tcp_fixtures(self):
         self.assertIn('sudo apt-get install -y nginx unzip iproute2', self.workflow)
+        without_prepared_loopback = self.workflow.replace(
+            NATIVE_COMMAND, NATIVE_COMMAND.replace('ip link set dev lo up; ', '', 1), 1)
+        self.assertNotIn(NATIVE_COMMAND, without_prepared_loopback)
+        self.assertIn('tests/native/test_managed_observation_posix.py', without_prepared_loopback)
+        self.assertIn('tests/native/test_heartbeat_receipt_tls.py', without_prepared_loopback)
         with self.assertRaises(AssertionError):
-            mandatory_partition(self.workflow.replace('ip link set dev lo up; ', '', 1))
+            mandatory_partition(without_prepared_loopback)
 
     def test_existing_owner_transitive_cases_are_preserved_in_ordinary_role(self):
         owner = {case.id() for case in entrypoint.cases(entrypoint.load_suite('test_prepared_owner', 18))}
