@@ -51,7 +51,7 @@ run_rollback() {
 
 run_installer
 
-for file in node_mtls_client.py node_mtls_runtime.py node_mtls_state.py node_expired_identity.py runtime_findings.py prepared_journal.py; do
+for file in node_mtls_client.py node_mtls_runtime.py node_mtls_state.py node_expired_identity.py runtime_findings.py prepared_journal.py heartbeat_observation.py managed_observation.py; do
   [[ -f "$DESTDIR/usr/local/lib/wavemesh-agent/$file" ]]
   [[ "$(stat -c '%a' "$DESTDIR/usr/local/lib/wavemesh-agent/$file")" == 644 ]]
 done
@@ -68,6 +68,14 @@ cmp "$ROOT_DIR/agent/wavemesh-node-lock.conf" "$DESTDIR/etc/tmpfiles.d/wavemesh-
 [[ "$(stat -c '%a' "$DESTDIR/etc/wavemesh-agent/tls/pending")" == 700 ]]
 [[ "$(stat -c '%a' "$DESTDIR/etc/wavemesh-agent/tls/generations")" == 700 ]]
 [[ "$(stat -c '%a' "$DESTDIR/var/lib/wavemesh-agent/runtime-findings")" == 700 ]]
+[[ "$(stat -c '%a' "$DESTDIR/var/lib/wavemesh-agent/managed-observation")" == 700 ]]
+[[ ! -e "$DESTDIR/var/lib/wavemesh-agent/managed-observation/manifest.json" ]]
+if grep -q '^WAVEMESH_AGENT_MANAGED_OBSERVATION_MANIFEST=' "$DESTDIR/etc/wavemesh-agent/agent.env"; then
+  echo "installer enabled a managed observation run" >&2
+  exit 1
+fi
+printf 'retained managed observation evidence\n' > "$DESTDIR/var/lib/wavemesh-agent/managed-observation/evidence-marker"
+chmod 0600 "$DESTDIR/var/lib/wavemesh-agent/managed-observation/evidence-marker"
 printf 'private synthetic evidence\n' > "$DESTDIR/var/lib/wavemesh-agent/runtime-findings/evidence-marker"
 chmod 0600 "$DESTDIR/var/lib/wavemesh-agent/runtime-findings/evidence-marker"
 grep -Fx 'WAVEMESH_AGENT_RUNTIME_FINDINGS_MODE=disabled' "$DESTDIR/etc/wavemesh-agent/agent.env" >/dev/null
@@ -96,6 +104,7 @@ run_installer
 second_backup_count="$(find "$backup_root" -mindepth 1 -maxdepth 1 -type d | wc -l)"
 [[ "$second_backup_count" == "$first_backup_count" ]]
 grep -Fx 'private synthetic evidence' "$DESTDIR/var/lib/wavemesh-agent/runtime-findings/evidence-marker" >/dev/null
+grep -Fx 'retained managed observation evidence' "$DESTDIR/var/lib/wavemesh-agent/managed-observation/evidence-marker" >/dev/null
 if grep -Fx 'daemon-reload' "$SYSTEMCTL_LOG" >/dev/null; then
   echo "idempotent installer reloaded an unchanged unit" >&2
   exit 1
@@ -114,6 +123,18 @@ cmp "$TEMP_DIR/expiry.dependency-only" "$module_backup/node_expired_identity.py"
 cmp "$ROOT_DIR/agent/node_expired_identity.py" "$DESTDIR/usr/local/lib/wavemesh-agent/node_expired_identity.py"
 run_rollback --latest
 cmp "$TEMP_DIR/expiry.dependency-only" "$DESTDIR/usr/local/lib/wavemesh-agent/node_expired_identity.py"
+run_installer
+second_backup_count="$(find "$backup_root" -mindepth 1 -maxdepth 1 -type d | wc -l)"
+
+# Dependency-only updates must preserve the same reader with their Agent backup.
+printf '\n# prior-managed-observation\n' >> "$DESTDIR/usr/local/lib/wavemesh-agent/managed_observation.py"
+cp "$DESTDIR/usr/local/lib/wavemesh-agent/managed_observation.py" "$TEMP_DIR/managed.before"
+run_installer
+managed_backup="$(find "$backup_root" -mindepth 1 -maxdepth 1 -type d | sort | tail -n 1)"
+cmp "$TEMP_DIR/managed.before" "$managed_backup/managed_observation.py"
+run_rollback --latest
+cmp "$TEMP_DIR/managed.before" "$DESTDIR/usr/local/lib/wavemesh-agent/managed_observation.py"
+grep -Fx 'retained managed observation evidence' "$DESTDIR/var/lib/wavemesh-agent/managed-observation/evidence-marker" >/dev/null
 run_installer
 second_backup_count="$(find "$backup_root" -mindepth 1 -maxdepth 1 -type d | wc -l)"
 

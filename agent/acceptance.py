@@ -19,7 +19,7 @@ from typing import Callable, Sequence
 SERVICE = "wavemesh-node-agent.service"
 MAX_OUTPUT_BYTES = 2 * 1024 * 1024
 SAFE_VALUE = re.compile(r"^[A-Za-z0-9._-]{1,96}$")
-PHASES = ("baseline", "disabled", "shadow", "rollback")
+PHASES = ("baseline", "disabled", "shadow", "rollback", "mtls-only")
 REQUIRED_HARDENING = (
     "User=root",
     "Group=root",
@@ -122,6 +122,8 @@ class AcceptanceCollector:
             "filesystem": dict(sorted(self.filesystem.items())),
             "certificate": certificate,
             "log_findings": findings,
+            **({"observation_scope": "LOCAL_READINESS_SNAPSHOT", "central_heartbeat_observed": False}
+               if self.phase == "mtls-only" else {}),
         }
 
     def _service(self) -> dict[str, object]:
@@ -209,6 +211,12 @@ class AcceptanceCollector:
             self.blockers.add("AGENT_NOT_BEARER_ONLY")
         if self.phase == "shadow" and (mtls_mode != "shadow" or mtls_state != "SHADOW_ACTIVE"):
             self.blockers.add("AGENT_SHADOW_NOT_ACTIVE")
+        auth_mode = "mtls" if value.get("auth_mode") == "mtls" else None
+        if self.phase == "mtls-only":
+            if auth_mode != "mtls":
+                self.blockers.add("AGENT_NOT_MTLS_ONLY")
+            if mtls_mode != "shadow" or mtls_state != "SHADOW_ACTIVE":
+                self.blockers.add("AGENT_MTLS_IDENTITY_NOT_ACTIVE")
         if self.phase == "rollback":
             # Older rollback targets may predate the mTLS fields.
             if mtls_mode not in {None, "disabled"} or mtls_state not in {None, "BEARER_ONLY"}:
@@ -219,6 +227,7 @@ class AcceptanceCollector:
             "mode": mode,
             "mtls_mode": mtls_mode,
             "mtls_state": mtls_state,
+            **({"auth_mode": auth_mode} if self.phase == "mtls-only" else {}),
         }
 
     def _filesystem(self, agent: dict[str, object]) -> None:
@@ -227,7 +236,7 @@ class AcceptanceCollector:
             "agent_main": (self.paths.agent_file, 0o755),
             "service_unit": (self.paths.unit_file, 0o644),
         }
-        if self.phase in {"disabled", "shadow"}:
+        if self.phase in {"disabled", "shadow", "mtls-only"}:
             required.update(
                 {
                     "mtls_client": (self.paths.install_dir / "node_mtls_client.py", 0o644),
@@ -251,7 +260,7 @@ class AcceptanceCollector:
         self.filesystem["env_pem_free"] = env_pem_free
         if not env_pem_free:
             self.blockers.add("ENV_PEM_MATERIAL_FOUND")
-        if agent.get("mtls_mode") == "shadow" or self.phase == "shadow":
+        if agent.get("mtls_mode") == "shadow" or self.phase in {"shadow", "mtls-only"}:
             self._tls_filesystem()
 
     def _safe_file(self, path: Path, mode: int) -> bool:
@@ -334,7 +343,7 @@ class AcceptanceCollector:
             self.blockers.add("TLS_ACKNOWLEDGEMENT_PENDING")
 
     def _certificate(self, agent: dict[str, object]) -> dict[str, object]:
-        if agent.get("mtls_mode") != "shadow" and self.phase != "shadow":
+        if agent.get("mtls_mode") != "shadow" and self.phase not in {"shadow", "mtls-only"}:
             return {"present": False, "valid": None, "expires_at": None}
         active = self.paths.tls_root / "active"
         certificate = active / "client.crt"
