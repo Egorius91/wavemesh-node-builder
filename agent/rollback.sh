@@ -158,6 +158,13 @@ fi
 if [[ -e "$backup_dir/runtime_findings.py" || -e "$backup_dir/runtime_findings.py.absent" ]]; then
   restore_or_remove runtime_findings.py "$INSTALL_DIR/runtime_findings.py" 0644 0755
 fi
+# Code rollback never rewinds/removes observation runs or their failed attempts.
+# Older backups have no entries; new backups preserve previous bytes or absence.
+for label in heartbeat_observation.py managed_observation.py; do
+  if [[ -e "$backup_dir/$label" || -L "$backup_dir/$label" || -e "$backup_dir/$label.absent" || -L "$backup_dir/$label.absent" ]]; then
+    restore_or_remove "$label" "$INSTALL_DIR/$label" 0644 0755
+  fi
+done
 if [[ -e "$backup_dir/placement_profiles.py" || -e "$backup_dir/placement_profiles.py.absent" ]]; then
   restore_or_remove placement_profiles.py "$INSTALL_DIR/placement_profiles.py" 0644 0755
 fi

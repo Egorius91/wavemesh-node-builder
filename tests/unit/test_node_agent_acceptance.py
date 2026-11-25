@@ -9,6 +9,7 @@ from pathlib import Path
 import sys
 import tempfile
 import unittest
+from unittest.mock import patch
 
 ROOT = Path(__file__).resolve().parents[2]
 MODULE_PATH = ROOT / "agent" / "acceptance.py"
@@ -219,6 +220,95 @@ class AcceptanceTests(unittest.TestCase):
             report = fixture.collect("shadow")
             self.assertIn("TLS_ACKNOWLEDGEMENT_PENDING", report["blocking_codes"])
             self.assertIn("TLS_CERTIFICATE_INVALID_OR_EXPIRED", report["blocking_codes"])
+
+
+class MtlsOnlySnapshotTests(unittest.TestCase):
+    def collector(self, fixture: Fixture):
+        return acceptance.AcceptanceCollector(
+            "mtls-only", paths=fixture.paths, runner=fixture.runner,
+            expected_uid=os.getuid() if hasattr(os, "getuid") else 0,
+            now=datetime(2026, 11, 21, tzinfo=timezone.utc),
+        )
+
+    def active(self, fixture: Fixture) -> None:
+        fixture.agent_value.update(auth_mode="mtls", mtls_mode="shadow", mtls_state="SHADOW_ACTIVE")
+
+    def test_requires_primary_mtls_and_preserves_lifecycle_mode(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            fixture = Fixture(Path(directory))
+            self.active(fixture)
+            collector = self.collector(fixture)
+            observed = collector._agent()
+            self.assertEqual(observed["auth_mode"], "mtls")
+            self.assertEqual(observed["mtls_mode"], "shadow")
+            self.assertEqual(collector.blockers, set())
+
+    def test_shadow_alone_cannot_qualify_primary_authentication(self) -> None:
+        for auth_mode in (None, "bearer", "bootstrap-mtls", "private_auth_sentinel", {"secret": "private_auth_sentinel"}):
+            with self.subTest(auth_mode=type(auth_mode).__name__), tempfile.TemporaryDirectory() as directory:
+                fixture = Fixture(Path(directory))
+                self.active(fixture)
+                fixture.agent_value["auth_mode"] = auth_mode
+                collector = self.collector(fixture)
+                observed = collector._agent()
+                self.assertIn("AGENT_NOT_MTLS_ONLY", collector.blockers)
+                self.assertIsNone(observed["auth_mode"])
+                self.assertNotIn("private_auth_sentinel", json.dumps(observed))
+
+    def test_mtls_authentication_without_active_identity_is_blocked(self) -> None:
+        for state in ("BEARER_ONLY", "SHADOW_READY", "ROTATING", "FALLBACK", "BLOCKED", None):
+            with self.subTest(state=state), tempfile.TemporaryDirectory() as directory:
+                fixture = Fixture(Path(directory))
+                self.active(fixture)
+                fixture.agent_value["mtls_state"] = state
+                collector = self.collector(fixture)
+                collector._agent()
+                self.assertIn("AGENT_MTLS_IDENTITY_NOT_ACTIVE", collector.blockers)
+
+    def test_legacy_shadow_output_and_behavior_remain_unchanged(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            fixture = Fixture(Path(directory))
+            self.active(fixture)
+            fixture.agent_value["auth_mode"] = "bearer"
+            collector = acceptance.AcceptanceCollector("shadow", paths=fixture.paths, runner=fixture.runner)
+            observed = collector._agent()
+            self.assertEqual(set(observed), {"check_ok", "version", "mode", "mtls_mode", "mtls_state"})
+            self.assertEqual(collector.blockers, set())
+
+    def test_mtls_only_requires_the_installed_mtls_package(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            fixture = Fixture(Path(directory))
+            self.active(fixture)
+            (fixture.install / "node_mtls_client.py").unlink()
+            collector = self.collector(fixture)
+            # This portable case exercises package selection, not TLS filesystem proof.
+            with patch.object(collector, "_tls_filesystem"):
+                collector._filesystem({"mtls_mode": "shadow"})
+            self.assertIn("UNSAFE_MTLS_CLIENT", collector.blockers)
+
+    def test_invalid_mode_still_requires_tls_layout_and_certificate_observation(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            fixture = Fixture(Path(directory))
+            fixture.openssl_expiry = "notAfter=Jul 27 18:00:00 2020 GMT\n"
+            collector = self.collector(fixture)
+            with patch.object(collector, "_tls_filesystem") as layout:
+                collector._filesystem({"mtls_mode": "disabled"})
+            layout.assert_called_once_with()
+            self.assertFalse(collector._certificate({"mtls_mode": "disabled"})["valid"])
+            self.assertIn("TLS_CERTIFICATE_INVALID_OR_EXPIRED", collector.blockers)
+
+    @unittest.skipIf(os.name == "nt", "Requires actual POSIX TLS layout and symlink")
+    def test_complete_local_snapshot_explicitly_does_not_attest_central_heartbeats(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            fixture = Fixture(Path(directory))
+            fixture.prepare_shadow()
+            fixture.agent_value["auth_mode"] = "mtls"
+            report = self.collector(fixture).collect()
+            self.assertEqual(report["result"], "PASS")
+            self.assertEqual(report["observation_scope"], "LOCAL_READINESS_SNAPSHOT")
+            self.assertIs(report["central_heartbeat_observed"], False)
+            self.assertTrue(report["certificate"]["valid"])
+            self.assertNotIn("node_must_never_be_reported", json.dumps(report))
 
 
 if __name__ == "__main__":

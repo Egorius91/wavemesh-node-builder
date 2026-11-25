@@ -10,7 +10,7 @@ import hashlib
 import os
 from pathlib import Path
 import re
-from typing import Any
+from typing import Any, Callable
 
 try:
     from node_mtls_client import (
@@ -301,6 +301,8 @@ class NodeMtlsRuntime:
         payload: dict[str, Any] | None,
         expected: tuple[int, ...],
         headers: dict[str, str] | None = None,
+        *,
+        heartbeat_receipt: Callable[[dict[str, Any]], None] | None = None,
     ) -> dict[str, Any]:
         """Send an authenticated mTLS request after verifying the active identity."""
         if self.config.mode != "shadow":
@@ -308,12 +310,14 @@ class NodeMtlsRuntime:
         active = self.state.active_identity(self._expected_identity_uri())
         if active is None or parse_certificate_expiry(active) <= datetime.now(timezone.utc):
             raise MtlsRuntimeError("Active mTLS identity is unavailable")
+        observation = {"heartbeat_receipt": heartbeat_receipt} if heartbeat_receipt is not None else {}
         response = self._mtls_transport().api_json(
             method,
             path,
             payload,
             expected=expected,
             headers=headers,
+            **observation,
         )
         heartbeat_path = f"internal/v1/nodes/{self.config.node_id}/heartbeat"
         if (

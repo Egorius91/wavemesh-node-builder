@@ -119,6 +119,7 @@ class AgentConfig:
     runtime_finding_mode: str = "disabled"
     runtime_finding_state_root: Path = Path("/var/lib/wavemesh-agent/runtime-findings")
     public_profiles_enabled: bool = False
+    managed_observation_manifest: Path | None = None
 
     @classmethod
     def load(cls, env_path: Path) -> "AgentConfig":
@@ -266,6 +267,8 @@ class AgentConfig:
             command_mode=command_mode,
             runtime_finding_mode=finding_mode,
             public_profiles_enabled=public_profiles == "true",
+            managed_observation_manifest=(Path(values['WAVEMESH_AGENT_MANAGED_OBSERVATION_MANIFEST'])
+                if values.get('WAVEMESH_AGENT_MANAGED_OBSERVATION_MANIFEST') else None),
             runtime_finding_state_root=Path(values.get("WAVEMESH_AGENT_RUNTIME_FINDINGS_STATE_ROOT", "/var/lib/wavemesh-agent/runtime-findings")),
             access_runtime_path=Path(
                 values.get(
@@ -320,8 +323,27 @@ class NodeAgent:
         self.profile_cursor = 0
         self.profile_priority_access_id: str | None = None
         self.last_profile_status: dict[str, Any] = {"state": "DISABLED"}
+        self.managed_observer: Any | None = None
+        self.managed_observation_status = "DISABLED"
 
     def run(self, once: bool = False) -> None:
+        # Installation/check never starts a writer. Only the existing service's
+        # run lifecycle can consume an explicitly admitted observation manifest.
+        if getattr(self.config,'managed_observation_manifest',None) is not None:
+            try:
+                from managed_observation import ManagedObserver
+                self.managed_observer = ManagedObserver(self.config.managed_observation_manifest,self.config)
+                self.managed_observation_status = "ACTIVE"
+            except Exception:
+                self.managed_observation_status = "BLOCKED_STARTUP"
+                LOG.warning("Managed observation blocked; private evidence retained")
+        try:
+            self._run_loop(once)
+        finally:
+            if self.managed_observer is not None:
+                self.managed_observer.interrupt()
+
+    def _run_loop(self, once: bool = False) -> None:
         next_observation = 0.0
         while not _STOP:
             started = time.monotonic()
@@ -994,12 +1016,36 @@ class NodeAgent:
             return False
 
     def send_heartbeat(self, payload: dict[str, Any] | None = None) -> None:
-        self.api_json(
-            "POST",
-            f"internal/v1/nodes/{self.config.node_id}/heartbeat",
-            payload or self.build_heartbeat_payload(),
-            expected=(204,),
-        )
+        body=payload or self.build_heartbeat_payload()
+        observer=getattr(self,'managed_observer',None)
+        attempt=None
+        if observer is not None:
+            try:
+                attempt=observer.begin(request_sent_at=body.get('sent_at'))
+            except Exception:
+                try:observer.block('LOCAL_PROBE_FAILED')
+                except Exception:pass
+                self.managed_observation_status="BLOCKED_RETAINED"
+        receipts=[]
+        succeeded=False
+        try:
+            observation={"heartbeat_receipt":receipts.append} if attempt is not None else {}
+            self.api_json("POST",f"internal/v1/nodes/{self.config.node_id}/heartbeat",body,expected=(204,),**observation)
+            succeeded=True
+        finally:
+            if attempt is not None:
+                # The callback only buffers validated metadata. Disk work occurs
+                # after the actual existing request and runtime state transition.
+                try:
+                    status=self.mtls_runtime.status().capability() if self.mtls_runtime is not None else {}
+                    observer.finish(attempt,transport_succeeded=succeeded,request_sent_at=body.get('sent_at'),
+                        receipt=receipts[0] if len(receipts)==1 else None,mtls_status=status,health=self.last_health_state)
+                    self.managed_observation_status=observer.status
+                except Exception:
+                    # Observation cannot turn a committed heartbeat into a retry.
+                    try:observer.block('JOURNAL_UNCERTAIN')
+                    except Exception:pass
+                    self.managed_observation_status="BLOCKED_RETAINED"
 
     def api_json(
         self,
@@ -1008,17 +1054,21 @@ class NodeAgent:
         payload: dict[str, Any],
         expected: tuple[int, ...],
         headers: dict[str, str] | None = None,
+        *,
+        heartbeat_receipt: Any | None = None,
     ) -> dict[str, Any]:
         if self.config.auth_mode in {"bootstrap-mtls", "mtls"}:
             if self.mtls_runtime is None:
                 raise AgentError("mTLS primary transport is not configured")
             if self.config.auth_mode == "mtls":
+                observation={"heartbeat_receipt":heartbeat_receipt} if heartbeat_receipt is not None else {}
                 return self.mtls_runtime.api_json(
                     method,
                     path,
                     payload,
                     expected=expected,
                     headers=headers,
+                    **observation,
                 )
             try:
                 return self.mtls_runtime.api_json(

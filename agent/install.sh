@@ -112,6 +112,8 @@ ACCEPTANCE_SOURCE="$PROJECT_DIR/agent/acceptance.py"
 ACCESS_SOURCE="$PROJECT_DIR/agent/access_runtime.py"
 JOURNAL_SOURCE="$PROJECT_DIR/scripts/lib/prepared_journal.py"
 FINDINGS_SOURCE="$PROJECT_DIR/agent/runtime_findings.py"
+HEARTBEAT_OBSERVATION_SOURCE="$PROJECT_DIR/agent/heartbeat_observation.py"
+MANAGED_OBSERVATION_SOURCE="$PROJECT_DIR/agent/managed_observation.py"
 PROFILES_SOURCE="$PROJECT_DIR/agent/placement_profiles.py"
 UNIT_SOURCE="$PROJECT_DIR/agent/wavemesh-node-agent.service"
 LOCK_CONFIG_SOURCE="$PROJECT_DIR/agent/wavemesh-node-lock.conf"
@@ -129,6 +131,8 @@ for source in \
   "$ACCESS_SOURCE" \
   "$JOURNAL_SOURCE" \
   "$FINDINGS_SOURCE" \
+  "$HEARTBEAT_OBSERVATION_SOURCE" \
+  "$MANAGED_OBSERVATION_SOURCE" \
   "$UNIT_SOURCE" \
   "$LOCK_CONFIG_SOURCE" \
   "$ROLLBACK_SOURCE" \
@@ -154,6 +158,7 @@ install_directory 0700 "$ETC_DIR/tls/pending"
 install_directory 0700 "$ETC_DIR/tls/generations"
 install_directory 0700 "$(root_path /var/lib/wavemesh-agent/access)"
 install_directory 0700 "$(root_path /var/lib/wavemesh-agent/runtime-findings)"
+install_directory 0700 "$(root_path /var/lib/wavemesh-agent/managed-observation)"
 install_directory 0700 "$(root_path /var/lib/wavemesh-agent/recovery-backups)"
 install_directory 0755 "$INSTALL_DIR"
 install_directory 0700 "$BACKUP_ROOT"
@@ -183,6 +188,8 @@ file_would_change "$ACCEPTANCE_SOURCE" "$INSTALL_DIR/acceptance.py" && changed=t
 file_would_change "$ACCESS_SOURCE" "$INSTALL_DIR/access_runtime.py" && changed=true
 file_would_change "$JOURNAL_SOURCE" "$INSTALL_DIR/prepared_journal.py" && changed=true
 file_would_change "$FINDINGS_SOURCE" "$INSTALL_DIR/runtime_findings.py" && changed=true
+file_would_change "$HEARTBEAT_OBSERVATION_SOURCE" "$INSTALL_DIR/heartbeat_observation.py" && changed=true
+file_would_change "$MANAGED_OBSERVATION_SOURCE" "$INSTALL_DIR/managed_observation.py" && changed=true
 file_would_change "$PROFILES_SOURCE" "$INSTALL_DIR/placement_profiles.py" && changed=true
 file_would_change "$UNIT_SOURCE" "$UNIT_PATH" && changed=true
 file_would_change "$LOCK_CONFIG_SOURCE" "$LOCK_CONFIG_PATH" && changed=true
@@ -208,6 +215,8 @@ if [[ "$changed" == true ]]; then
   backup_file "$INSTALL_DIR/access_runtime.py" "$backup_dir" access_runtime.py 0755
   backup_file "$INSTALL_DIR/prepared_journal.py" "$backup_dir" prepared_journal.py 0644
   backup_file "$INSTALL_DIR/runtime_findings.py" "$backup_dir" runtime_findings.py 0644
+  backup_file "$INSTALL_DIR/heartbeat_observation.py" "$backup_dir" heartbeat_observation.py 0644
+  backup_file "$INSTALL_DIR/managed_observation.py" "$backup_dir" managed_observation.py 0644
   backup_file "$INSTALL_DIR/placement_profiles.py" "$backup_dir" placement_profiles.py 0644
   backup_file "$UNIT_PATH" "$backup_dir" "$SERVICE" 0644
   backup_file "$LOCK_CONFIG_PATH" "$backup_dir" wavemesh-node-lock.conf 0644
@@ -239,6 +248,8 @@ atomic_install_file "$ACCEPTANCE_SOURCE" "$INSTALL_DIR/acceptance.py" 0755
 atomic_install_file "$ACCESS_SOURCE" "$INSTALL_DIR/access_runtime.py" 0755
 atomic_install_file "$JOURNAL_SOURCE" "$INSTALL_DIR/prepared_journal.py" 0644
 atomic_install_file "$FINDINGS_SOURCE" "$INSTALL_DIR/runtime_findings.py" 0644
+atomic_install_file "$HEARTBEAT_OBSERVATION_SOURCE" "$INSTALL_DIR/heartbeat_observation.py" 0644
+atomic_install_file "$MANAGED_OBSERVATION_SOURCE" "$INSTALL_DIR/managed_observation.py" 0644
 atomic_install_file "$PROFILES_SOURCE" "$INSTALL_DIR/placement_profiles.py" 0644
 atomic_install_file "$UNIT_SOURCE" "$UNIT_PATH" 0644
 atomic_install_file "$LOCK_CONFIG_SOURCE" "$LOCK_CONFIG_PATH" 0644
@@ -266,6 +277,8 @@ fi
   "$INSTALL_DIR/access_runtime.py" \
   "$INSTALL_DIR/prepared_journal.py" \
   "$INSTALL_DIR/runtime_findings.py" \
+  "$INSTALL_DIR/heartbeat_observation.py" \
+  "$INSTALL_DIR/managed_observation.py" \
   "$INSTALL_DIR/placement_profiles.py"
 
 if [[ "$unit_changed" == true ]]; then

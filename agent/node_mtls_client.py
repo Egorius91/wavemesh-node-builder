@@ -10,6 +10,7 @@ import json
 import os
 from pathlib import Path
 import ssl
+import stat
 import subprocess
 from typing import Any, Callable, Protocol
 from urllib import error, request
@@ -124,8 +125,24 @@ class NodeMtlsTransport:
         headers: dict[str, str] | None = None,
         *,
         certificate_request: bool = False,
+        heartbeat_receipt: Callable[[dict[str, Any]], None] | None = None,
     ) -> dict[str, Any]:
-        auth_headers, ssl_context = self._authentication(certificate_request=certificate_request)
+        observe = (heartbeat_receipt is not None and self.config.auth_mode == "mtls"
+            and not certificate_request and method.upper() == "POST"
+            and path.lstrip("/") == f"internal/v1/nodes/{self.config.node_id}/heartbeat")
+        identities: list[ActiveIdentity] = []
+        if observe:
+            auth_headers, ssl_context = self._authentication(
+                certificate_request=certificate_request, identity_sink=identities)
+        else:
+            auth_headers, ssl_context = self._authentication(certificate_request=certificate_request)
+        fingerprint = None
+        if identities:
+            try:
+                fingerprint = _observation_certificate_fingerprint(identities[0])
+            except Exception:
+                pass  # Optional evidence never changes an authenticated request.
+        receipt_headers = None
         body = (
             json.dumps(payload, separators=(",", ":"), ensure_ascii=False).encode("utf-8")
             if payload is not None
@@ -153,6 +170,11 @@ class NodeMtlsTransport:
             ) as response:
                 status = response.status
                 raw = response.read(MAX_RESPONSE_BYTES + 1)
+                if observe:
+                    try:
+                        receipt_headers = response.headers.get_all("x-wavevpn-heartbeat-observation", [])
+                    except Exception:
+                        pass
         except error.HTTPError as exc:
             problem = _parse_problem(exc.read(MAX_RESPONSE_BYTES + 1))
             raise MtlsApiError(
@@ -168,6 +190,20 @@ class NodeMtlsTransport:
             raise MtlsClientError("SaaS response exceeds the maximum size")
         if status not in expected:
             raise MtlsApiError(status, "UNEXPECTED_STATUS", True)
+        if observe and status == 204 and not raw and fingerprint is not None:
+            try:
+                try:
+                    from heartbeat_observation import bind_ingress_receipt
+                except ImportError:  # Package-style callers retain the same transport.
+                    from .heartbeat_observation import bind_ingress_receipt
+                receipt = (bind_ingress_receipt(receipt_headers[0], tenant_id=self.config.tenant_id,
+                    node_id=self.config.node_id, request_sent_at=(payload or {}).get("sent_at"),
+                    certificate_fingerprint_sha256=fingerprint, now=datetime.now(timezone.utc))
+                    if type(receipt_headers) is list and len(receipt_headers) == 1 else None)
+                if receipt is not None:
+                    heartbeat_receipt(receipt)
+            except Exception:
+                pass  # A committed heartbeat must not be retried for evidence work.
         if not raw:
             return {}
         try:
@@ -178,7 +214,8 @@ class NodeMtlsTransport:
             raise MtlsClientError("SaaS returned a non-object JSON response")
         return decoded
 
-    def _authentication(self, *, certificate_request: bool) -> tuple[dict[str, str], ssl.SSLContext]:
+    def _authentication(self, *, certificate_request: bool,
+                        identity_sink: list[ActiveIdentity] | None = None) -> tuple[dict[str, str], ssl.SSLContext]:
         del certificate_request  # mode and active state fully determine transport authentication
         if self.config.auth_mode == "bearer":
             return self._bearer_authentication()
@@ -187,7 +224,10 @@ class NodeMtlsTransport:
             return self._bearer_authentication()
         if active is None:
             raise MtlsClientError("mTLS authentication requires an active local identity")
-        return {}, build_mtls_ssl_context(active, self.config.server_ca_file)
+        context = build_mtls_ssl_context(active, self.config.server_ca_file)
+        if identity_sink is not None:
+            identity_sink.append(active)
+        return {}, context
 
     def _bearer_authentication(self) -> tuple[dict[str, str], ssl.SSLContext]:
         if not _valid_bearer(self.config.bearer_token):
@@ -196,6 +236,31 @@ class NodeMtlsTransport:
             {"Authorization": f"Bearer {self.config.bearer_token}"},
             ssl.create_default_context(purpose=ssl.Purpose.SERVER_AUTH),
         )
+
+
+def _observation_certificate_fingerprint(active: ActiveIdentity) -> str:
+    """Read only the selected generation's public leaf, never its key/state.
+
+    This is correlation with the authenticated ingress receipt, not independent
+    provenance. The existing authentication owner already selected the identity.
+    POSIX no-follow and stable inode checks are required for this optional read.
+    """
+    fd = os.open(active.certificate, os.O_RDONLY | os.O_NOFOLLOW | os.O_NONBLOCK)
+    try:
+        before = os.fstat(fd)
+        if (not stat.S_ISREG(before.st_mode) or before.st_uid != 0 or before.st_nlink != 1
+                or stat.S_IMODE(before.st_mode) != 0o600 or not 1 <= before.st_size <= 128 * 1024):
+            raise ValueError("OBSERVATION_PUBLIC_CERTIFICATE_UNSAFE")
+        raw = os.read(fd, 128 * 1024 + 1)
+        after = os.fstat(fd)
+        current = os.lstat(active.certificate)
+        if (len(raw) != before.st_size or (before.st_dev, before.st_ino, before.st_size, before.st_mtime_ns)
+                != (after.st_dev, after.st_ino, after.st_size, after.st_mtime_ns)
+                or (before.st_dev, before.st_ino) != (current.st_dev, current.st_ino)):
+            raise ValueError("OBSERVATION_PUBLIC_CERTIFICATE_CHANGED")
+        return hashlib.sha256(ssl.PEM_cert_to_DER_cert(raw.decode("ascii"))).hexdigest()
+    finally:
+        os.close(fd)
 
 
 class NodeCertificateLifecycleClient:

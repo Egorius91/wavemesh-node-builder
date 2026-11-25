@@ -24,7 +24,7 @@ jobs:
         with:
           python-version: "3.12"
       - name: Install nginx and unzip for native regressions
-        run: sudo apt-get update -qq && sudo apt-get install -y nginx unzip iproute2
+        run: sudo apt-get update -qq && sudo apt-get install -y nginx unzip iproute2 openssl
       - name: Python unit and E2E tests
         env:
           WAVEMESH_REQUIRE_NGINX_TESTS: "1"
@@ -44,6 +44,10 @@ jobs:
           python3 tests/e2e/test_multi_exit.py
       - name: Native public Entry TLS verifier in a private network namespace
         run: sudo -n unshare --net -- /usr/bin/python3 -B tests/native/test_public_entry_tls_native.py --require-native -v
+      - name: Native managed observation journal and receipt TLS
+        run: |
+          sudo -n unshare --net -- sh -ec 'ip link set dev lo up; exec "$@"' sh "$(command -v python3)" -I -B tests/native/test_managed_observation_posix.py
+          sudo -n unshare --net -- sh -ec 'ip link set dev lo up; exec "$@"' sh "$(command -v python3)" -I -B tests/native/test_heartbeat_receipt_tls.py
       - name: Mandatory prepared owning synthetic units (49 plus 6)
         run: sudo -n unshare --net -- sh -ec 'ip link set dev lo up; exec "$@"' sh "$(command -v python3)" -I -B tests/prepared_native_units.py
       - name: Bash and adapter tests
