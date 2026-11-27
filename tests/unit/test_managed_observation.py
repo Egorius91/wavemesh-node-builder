@@ -172,6 +172,49 @@ class IndependentManagedQualification(unittest.TestCase):
         with self.assertRaises(ObservationError):qualify_interval(m,'d'*64,s,c,l,now+timedelta(seconds=91))
         with self.assertRaises(ObservationError):qualify_interval(m,'d'*64,s[:-1],c,l,now)
 
+    def test_normal_rotation_preserves_only_proven_historical_validity(self):
+        m,_,central,local,_=self.fixture()
+        start=datetime.fromisoformat(event()['at'])
+        day=86400
+        switch=day-300
+        def after(seconds):
+            return stamp(start+timedelta(seconds=seconds))
+        now=start+timedelta(seconds=day+1)
+        m.update(required_seconds=day,cadence_seconds=60,not_before=after(-60),stop_at=after(day+60),
+                 human_window_stop_at=after(day+240),final_readback_seconds=120,max_bytes=16*1048576)
+        central.update(last_heartbeat_at=after(day),observed_at=stamp(now),database_at=stamp(now))
+        local['observed_at']=stamp(now)
+        old=central['credentials'][0]
+        new=dict(old,credential_sha256='e'*64,certificate_fingerprint_sha256='f'*64,
+                 replacement_of_sha256=old['credential_sha256'],previous_valid_until=after(switch+30),
+                 not_before=after(switch-60),acknowledged_at=after(switch-5),expires_at=after(day*2))
+        # Persistence records the overlap on the replacement and shortens the predecessor's expiry.
+        old.update(expires_at=after(switch+30),status='EXPIRED')
+        central['credentials'].append(new)
+        central.update(active_credential_sha256=new['credential_sha256'],
+                       active_certificate_fingerprint_sha256=new['certificate_fingerprint_sha256'])
+        local['certificate_fingerprint_sha256']=new['certificate_fingerprint_sha256']
+        samples=[]
+        for seconds in range(0,day+1,60):
+            e=event(seconds)
+            e['receipt']['credential_expires_at']=after(day*2)
+            if seconds>=switch:
+                e['receipt'].update(credential_sha256=new['credential_sha256'],
+                    certificate_fingerprint_sha256=new['certificate_fingerprint_sha256'],
+                    credential_not_before=new['not_before'],credential_acknowledged_at=new['acknowledged_at'])
+            previous=samples[-1] if samples else None
+            samples.append(make_sample(m,'d'*64,e,previous,digest(previous) if previous else None,'e'*64))
+        result=qualify_interval(m,'d'*64,samples,central,local,now)
+        self.assertEqual(result['qualified_seconds'],day)
+        self.assertFalse(result['measured_24h'])
+        for position,change in [(0,{'expires_at':after(switch+29)}),(0,{'issuer_revoked_at':after(switch-60)}),
+                                (1,{'replacement_of_sha256':'0'*64}),(1,{'previous_valid_until':after(switch-10)}),
+                                (1,{'expires_at':after(switch+50)}),(1,{'revoked_at':after(switch+100)})]:
+            altered=copy.deepcopy(central)
+            altered['credentials'][position].update(change)
+            with self.subTest(change=change),self.assertRaises(ObservationError):
+                qualify_interval(m,'d'*64,samples,altered,local,now)
+
 
 if __name__=='__main__':
     unittest.main(verbosity=2)
