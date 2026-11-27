@@ -629,6 +629,30 @@ def last_interval(manifest: dict,samples: list[dict]) -> tuple[list[dict],dict]:
     return interval,anchor
 
 
+def observed_rotation_cutoffs(samples: list[dict], credentials: dict) -> dict:
+    cutoffs = {}
+    previous = None
+    seen = set()
+    for sample in samples:
+        key = sample['receipt']['credential_sha256']
+        if key == previous:
+            continue
+        row = credentials.get(key)
+        require(row is not None, 'CREDENTIAL_RECEIPT_LINEAGE')
+        if previous is not None:
+            old = credentials[previous]
+            require(key not in seen and row['replacement_of_sha256'] == previous and row['previous_valid_until'],
+                    'EXACT_ROTATION_LINEAGE_REQUIRED')
+            acknowledged = timestamp(row['acknowledged_at'])
+            require(acknowledged < timestamp(old['expires_at']) <= timestamp(row['previous_valid_until'])
+                    and all(old[k] is None or acknowledged < timestamp(old[k]) for k in ('revoked_at','issuer_revoked_at')),
+                    'CREDENTIAL_CONTINUITY_UNPROVEN')
+            cutoffs[previous] = row['previous_valid_until']
+        seen.add(key)
+        previous = key
+    return cutoffs
+
+
 def qualify_interval(manifest: dict,manifest_sha: str,samples: list[dict],central: dict,local: dict,
                      now: datetime) -> dict:
     """Contracts over concrete file/SQL/local readers, not a PASS-input adapter."""
@@ -681,20 +705,28 @@ def qualify_interval(manifest: dict,manifest_sha: str,samples: list[dict],centra
             and (row['replacement_of_sha256'] is None or valid_hash(row['replacement_of_sha256'])),'CENTRAL_CREDENTIAL_SCHEMA')
         for key in ('not_before','expires_at','acknowledged_at','revoked_at','issuer_revoked_at','previous_valid_until'):
             if row[key] is not None:timestamp(row[key])
+        predecessor = row['replacement_of_sha256']
+        cutoff = row['previous_valid_until']
+        require((predecessor is None and cutoff is None) or
+                (predecessor is not None and predecessor != row['credential_sha256'] and cutoff is not None
+                 and timestamp(cutoff) > timestamp(row['not_before'])), 'CENTRAL_CREDENTIAL_SCHEMA')
         credentials[row['credential_sha256']]=row
-    previous=None
-    for sample in [*interval,anchor]:
-        r=sample['receipt'];row=credentials.get(r['credential_sha256'])
-        require(row is not None and row['certificate_fingerprint_sha256']==r['certificate_fingerprint_sha256']
-            and row['not_before']==r['credential_not_before'] and row['expires_at']==r['credential_expires_at']
+    history = [*interval,anchor]
+    cutoffs = observed_rotation_cutoffs(history, credentials)
+    for sample in history:
+        r=sample['receipt'];row=credentials[r['credential_sha256']]
+        # Persistence can shorten an old row after an earlier receipt was committed.
+        # Accept that exact change only when the observed successor independently binds its cutoff.
+        expiry_matches = row['expires_at'] == r['credential_expires_at'] or (
+            cutoffs.get(r['credential_sha256']) == row['expires_at']
+            and timestamp(row['expires_at']) < timestamp(r['credential_expires_at']))
+        require(row['certificate_fingerprint_sha256']==r['certificate_fingerprint_sha256']
+            and row['not_before']==r['credential_not_before'] and expiry_matches
             and row['acknowledged_at']==r['credential_acknowledged_at'],'CREDENTIAL_RECEIPT_LINEAGE')
         received=timestamp(r['received_at'])
         require(timestamp(row['not_before'])<=received<timestamp(row['expires_at']) and timestamp(row['acknowledged_at'])<=received
-            and all(row[k] is None or timestamp(row[k])>received for k in ('revoked_at','issuer_revoked_at','previous_valid_until')),
+            and all(row[k] is None or timestamp(row[k])>received for k in ('revoked_at','issuer_revoked_at')),
             'CREDENTIAL_NOT_VALID_AT_SAMPLE')
-        if previous is not None and previous!=r['credential_sha256']:
-            require(row['replacement_of_sha256']==previous,'EXACT_ROTATION_LINEAGE_REQUIRED')
-        previous=r['credential_sha256']
     elapsed=(interval[-1]['monotonic_end_ns']-interval[0]['monotonic_end_ns'])/1e9
     return dict(kind='MANAGED_MTLS_OBSERVATION_QUALIFICATION_V1',
         result='PASS_SYNTHETIC_MECHANISM_ONLY' if manifest['scope']=='synthetic' else 'PASS_INSTALLED_MTLS_OBSERVATION_CONTRACT',
